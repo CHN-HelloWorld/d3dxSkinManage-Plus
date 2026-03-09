@@ -1,0 +1,75 @@
+# Python 环境、字节码与包元数据
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+/.venv/
+/venv/
+/env/
+/ENV/
+
+# 检查与覆盖率产物
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+coverage.xml
+htmlcov/
+
+# 构建产物
+/build/
+/dist/
+/*.build/
+/*.dist/
+/*.onefile-build/
+/nuitka-crash-report.xml
+
+# 应用运行数据；仅随仓库维护默认语言包
+/data/
+/cache/
+/logs/
+/config/*
+!/config/languages/
+/config/languages/*
+!/config/languages/README.md
+!/config/languages/schema.json
+!/config/languages/zh-CN/
+!/config/languages/en-US/
+/config/languages/zh-CN/*
+/config/languages/en-US/*
+!/config/languages/zh-CN/strings.json
+!/config/languages/en-US/strings.json
+
+# 用户安装的插件；随包示例参与版本管理
+/plugins/*
+!/plugins/example.mod-inventory/
+!/plugins/example.preset-audit/
+!/plugins/example.preset-cycle/
+
+# 编辑器与本地辅助工具配置
+/.claude/
+/.superpowers/
+/.agents/
+/.codex/
+/.VSCodeCounter/
+/.vscode/
+/.idea/
+
+# 凭据、日志和系统文件
+.env
+.env.*
+!.env.example
+*.log
+*.stackdump
+Thumbs.db
+Desktop.ini
+.DS_Store
+
+# 大型视频通过独立资源包提供
+*.mp4
+*.webm
+*.mov
+*.mkv
+*.avi
