@@ -203,3 +203,326 @@ class Mod:
             crc = zlib.crc32(chunk, crc)
             size += len(chunk)
         return size, crc & 0xFFFFFFFF
+
+    @staticmethod
+    def _digest_raw_bytes(path: Path, *, checkpoint=None) -> str:
+        """无法读取成员清单时计算整个文件的字节摘要。
+
+        该结果仅用于区分不可解析的输入，不承诺与解压目录具有相同身份。
+        """
+        sha1 = hashlib.sha1()
+        with open(fs.native_path(path), "rb") as f:
+            for chunk in iter(lambda: f.read(_HASH_CHUNK), b""):
+                if checkpoint is not None and not checkpoint():
+                    raise InterruptedError("hash cancelled")
+                sha1.update(chunk)
+        return sha1.hexdigest()
+
+    @staticmethod
+    def compute_sha1(file_path: str | Path, *, checkpoint=None) -> str:
+        """计算 Mod 内容指纹，返回四十位小写 SHA-1。
+
+        优先读取归档成员的路径、解压后大小和 CRC-32；目录或无法获取摘要的归档
+        通过读取成员内容计算同一三元组，并统一交给 _digest_entries。
+        归档与解压目录采用相同公式，容器元数据不参与指纹。
+
+        指纹用于内容识别，不是抵抗恶意构造的密码学完整性证明。
+        不返回空字符串；checkpoint 返回 False 时抛出 InterruptedError。
+        """
+        path = Path(file_path)
+        if checkpoint is not None and not checkpoint():
+            raise InterruptedError("hash cancelled")
+
+        if fs.is_file(path):
+            if path.suffix.lower() in (".zip", ".7z", ".rar"):
+                from src.services.archive import ArchiveService
+
+                # 优先仅读取成员表；后端缺失、数据损坏或校验信息缺失时返回 None。
+                entries = ArchiveService().list_entries(path)
+                if entries is None:
+                    entries = Mod._archive_entries_by_bytes(path, path.suffix.lower(), checkpoint=checkpoint)
+                if entries is not None:
+                    return Mod._digest_entries(Mod._effective_triples(entries), checkpoint=checkpoint)
+                # 连成员表都枚举不出来（包已损坏）→ 退化为原始字节摘要
+            return Mod._digest_raw_bytes(path, checkpoint=checkpoint)
+
+        if fs.is_dir(path):
+            # 目录逐文件计算 CRC，与归档使用相同的摘要公式。
+            return Mod._digest_entries(Mod._folder_triples(path, checkpoint=checkpoint), checkpoint=checkpoint)
+
+        # 路径不存在：空成员表 → 空内容摘要（40 位合法但等价于空），
+        # 由调用方按「内容哈希为空」处置（重建会把它记成 unreadable 而不是落库）。
+        return Mod._digest_entries([])
+
+    @staticmethod
+    def _folder_triples(
+        path: Path,
+        *,
+        checkpoint=None,
+    ) -> list[tuple[str, int, int]]:
+        """收集目录成员的相对路径、大小和校验值。
+
+        路径相对于目录本体，统一排序由 _digest_entries 负责。
+        """
+        triples: list[tuple[str, int, int]] = []
+        for root, dirs, files in fs.walk(path):
+            if checkpoint is not None and not checkpoint():
+                raise InterruptedError("hash cancelled")
+            # 不下钻 .d3dxmeta —— sidecar 不计入内容哈希
+            if _SIDECAR_DIR_NAME in dirs:
+                dirs.remove(_SIDECAR_DIR_NAME)
+            for fname in files:
+                fpath = os.path.join(root, fname)
+                rel = os.path.relpath(fpath, path).replace("\\", "/")
+                if _is_under_sidecar(rel):
+                    continue  # 跳过本体中的管理标记，与归档成员过滤规则一致。
+                try:
+                    with open(fs.native_path(fpath), "rb") as f:
+                        size, crc = Mod._crc_of_stream(lambda f=f: f.read(_HASH_CHUNK), checkpoint=checkpoint)
+                except OSError:
+                    # 读不出的单个文件不该毁掉整次哈希，但要留下可区分的稳定痕迹。
+                    # size=-1 不可能与真实成员冲突（真实 size ≥ 0）。
+                    size, crc = -1, zlib.crc32(b"<unreadable>")
+                triples.append((rel, size, crc))
+        return triples
+
+    @staticmethod
+    def _archive_entries_by_bytes(
+        path: Path,
+        suffix: str,
+        *,
+        checkpoint=None,
+    ) -> list[tuple[str, int, int]] | None:
+        """读取成员字节以计算相对路径、长度和 CRC 三元组。
+
+        无法从归档目录取得完整校验信息时使用此路径，与目录读取结果交给同一摘要函数。
+        成员名保持归档原样，顶层目录由后续规范化统一处理；任一内容不可读时返回 None。
+        """
+        try:
+            if suffix == ".zip":
+                import zipfile
+
+                out: list[tuple[str, int, int]] = []
+                with zipfile.ZipFile(fs.native_path(path), "r") as zf:
+                    for info in zf.infolist():
+                        if info.is_dir() or _is_under_sidecar(info.filename):
+                            continue
+                        with zf.open(info, "r") as f:
+                            size, crc = Mod._crc_of_stream(lambda f=f: f.read(_HASH_CHUNK), checkpoint=checkpoint)
+                        out.append((info.filename, size, crc))
+                return out
+
+            from src.services.archive import ArchiveService
+
+            svc = ArchiveService()
+            names = [n for n in svc.list_contents(path) if not n.endswith("/") and not _is_under_sidecar(n)]
+            if not names:
+                # 空清单无法区分空归档与读取失败，不据此构建身份。
+                return None
+            if suffix == ".7z":
+                # 使用 WriterFactory 一次流式读取 7z 成员，避免固实归档为每个文件重复解码。
+                return Mod._7z_entries_by_bytes(path, names, checkpoint=checkpoint)
+            out = []
+            for n in names:
+                if checkpoint is not None and not checkpoint():
+                    raise InterruptedError("hash cancelled")
+                data = svc.read_file(path, n)
+                if data is None:
+                    return None  # 成员读取失败时不生成不完整的内容身份。
+                out.append((n, len(data), zlib.crc32(data) & 0xFFFFFFFF))
+            return out
+        except InterruptedError:
+            raise
+        except Exception:
+            return None
+
+    @staticmethod
+    def _7z_entries_by_bytes(
+        path: Path,
+        names: list[str],
+        *,
+        checkpoint=None,
+    ) -> list[tuple[str, int, int]] | None:
+        """一次解码全部 7z 成员，返回路径、长度和 CRC 三元组。
+
+        结果交给共用摘要函数，保持与目录成员读取方式一致。
+        """
+        import tempfile
+
+        try:
+            import py7zr
+            from py7zr.io import Py7zIO, WriterFactory
+        except ImportError:
+            return None
+
+        def check_continue() -> None:
+            """检查调用方取消状态，中止时抛出 InterruptedError。"""
+            if checkpoint is not None and not checkpoint():
+                raise InterruptedError("hash cancelled")
+
+        class _TemporaryMemberIO(Py7zIO):
+            """将解码成员写入临时文件的 py7zr 流适配器，避免将整个成员驻留内存。"""
+
+            def __init__(self, target: Path) -> None:
+                """创建可读写的成员临时文件，并持有其句柄直到 close。"""
+                self.target = target
+                self._handle = open(fs.native_path(target), "w+b")
+
+            def write(self, data: bytes | bytearray) -> int:
+                """确认任务未取消后写入解码数据，返回写入字节数。"""
+                check_continue()
+                return self._handle.write(data)
+
+            def read(self, size: int | None = None) -> bytes:
+                """确认任务未取消后读取成员字节；size 为 None 时读取剩余全部内容。"""
+                check_continue()
+                return self._handle.read(-1 if size is None else size)
+
+            def seek(self, offset: int, whence: int = 0) -> int:
+                """按文件流约定移动位置并返回新的字节偏移。"""
+                return self._handle.seek(offset, whence)
+
+            def flush(self) -> None:
+                """将 Python 文件缓冲写入底层临时文件。"""
+                self._handle.flush()
+
+            def size(self) -> int:
+                """返回临时成员的字节长度，同时保留当前读写位置。"""
+                current = self._handle.tell()
+                self._handle.seek(0, os.SEEK_END)
+                size = self._handle.tell()
+                self._handle.seek(current)
+                return size
+
+            def close(self) -> None:
+                """释放成员文件句柄，允许重复调用。"""
+                if not self._handle.closed:
+                    self._handle.close()
+
+        class _TemporaryMemberFactory(WriterFactory):
+            """为归档成员分配独立临时文件，并检测规范化后重复的成员名称。"""
+
+            def __init__(self, root: Path) -> None:
+                """记录临时目录，初始化成员路径映射及待释放的流集合。"""
+                self.root = root
+                self.paths: dict[str, Path] = {}
+                self.writers: list[_TemporaryMemberIO] = []
+                self.duplicate_name = False
+
+            def create(self, filename: str) -> Py7zIO:
+                """为成员创建按序号命名的临时流，避免归档路径直接决定写入位置。"""
+                key = filename.replace("\\", "/")
+                if key in self.paths:
+                    self.duplicate_name = True
+                target = self.root / f"{len(self.writers):08d}.member"
+                writer = _TemporaryMemberIO(target)
+                self.paths[key] = target
+                self.writers.append(writer)
+                return writer
+
+            def close(self) -> None:
+                """关闭本工厂创建的全部成员流。"""
+                for writer in self.writers:
+                    writer.close()
+
+        temp_dir = tempfile.TemporaryDirectory(prefix="d3dx_hash_7z_")
+        factory = _TemporaryMemberFactory(Path(temp_dir.name))
+        try:
+            check_continue()
+            normalized_names = [name.replace("\\", "/") for name in names]
+            with py7zr.SevenZipFile(fs.native_path(path), mode="r") as archive:
+                archive.extract(targets=names, factory=factory)
+            check_continue()
+            if factory.duplicate_name:
+                # 文件系统无法表达同名重复成员；该罕见畸形包沿用外层原始字节回退。
+                return None
+
+            triples: list[tuple[str, int, int]] = []
+            # factory.paths 按 normalized 原名索引；rel 的规范化/剥顶层留给
+            # _effective_triples，这里只负责把字节变成 (size, crc32)。
+            for name in normalized_names:
+                check_continue()
+                extracted = factory.paths.get(name)
+                if extracted is None or not fs.is_file(extracted):
+                    return None
+                with open(fs.native_path(extracted), "rb") as handle:
+                    size, crc = Mod._crc_of_stream(
+                        lambda handle=handle: handle.read(_HASH_CHUNK), checkpoint=checkpoint
+                    )
+                triples.append((name, size, crc))
+            return triples
+        except InterruptedError:
+            raise
+        except Exception:
+            # py7zr 并行解码可能包装 writer 抛出的 InterruptedError；再次检查可把
+            # 它恢复为正常取消，而不是误走原始字节哈希。
+            check_continue()
+            return None
+        finally:
+            factory.close()
+            temp_dir.cleanup()
+
+    def to_dict(self) -> dict:
+        """序列化为字典"""
+        return {
+            "game_id": self.game_id,
+            "name": self.name,
+            "folder_name": self.folder_name,
+            "path": to_stored_path(self.path),
+            "mod_id": self.mod_id,
+            "deployed_path": self.deployed_path,
+            "content_hash": self.content_hash,
+            "status": self.status.value,
+            "node_id": self.node_id,
+            "info": {
+                "author": self.info.author,
+                "description": self.info.description,
+                "version": self.info.version,
+                "url": self.info.url,
+                "age_rating": self.info.age_rating.value,
+                "tags": self.info.tags,
+                "custom_data": deepcopy(self.info.custom_data),
+            },
+            "preview_images": [to_stored_path(path) for path in self.preview_images],
+            "imported_at": self.imported_at,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Mod:
+        """从字典读取 Mod；不为缺失的 mod_id 生成身份，避免掩盖损坏的部署或预设引用。"""
+        info_data = data.get("info", {})
+        info = ModInfo(
+            author=info_data.get("author", ""),
+            description=info_data.get("description", ""),
+            version=info_data.get("version", ""),
+            url=info_data.get("url", ""),
+            age_rating=AgeRating(info_data.get("age_rating", "G")),
+            tags=info_data.get("tags", []),
+            custom_data=deepcopy(info_data.get("custom_data", {})),
+        )
+        return cls(
+            game_id=data.get("game_id", ""),
+            name=data.get("name", ""),
+            folder_name=data.get("folder_name", ""),
+            path=resolve_stored_path(data.get("path", "")),
+            mod_id=data.get("mod_id", ""),
+            deployed_path=data.get("deployed_path", ""),
+            content_hash=data.get("content_hash", ""),
+            status=ModStatus(data.get("status", "disabled")),
+            node_id=data.get("node_id", ""),
+            info=info,
+            preview_images=[resolve_stored_path(path) for path in data.get("preview_images", [])],
+            imported_at=data.get("imported_at", ""),
+        )
+
+
+def validate_mod_record(mod: Mod, game_id: str) -> str:
+    """入库前校验 Mod 的身份、游戏和存储位置。
+
+    索引写入与导入提交共用此规则，返回空字符串表示有效，否则返回错误原因。
+    """
+    if not (mod.path or "").strip():
+        return tr("path 为空")
+    if not (game_id or "").strip():
+        return tr("game_id 为空")
+    return ""
