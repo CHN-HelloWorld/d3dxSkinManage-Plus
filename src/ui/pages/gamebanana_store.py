@@ -1447,3 +1447,135 @@ class GameBananaStorePage(QWidget):
         # 显示后刷新详情背景快照，滑入完成后再按最终位置更新一次。
         self._kick_detail_backdrop()
         call_later(260, self, self._kick_detail_backdrop)
+
+    def _hide_detail_floating(self) -> None:
+        """收起详情并清除选中状态；页面可见时播放滑出动画。"""
+        try:
+            if self.isVisible() and self.detail_view.isVisible() and anim.is_enabled():
+                dv = self.detail_view
+                hd = self._detail_handle
+                off_x = self.width()
+                geo = dv.geometry()
+                h_geo = hd.geometry()
+
+                def _finish() -> None:
+                    """收起动画结束后隐藏详情和手柄，控件已经销毁时忽略。"""
+                    try:
+                        dv.hide()
+                        hd.hide()
+                    except RuntimeError:
+                        pass
+
+                # 详情与手柄滑出页面右侧后隐藏。
+                anim.animate_geometry(hd, QRect(off_x, h_geo.y(), h_geo.width(), h_geo.height()))
+                anim.animate_geometry(
+                    dv,
+                    QRect(off_x, geo.y(), geo.width(), geo.height()),
+                    on_finished=_finish,
+                )
+            else:
+                self.detail_view.hide()
+                self._detail_handle.hide()
+        except RuntimeError:
+            pass
+        # 取消所有卡片的选中描边
+        self._set_selected_card(0)
+        # 拖动触发自动收起时会释放鼠标捕获，mouseRelease 可能不再到达。
+        # 显式重置拖动标志，避免影响下一次交互。
+        self._detail_resizing = False
+
+    def _reposition_detail_view(self) -> None:
+        """按页面尺寸将详情定位在右侧，手柄紧贴其左边缘。
+
+        页面显示、尺寸变化及拖动调整宽度时均须更新位置。
+        """
+        page_w = self.width()
+        page_h = self.height()
+        if page_w <= 0 or page_h <= 0:
+            return
+        # 错误提示位于独立浮层，详情无需为其预留布局空间。
+        top_y = 0
+        # 限制详情宽度，为浏览视图至少保留 200 像素。
+        max_w = max(self._detail_min_width, page_w - 200)
+        # 按控件最大宽度限制几何计算，避免实际宽度被 Qt 截断后右侧位置偏移。
+        max_w = min(max_w, self.detail_view.maximumWidth())
+        w = min(max(self._detail_min_width, self._detail_width), max_w)
+        h = max(100, page_h - top_y)
+        x = max(0, page_w - w)
+        self.detail_view.setGeometry(x, top_y, w, h)
+        # handle: 6px 宽，紧贴 detail_view 左边缘外侧（露在 BrowseView 上方）
+        hw = self._detail_handle.HANDLE_WIDTH
+        self._detail_handle.setGeometry(max(0, x - hw), top_y, hw, h)
+        # 提升详情及手柄的层级；原生窗口的系统 Z 序也需保持与控件顺序一致，
+        # 以便鼠标事件命中可见浮层。
+        if self.detail_view.isVisible():
+            self.detail_view.raise_()
+            self._detail_handle.raise_()
+        # 面板几何变化后节流更新对应背景区域的模糊快照。
+        self._kick_detail_backdrop()
+
+    def _kick_detail_backdrop(self) -> None:
+        """合并滚动和重定位触发的快照刷新，每约 50 毫秒处理一次。
+
+        仅在纯色主题且面板可见时更新；背景图主题由窗口统一提供背景。
+        """
+        if not self.detail_view.isVisible() or theme.is_background_active():
+            return
+        if not self._detail_backdrop_timer.isActive():
+            self._detail_backdrop_timer.start(50)
+
+    def _refresh_detail_backdrop(self) -> None:
+        """捕获浮层下方的浏览视图，缩小并模糊后作为详情背景。
+
+        捕获不含浮层自身，先缩小可限制高分辨率屏幕的模糊开销。
+        """
+        try:
+            if not self.detail_view.isVisible() or theme.is_background_active():
+                return
+            dv = self.detail_view
+            src = self.browse_view
+            if src is None or not src.isVisible() or dv.width() <= 0 or dv.height() <= 0:
+                return
+            # 预览栏矩形映射到 BrowseView 坐标，取与其可见区的交集（面板可能比网格略高）。
+            origin = dv.mapTo(src, QPoint(0, 0))
+            region = QRect(origin, dv.size()).intersected(src.rect())
+            if region.width() <= 2 or region.height() <= 2:
+                dv.set_backdrop(None)
+                return
+            pm = src.grab(region)
+            if pm.isNull():
+                return
+            # 先缩小到不超过 220 像素的工作宽度再模糊，绘制时放大以限制处理开销。
+            work_w = 220
+            if pm.width() > work_w:
+                pm = pm.scaledToWidth(work_w, Qt.TransformationMode.SmoothTransformation)
+            from src.ui.widgets.image_utils import _gaussian_blur
+
+            dv.set_backdrop(_gaussian_blur(pm, radius=16.0))
+        except Exception:
+            pass
+
+    def _on_detail_resize_drag(self, delta: int) -> None:
+        """根据拖动增量调整浮层宽度，低于最小值时收起；浏览视图继续重绘新暴露区域。"""
+        self._detail_resizing = True
+        proposed = self._detail_width + delta
+        if proposed < self._detail_min_width:
+            # 宽度低于最小值时收起，并保留最小宽度供下次展开。
+            self._detail_width = self._detail_min_width
+            self._hide_detail_floating()
+            return
+        # 为浏览视图保留至少 200 像素。
+        max_w = max(self._detail_min_width, self.width() - 200)
+        self._detail_width = min(max_w, proposed)
+        self._reposition_detail_view()
+
+    def _on_detail_drag_released(self) -> None:
+        """保存拖动后的详情宽度，并延后解除拖动标记以避免释放事件误触外部点击关闭。"""
+        # 延迟到当前事件分发结束后清除拖动标志，避免释放鼠标时触发外部点击关闭。
+        call_later(0, self, self._clear_resizing_flag)
+        # 拖动结束后保存浮层宽度。
+        Config.instance().set("ui.store_detail_width", int(self._detail_width))
+
+    def _clear_resizing_flag(self) -> None:
+        """解除详情宽度调整期间的外部点击屏蔽状态。"""
+        self._detail_resizing = False
