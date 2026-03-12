@@ -1351,3 +1351,99 @@ class GameBananaStorePage(QWidget):
     def _is_installed(self, rec: GbModRecord) -> bool:
         """根据安装快照判断该在线 Mod 是否已有本地安装记录。"""
         return rec.mod_id in self._cached_installed_ids()
+
+    def _make_card(self, rec: GbModRecord) -> GbModCard:
+        """按当前记录及页面状态创建卡片，供首屏、分页和虚拟滚动共用。
+
+        创建时读取安装索引、当前选中的 Mod 编号及记录中的下载量，
+        确保离屏卡片重新创建后仍反映最新状态。
+        """
+        card = GbModCard(
+            rec,
+            image_loader=self._loader,
+            nsfw_policy=self._nsfw_policy,
+            is_installed=(rec.mod_id in self._cached_installed_ids()),
+            download_count_pending=(not rec.download_count),
+            defer_image=True,  # 缓存命中立即显示，缺图由 grid 在滚动中分批加载。
+        )
+        if self._selected_mod_id is not None and int(rec.mod_id) == self._selected_mod_id:
+            card.set_selected(True)
+        card.clicked.connect(self._on_card_clicked)
+        return card
+
+    def _bind_card(self, card: GbModCard, rec: GbModRecord) -> None:
+        """复用控件时恢复当前记录和页面状态，不重复连接信号。"""
+        card.set_record(
+            rec,
+            nsfw_policy=self._nsfw_policy,
+            is_installed=(rec.mod_id in self._cached_installed_ids()),
+            download_count_pending=(not rec.download_count),
+            defer_image=True,
+        )
+        card.set_selected(self._selected_mod_id is not None and int(rec.mod_id) == self._selected_mod_id)
+
+    def _prefetch_thumbnail(self, rec: GbModRecord) -> bool:
+        """按卡片尺寸预取裁剪缩略图，缺少地址或预取能力时跳过。"""
+        prefetch = getattr(self._loader, "prefetch", None)
+        if not rec.thumbnail_url or not callable(prefetch):
+            return True
+        return prefetch(
+            rec.thumbnail_url, size=QSize(GbModCard.CARD_WIDTH, GbModCard.THUMBNAIL_HEIGHT), crop_to_size=True
+        )
+
+    def _cancel_thumbnail_prefetch(self, rec: GbModRecord) -> None:
+        """撤销对应卡片尺寸与裁剪方式的缩略图预取请求。"""
+        cancel = getattr(self._loader, "cancel_prefetch", None)
+        if rec.thumbnail_url and callable(cancel):
+            cancel(rec.thumbnail_url, size=QSize(GbModCard.CARD_WIDTH, GbModCard.THUMBNAIL_HEIGHT), crop_to_size=True)
+
+    def _has_local_md5(self, md5: str) -> bool:
+        """通过下载管理器确认指定摘要对应的本地归档仍可用。"""
+        return self._download_manager.has_local_md5(md5) is not None
+
+    # 详情视图。
+    def _on_card_clicked(self, record: GbModRecord) -> None:
+        """清空旧详情并显示加载态，标记选中卡片后异步请求该资源详情。"""
+        # 先显示浮层并同步清空旧内容，再异步请求详情，避免短暂显示其他 Mod 的数据。
+        self.detail_view.show_loading_for(record)
+        self._show_detail_floating()
+        # 同步可见卡片的选中描边。
+        self._set_selected_card(record.mod_id)
+        runner = self._make_runner()
+        runner.finished.connect(self.detail_view.load_profile)
+        runner.failed.connect(self._on_error)
+        # 请求失败时显示错误；按 Mod 编号校验回调，防止过期失败覆盖当前加载状态。
+        runner.failed.connect(lambda *_a, mid=record.mod_id: self._on_profile_load_failed(mid))
+        runner.run(lambda: self._client.get_profile(record.model, record.mod_id))
+
+    def _on_profile_load_failed(self, mod_id) -> None:
+        """仅在失败资源仍是当前待加载详情时显示失败状态，忽略迟到错误。"""
+        try:
+            if int(getattr(self.detail_view, "_pending_mod_id", 0) or 0) == int(mod_id or 0):
+                self.detail_view.show_load_failed()
+        except (AttributeError, RuntimeError, ValueError):
+            pass
+
+    # 浮窗显示 / 隐藏 / 重定位
+    def _show_detail_floating(self) -> None:
+        """按保存的有效宽度在右侧显示详情浮层，宽度不小于设定最小值。"""
+        if self._detail_width < self._detail_min_width:
+            self._detail_width = self._detail_min_width
+        self._reposition_detail_view()  # 先确定详情和手柄的最终位置。
+        target = self.detail_view.geometry()
+        h_target = self._detail_handle.geometry()
+        # 起点：整体贴到页面右缘之外（不可见），show 后再横向滑入到最终位置（弹出过渡）。
+        off_x = self.width()
+        self.detail_view.setGeometry(off_x, target.y(), target.width(), target.height())
+        self._detail_handle.setGeometry(off_x, h_target.y(), h_target.width(), h_target.height())
+        self.detail_view.show()
+        self.detail_view.raise_()
+        self._detail_handle.show()
+        self._detail_handle.raise_()
+        # 横向滑入 + 淡入（fade_in 结束移除 effect，不影响内部 QTextBrowser/图片渲染）。
+        anim.animate_geometry(self.detail_view, target)
+        anim.animate_geometry(self._detail_handle, h_target)
+        anim.fade_in(self.detail_view)
+        # 显示后刷新详情背景快照，滑入完成后再按最终位置更新一次。
+        self._kick_detail_backdrop()
+        call_later(260, self, self._kick_detail_backdrop)
