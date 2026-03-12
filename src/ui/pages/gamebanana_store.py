@@ -970,3 +970,127 @@ class GameBananaStorePage(QWidget):
         runner.finished.connect(lambda kids, p=parent_id, g=gen: self._on_children_loaded(p, kids, g))
         runner.failed.connect(lambda error, p=parent_id, g=gen: self._on_children_error(p, error, g))
         runner.run(lambda: self._cat_service.children(parent_id))
+
+    def _on_children_error(self, parent_id: int, error: str, gen: int) -> None:
+        """仅将当前请求代次的子分类错误交给对应面包屑显示。"""
+        if gen != self._request_gen:
+            return
+        self.breadcrumb.set_children_error(parent_id, error)
+
+    def _on_children_loaded(self, parent_id: int, kids: list[GbCategory], gen: int) -> None:
+        """仅将当前代次的子分类结果写入面包屑缓存。"""
+        if gen != self._request_gen:
+            return
+        self.breadcrumb.set_children(parent_id, kids)
+
+    def _set_path_and_query(self, new_path: list[GbCategory]) -> None:
+        """切换分类时重置搜索与分页并使旧请求失效，同一分类尚在加载时合并重复选择。"""
+        # 同一分类仍在加载时忽略重复选择，避免连续递增请求代次使全部回调过期。
+        if self._path and new_path and new_path[-1].id == self._path[-1].id and self._in_flight > 0:
+            return
+        self._path = new_path
+        self.breadcrumb.set_path(new_path)
+        self._mode = "category"
+        self._search_query = ""
+        self._page = 1
+        self._backfill_attempts = 0
+        self._request_gen += 1
+        self.grid.clear()
+        self._all_records = []
+        self.browse_view.show_loading()
+        self._fetch_next_page()
+
+    # 筛选栏。
+    def _on_search(self, query: str) -> None:
+        """在已匹配游戏中切换搜索或分类模式，重置分页与记录后加载第一页。"""
+        if self._gb_game_id is None:
+            return
+        self._search_query = query
+        self._mode = "search" if query else "category"
+        self._page = 1
+        self._backfill_attempts = 0
+        self._request_gen += 1
+        self.grid.clear()
+        self._all_records = []
+        self.browse_view.show_loading()
+        self._fetch_next_page()
+
+    def _on_sort_changed(self, sort: str) -> None:
+        """保存排序偏好，并在当前分类或搜索上下文中重新加载记录。"""
+        self._sort = sort
+        self._config.set("gamebanana.default_sort", sort)
+        if self._gb_game_id is None:
+            return
+        if self._path or self._mode == "search":
+            self._page = 1
+            self._backfill_attempts = 0
+            self._request_gen += 1
+            self.grid.clear()
+            self._all_records = []
+            self.browse_view.show_loading()
+            self._fetch_next_page()
+
+    def _on_nsfw_policy_changed(self, policy: str) -> None:
+        """保存成人内容显示策略，策略变化时按未过滤的缓存记录重新构建可见结果。"""
+        old = self._nsfw_policy
+        self._nsfw_policy = policy
+        self._config.set("gamebanana.nsfw_policy", policy)
+        if old == policy:
+            return
+        # 按原始记录重建筛选结果，使策略切换不依赖卡片是否已创建或已被过滤。
+        self._rerender_from_cache()
+
+    def _rerender_from_cache(self) -> None:
+        """按原始记录和当前内容策略重建网格，保留网络请求及分页状态。"""
+        if not self._all_records:
+            return
+        self.grid.clear()
+        filtered = self._apply_nsfw(list(self._all_records))
+        if not filtered:
+            self.browse_view.show_empty()
+            return
+
+        # 下载量仍为零的记录标记为待补全。
+        pending = {r.mod_id for r in filtered if not r.download_count}
+
+        self.browse_view.show_grid()
+        # 策略切换时一次提交全部过滤结果，避免连续切换产生交错的分批调度。
+        # self._make_card 按虚拟滚动需求创建卡片，并读取当前状态。
+        self.grid.append_items(
+            filtered,
+            has_more=self._has_more,
+            card_factory=self._make_card,
+            card_binder=self._bind_card,
+            image_prefetcher=self._prefetch_thumbnail,
+            image_prefetch_canceller=self._cancel_thumbnail_prefetch,
+        )
+        # 重新请求尚未补全的下载量，并复用接口缓存。
+        if pending:
+            self._fetch_download_counts(list(pending), self._request_gen)
+
+    # 分页加载。
+    def _fetch_next_page(self) -> None:
+        """固化当前搜索或分类条件后提交下一页请求，并登记分页与网格加载状态。"""
+        if self._gb_game_id is None:
+            return
+        leaf = self._path[-1] if self._path else None
+        page = self._page
+        # 确定请求内容后再创建 runner，确保 _in_flight 只计入实际提交的请求。
+        if self._mode == "search" and self._search_query:
+            query = self._search_query
+            sort = self._sort
+            gid = self._gb_game_id
+            coro_factory = lambda: self._client.search(query, game_id=gid, page=page, sort=sort)  # noqa: E731
+        elif leaf is not None and leaf.id > 0:
+            cat_id = leaf.id
+            sort = self._sort
+            coro_factory = lambda: self._client.mods_by_category(cat_id, page=page, sort=sort)  # noqa: E731
+        else:
+            return
+        runner = self._make_runner()
+        gen = self._request_gen
+        runner.finished.connect(lambda result, g=gen: self._on_page_loaded(result, g))
+        runner.failed.connect(self._on_error)
+        runner.run(coro_factory)
+        self._page += 1
+        self.grid.mark_loading()
