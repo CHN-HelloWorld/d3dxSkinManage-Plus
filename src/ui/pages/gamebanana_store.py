@@ -317,3 +317,325 @@ class _DetailDragHandle(QFrame):
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """将全局横向位移转换为详情宽度增量，向左拖动时增加宽度。"""
+        if self._dragging:
+            cur = int(event.globalPosition().x())
+            dx = cur - self._last_global_x
+            self._last_global_x = cur
+            # 手柄位于详情左侧，向左拖动时增加详情宽度。
+            self.drag_delta.emit(-dx)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """左键释放时结束拖动并通知宿主结算宽度，必要时恢复手柄样式。"""
+        if self._dragging and event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = False
+            # 拖动期间不处理 leaveEvent，释放后需根据鼠标位置恢复手柄状态。
+            if not self.underMouse():
+                self.setStyleSheet("background-color: transparent;")
+            self.drag_released.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+
+class GameBananaStorePage(QWidget):
+    """组合浏览视图、右侧详情浮层与未收录提示的商店页面。"""
+
+    VIEW_MAIN = 0
+    VIEW_UNKNOWN = 1
+
+    DETAIL_WIDTH = 480
+    # 拖动低于此宽度时收起详情。阈值不得小于 GbModDetailView 的最小宽度 360，
+    # 否则 Qt 的最小尺寸约束会阻止触发收起条件。
+    DETAIL_MIN_WIDTH = 360
+
+    open_settings_requested = Signal()  # 由主窗口切换到游戏设置。
+    open_mod_in_overview_requested = Signal(int)  # 传递在线 Mod 编号，由主窗口在总览中定位。
+    open_local_mod_in_overview_requested = Signal(str)
+    # 下载完成且目标角色已确定后，由主窗口通过后台导入流程安装。
+    # payload 在 _after_download 中组装；宿主完成后须回调 apply_install_result。
+    mod_install_requested = Signal(object)
+
+    def __init__(
+        self,
+        *,
+        client: GameBananaClient,
+        image_loader: ImageLoader,
+        local_game_id: str | None = None,
+        mod_index: ModIndex | None = None,
+        download_manager: GbDownloadManager | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        """接入在线查询、图片和下载服务，恢复待安装引用，构建浏览与详情浮层并连接异步生命周期。"""
+        super().__init__(parent)
+        self._client = client
+        self._loader = image_loader
+        self._mod_index = mod_index
+        self._download_manager = download_manager or GbDownloadManager()
+        self._config = Config()
+        self._game_store = GameConfigStore()
+        self._cat_service = GbCategoryService(client)
+
+        self._gb_game_id: int | None = None
+        # 记录本次运行已刷新过的游戏；首次进入时清除 API 缓存，后续切换复用缓存。
+        # 手动刷新始终重新获取数据，图像磁盘缓存独立管理。
+        self._session_freshed_games: set[int] = set()
+        self._local_game_name: str = ""
+        # 下载期间切换游戏时暂存安装请求，返回原游戏后继续。
+        # 持久化安装所需的标量信息，支持重启后恢复。
+        self._pending_installs = PendingInstallStore()
+        for pending in self._pending_installs.records():
+            if Path(pending.archive_path).is_file():
+                self._retain_pending_install(pending)
+        # 记录已连接信号的 file_id。队列复用同一任务对象，重复连接会触发多次安装。
+        self._wired_download_tasks: set[int] = set()
+        # 当前请求代次内已补全下载量的 Mod 编号，用于合并重复请求。
+        self._dl_asked: set[int] = set()
+        self._dl_asked_gen: int = -1
+        self._display_name: str = ""
+        self._path: list[GbCategory] = []
+        self._mode = "category"  # "category" | "search"
+        self._search_query = ""
+        self._sort = self._config.get("gamebanana.default_sort", "best_match")
+        self._nsfw_policy = self._config.get("gamebanana.nsfw_policy", "blur")
+        self._page = 1
+        self._has_more = False
+        self._backfill_attempts = 0
+        self._backfill_max = int(self._config.get("gamebanana.infinite_scroll_max_backfill", 5))
+        self._min_per_load = int(self._config.get("gamebanana.infinite_scroll_min_per_load", 10))
+        self._request_gen = 0
+        # 连续点击或切换标签可能重复触发 set_game / _set_path_and_query。
+        # 通过未完成请求数判断加载状态，避免页面在没有待处理请求时仍显示加载中。
+        self._in_flight = 0
+        # 保留未过滤的记录；NSFW 策略（remove/blur/show）变更时据此重建网格，
+        # 使已被 remove 策略过滤的记录也能在切换回 show 时恢复显示。
+        self._all_records: list[GbModRecord] = []
+        # 一次全库扫描同时缓存卡片徽章所需的 mod_id 集合，以及详情文件行所需的
+        # (mod_id, file_id) / (mod_id, md5) 集合，避免逐卡查询数据库。
+        # 安装或删除事件将缓存置为 None；按需创建卡片时重新计算，确保读取当前安装状态。
+        self._installed_cache: tuple[set, set, set] | None = None
+        # 保存选中的 Mod 编号，供详情关闭、游戏切换及卡片重建时同步选中状态。
+        self._selected_mod_id: int | None = None
+        # 初始游戏请求延迟至商店页 showEvent，确保主线程已完成 _init_data 和信号连接。
+        self._pending_initial_game_id: str | None = None
+        self._async_worker = _AsyncWorker()
+        self._runners: list[_AsyncRunner] = []
+        self._shutdown_started = False
+        page_ref = weakref.ref(self)
+        worker = self._async_worker
+
+        def _on_store_destroyed(_=None) -> None:
+            """页面销毁时关闭其资源；Python 页面对象已回收时直接关闭仍保留的异步工作器。"""
+            page = page_ref()
+            if page is not None:
+                page.shutdown()
+            else:
+                worker.shutdown()
+
+        self.destroyed.connect(_on_store_destroyed)
+
+        # 浏览视图与未收录提示共用堆叠布局。
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        # 错误提示以页面浮层显示，不参与布局分配；五秒后自动收起。
+        self.error_bar = QFrame(self)
+        self.error_bar.setObjectName("gbErrorBar")
+        self.error_bar.setStyleSheet(
+            f"#gbErrorBar {{ background-color: {theme.rgba('bg.card', 0.97)};"
+            f" border: 1px solid {theme.color('stroke.card')}; border-radius: 10px; }}"
+            f"#gbErrorBar QLabel {{ color: {theme.color('warning')}; background: transparent; }}"
+        )
+        self.error_bar.setFixedHeight(40)
+        err_layout = QHBoxLayout(self.error_bar)
+        err_layout.setContentsMargins(16, 6, 16, 6)
+        self.error_label = QLabel("")
+        self.error_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        err_layout.addWidget(self.error_label, 1)
+        self.error_bar.hide()
+        self._error_hide_timer = QTimer(self)
+        self._error_hide_timer.setSingleShot(True)
+        self._error_hide_timer.timeout.connect(self._roll_up_error_bar)
+
+        self.stack = QStackedWidget()
+        # 浏览视图占满页面，详情浮层覆盖其上，不参与布局尺寸分配。
+        self.browse_view = GbBrowseView()
+        # 未收录提示占满页面。
+        self.unknown_view = GbUnknownGameView()
+        self.stack.addWidget(self.browse_view)
+        self.stack.addWidget(self.unknown_view)
+        outer.addWidget(self.stack, 1)
+
+        # 详情作为页面子控件独立于布局，保持在堆叠视图上方。
+        # 页面尺寸变化或手柄拖动时，由 _reposition_detail_view 更新几何位置。
+        self.detail_view = GbModDetailView(
+            image_loader=image_loader,
+            has_local_md5=self._has_local_md5,
+            # 按具体文件判断安装状态，同一 Mod 的其他下载文件仍可单独安装。
+            is_file_installed=self._is_gb_file_installed,
+            # 详情视图切到「更新」Tab 且 profile.updates 为空时，由本回调异步拉取
+            # apiv11 /Updates 端点。
+            updates_fetcher=self._fetch_updates_for_profile,
+            parent=self,
+        )
+        self.detail_view.hide()  # 选择卡片后显示详情。
+
+        # 手柄与详情互为兄弟控件，紧贴详情左边缘。
+        self._detail_handle = _DetailDragHandle(self)
+        self._detail_handle.hide()
+        self._detail_handle.drag_delta.connect(self._on_detail_resize_drag)
+        self._detail_handle.drag_released.connect(self._on_detail_drag_released)
+
+        # 启动时恢复保存的浮层宽度，并限制为有效最小值；拖动低于最小值时收起浮层。
+        self._detail_width = max(
+            self.DETAIL_MIN_WIDTH, int(Config.instance().get("ui.store_detail_width", self.DETAIL_WIDTH))
+        )
+        self._detail_min_width = self.DETAIL_MIN_WIDTH
+        # 拖动期间暂停外部点击检测，避免将鼠标释放误判为收起详情的操作。
+        self._detail_resizing = False
+
+        # 公开子控件入口，供主窗口访问搜索框等控件。
+        self.filter_bar = self.browse_view.filter_bar
+        self.breadcrumb = self.browse_view.breadcrumb
+        self.grid = self.browse_view.grid
+        self.empty_state = self.browse_view.empty_state
+        self.loading_state = self.browse_view.loading_state
+
+        # 独立灯箱和下载浮窗以主窗口为父对象，避免 Qt 将页面祖先提升为原生窗口，
+        # 导致控件层次与系统窗口命中顺序不一致。
+        self.lightbox = GbLightBox(image_loader=image_loader, parent=self.window())
+        self.lightbox.hide()
+        self.download_flyout = GbDownloadFlyout(self._download_manager, parent=self.window())
+        self.download_flyout.hide()
+
+        # 连接交互信号。
+        self.filter_bar.search_submitted.connect(self._on_search)
+        self.filter_bar.sort_changed.connect(self._on_sort_changed)
+        self.filter_bar.nsfw_policy_changed.connect(self._on_nsfw_policy_changed)
+        self.filter_bar.dl_manager_btn.clicked.connect(self._toggle_flyout)
+        self.filter_bar.refresh_requested.connect(self.refresh)
+        self.breadcrumb.path_changed.connect(self._on_breadcrumb_path_changed)
+        self.breadcrumb.children_requested.connect(self._on_children_requested)
+        self.grid.request_next_page.connect(self._fetch_next_page)
+        # 浏览网格滚动时节流更新详情背景的模糊快照。
+        self._detail_backdrop_timer = QTimer(self)
+        self._detail_backdrop_timer.setSingleShot(True)
+        self._detail_backdrop_timer.timeout.connect(self._refresh_detail_backdrop)
+        try:
+            self.grid.scroll_area.verticalScrollBar().valueChanged.connect(lambda _v: self._kick_detail_backdrop())
+        except Exception:
+            pass
+        self.detail_view.back_requested.connect(self._on_back_to_browse)
+        self.detail_view.file_download_requested.connect(self._on_download_requested)
+        self.detail_view.file_install_requested.connect(self._on_install_requested)
+        self.detail_view.preview_clicked.connect(self._show_lightbox)
+        self.unknown_view.open_settings_requested.connect(self.open_settings_requested.emit)
+        self.unknown_view.open_gamebanana_requested.connect(self._open_gamebanana_website)
+        self.download_flyout.mod_open_requested.connect(self.open_mod_in_overview_requested.emit)
+        self.download_flyout.file_open_requested.connect(self._open_downloaded_file)
+        self.download_flyout.can_open_mod = self._can_open_downloaded_mod
+        self.download_flyout._refresh()
+
+        # 下载按钮显示完成度最低的活动任务进度，队列和任务变化时重新计算。
+        self._download_manager.queue_changed.connect(self._update_dl_button_progress)
+        self._download_manager.task_added.connect(self._on_dl_task_added)
+        self._download_manager.task_removed.connect(lambda _fid: self._update_dl_button_progress())
+        # 任务删除后移除连接记录，以便再次下载该文件时连接新任务的信号。
+        self._download_manager.task_removed.connect(self._on_download_task_removed)
+        for _t in self._download_manager.active():
+            self._hook_dl_task_signals(_t)
+        self._update_dl_button_progress()
+
+        # 初始网络加载延迟至页面首次可见，避免与主窗口初始化竞争或提前请求未使用的页面。
+        if local_game_id:
+            self._pending_initial_game_id = local_game_id
+
+    # 首次可见时启动
+    def prime_initial_game(self, local_game_id: str) -> None:
+        """记录启动恢复的游戏，在商店首次可见时再加载，避免提前请求或覆盖已有页面状态。"""
+        if local_game_id and self._gb_game_id is None:
+            self._pending_initial_game_id = local_game_id
+
+    def showEvent(self, event):
+        """首次可见时延后加载待选游戏，重定位详情并安装页面可见期间的外部点击过滤器。"""
+        super().showEvent(event)
+        # 处理启动恢复或页面隐藏期间切换游戏留下的待加载请求。
+        # 远程游戏编号为空时才加载，避免标签往返切换重复发送请求。
+        if self._pending_initial_game_id is not None and self._gb_game_id is None:
+            pending, self._pending_initial_game_id = self._pending_initial_game_id, None
+            # 延迟到下一次事件循环执行，使页面先完成首次绘制。
+            call_later(0, self, lambda gid=pending: self.set_game(gid))
+        # 重新显示页面时，按当前尺寸定位仍可见的浮层。
+        try:
+            if self.detail_view.isVisible():
+                self._reposition_detail_view()
+        except RuntimeError:
+            pass
+        # 商店页面可见时监听外部点击，以便收起详情浮层。
+        try:
+            QApplication.instance().installEventFilter(self)
+        except Exception:
+            pass
+
+    def resizeEvent(self, event):
+        """页面尺寸变化后重定位可见详情和错误浮层。"""
+        super().resizeEvent(event)
+        # 页面尺寸变化时重新定位可见浮层，保持边缘和宽度一致。
+        try:
+            if self.detail_view.isVisible():
+                self._reposition_detail_view()
+        except RuntimeError:
+            pass
+        self._reposition_error_bar()
+
+    def eventFilter(self, obj, event):
+        """处理点击详情浮层外部的鼠标事件。
+
+        浮层不可见、正在拖动或点击浮层及手柄时不处理。
+        点击 Mod 卡片由卡片切换内容，其他页面内区域的点击收起浮层。
+        """
+        try:
+            if (
+                event.type() != QEvent.Type.MouseButtonPress
+                or not self.detail_view.isVisible()
+                or self._detail_resizing
+            ):
+                return super().eventFilter(obj, event)
+            try:
+                gpos = event.globalPosition().toPoint()
+            except AttributeError:
+                gpos = event.globalPos()
+            # 独立图片查看器、灯箱、菜单及对话框中的点击不属于页面外部点击，避免误收起详情。
+            try:
+                w_at = QApplication.widgetAt(gpos)
+                if w_at is not None and w_at.window() is not self.window():
+                    return super().eventFilter(obj, event)
+            except Exception:
+                pass
+            # 浮窗自身
+            d_rect = QRect(self.detail_view.mapToGlobal(QPoint(0, 0)), self.detail_view.size())
+            if d_rect.contains(gpos):
+                return super().eventFilter(obj, event)
+            # 拖动手柄内部的点击。
+            h_rect = QRect(self._detail_handle.mapToGlobal(QPoint(0, 0)), self._detail_handle.size())
+            if h_rect.contains(gpos):
+                return super().eventFilter(obj, event)
+            # 卡片点击会切换详情内容，无需先隐藏浮层，以免闪烁。
+            try:
+                w = QApplication.widgetAt(gpos)
+                while w is not None:
+                    if isinstance(w, GbModCard):
+                        return super().eventFilter(obj, event)
+                    w = w.parent() if hasattr(w, "parent") else None
+            except Exception:
+                pass
+            # 点击其他页面区域时收起浮层。
+            self._hide_detail_floating()
+        except Exception:
+            pass
+        return super().eventFilter(obj, event)
