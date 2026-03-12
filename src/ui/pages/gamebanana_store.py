@@ -1720,3 +1720,245 @@ class GameBananaStorePage(QWidget):
         finally:
             # 返回前由宿主或待安装记录接管，取消选择和缺失资料也释放占用。
             self._download_manager.release(owner)
+
+    def _prepare_download_install(
+        self,
+        file: GbModFile,
+        archive_path,
+        profile=None,
+        game_id: str = "",
+    ) -> None:
+        """按下载时的游戏和详情规划安装，游戏已切换则挂起；否则匹配或询问目标并构造统一导入请求。"""
+        # 优先使用创建任务时保存的详情快照，未传入时读取当前详情。
+        if profile is None:
+            profile = self.detail_view._profile
+        if profile is None:
+            logger.warning("Download finished but detail profile is gone — skipping install")
+            return
+        from src.core.mod_manager import ModManager
+
+        mm = ModManager()
+        # 下载任务保存创建时的游戏编号。当前游戏已改变时挂起安装，返回原游戏后继续，
+        # 避免依据另一游戏的目录树解析分类并安装到错误位置。
+        if game_id and game_id != (mm.current_game_id or ""):
+            self._defer_install(game_id, file, archive_path, profile)
+            return
+        characters = mm.get_characters()
+        resolver = InstallTargetResolver()
+        # 使用已加载详情中的分类名称匹配安装目录，无需额外网络请求。
+        # super_category_id 为零表示直接属于根分类，其名称不能作为角色目录自动匹配，
+        # 须由用户选择安装位置。
+        category_name = str(getattr(profile, "category_name", "") or "")
+        best, ranked = resolver.resolve(
+            profile.name,
+            file.file_name,
+            characters,
+            category_name=category_name,
+            category_is_sub=bool(int(getattr(profile, "super_category_id", 0) or 0)),
+        )
+        meta = GbInstallMetadata(
+            mod_id=profile.mod_id,
+            file_id=file.file_id,
+            file_md5=file.md5_checksum,
+            file_ts=file.date_added_ts,
+            page_url=profile.page_url,
+            version=file.version or None,
+            submitter_id=profile.submitter.id,
+            submitter_name=profile.submitter.name,
+            last_checked_iso=datetime.now().isoformat(),
+        )
+        target_id = best.id if best is not None else None
+        if target_id is None:
+            from src.ui.widgets.gb_install_target_dialog import GbInstallTargetDialog
+
+            # 对话框归属于主窗口，避免页面祖先被提升为原生窗口后改变浮层的鼠标命中顺序。
+            dlg = GbInstallTargetDialog(
+                profile.name,
+                ranked,
+                category_name=category_name,
+                parent=self.window(),
+            )
+            if dlg.exec() != dlg.DialogCode.Accepted:
+                return
+            target_id = dlg.selected_character_id()
+            if not target_id:
+                return
+            if dlg.remember_name_en():
+                self._backfill_character_name_en(mm, target_id, category_name)
+        # 有详情预览时使用首图，并关闭归档自动预览扫描，避免将纹理文件识别为展示图。
+        # 详情无预览时才使用归档扫描；未匹配到图片时保留为空。
+        gb_has_preview = bool(getattr(profile, "preview_images", None))
+        payload = {
+            "archive_path": str(archive_path),
+            "node_id": target_id,
+            "display_name": "",
+            # 任务明细使用可读名称代替包含 MD5 和文件编号的缓存文件名，
+            # 但不能写入 display_name，以免覆盖 Mod 的正式名称。
+            "display_label": profile.name or "",
+            "profile": profile,
+            # 宿主工作线程与同步导入共用 plan_request 参数，保持安装行为一致。
+            "plan": {
+                "source_name": file.file_name,
+                "auto_preview": not gb_has_preview,
+                "gamebanana_metadata": meta.to_dict(),
+                # NSFW Mod 自动标记为「X-成人级」（仅在本地仍是默认 G 时套用）。
+                "force_age_rating": (AgeRating.X.value if getattr(profile, "is_nsfw", False) else ""),
+            },
+        }
+        self._start_install(payload)
+
+    # 跨游戏挂起安装
+    def _retain_pending_install(self, record: PendingInstall) -> None:
+        """以待安装游戏和文件编号登记归档使用者，防止安装恢复前清理下载文件。"""
+        self._download_manager.retain(
+            record.file_id,
+            record.md5_checksum,
+            owner=f"pending-install:{record.game_id}:{record.file_id}",
+            path=record.archive_path,
+        )
+
+    def _game_display_name(self, game_id: str) -> str:
+        """读取游戏显示名称；缺失时返回游戏编号用于提示。"""
+        try:
+            from src.core.game_service import GameService
+
+            g = GameService.instance().get_game(game_id)
+            if g is not None and (g.name or "").strip():
+                return g.name.strip()
+        except Exception:
+            pass
+        return game_id
+
+    def _defer_install(self, game_id: str, file: GbModFile, archive_path, profile) -> None:
+        """持久化待安装请求并保留源包，切回目标游戏后恢复安装。"""
+        try:
+            record = PendingInstall.capture(game_id, profile, file, archive_path)
+            self._retain_pending_install(record)
+            self._pending_installs.add(record)
+        except Exception:
+            logger.exception("挂起安装记录落盘失败：file=%s", file.file_id)
+        name = self._game_display_name(game_id)
+        logger.info(
+            "下载完成但已切换游戏：挂起安装 mod=%s file=%s → 等切回「%s」",
+            getattr(profile, "mod_id", 0),
+            file.file_id,
+            game_id,
+        )
+        self._notify(
+            tr(
+                "「{value}」已下载完成。\n它属于「{name}」，切回该游戏后会自动安装。",
+                value=profile.name or file.file_name,
+                name=name,
+            ),
+            ok=True,
+            hold_ms=5000,
+        )
+
+    def _drain_pending_installs(self, game_id: str) -> None:
+        """切回目标游戏后恢复持久化的待安装请求。
+
+        源包缺失时移除记录并提示重新下载；文件已安装时移除重复请求。
+        通过校验后由保存的快照恢复文件和详情数据，再交给 _after_download。
+        """
+        from src.core.mod_manager import ModManager
+
+        manager = ModManager()
+        if game_id != manager.current_game_id:
+            return
+        try:
+            records = self._pending_installs.take(game_id)
+        except Exception:
+            logger.exception("读取挂起安装记录失败")
+            return
+        if not records:
+            return
+        missing: list[str] = []
+        for rec in records:
+            if game_id != manager.current_game_id:
+                # 目标选择可能进入嵌套事件循环并切换游戏。
+                self._pending_installs.add(rec)
+                continue
+            try:
+                archive = Path(rec.archive_path)
+                if not archive.exists():
+                    missing.append(rec.mod_name or rec.file_name)
+                    logger.info("挂起安装的源包已不存在，丢弃：%s", archive)
+                    continue
+                if self._is_gb_file_installed_in_game(
+                    game_id,
+                    rec.mod_id,
+                    rec.file_id,
+                    rec.md5_checksum,
+                ):
+                    logger.info(
+                        "挂起安装的文件已装进「%s」，丢弃：mod=%s file=%s",
+                        game_id,
+                        rec.mod_id,
+                        rec.file_id,
+                    )
+                    continue
+                self._after_download(
+                    RestoredFile(rec),
+                    archive,
+                    RestoredProfile(rec),
+                    game_id,
+                )
+            except Exception:
+                logger.exception("放行挂起安装失败：file=%s", rec.file_id)
+            finally:
+                self._download_manager.release(f"pending-install:{rec.game_id}:{rec.file_id}")
+        if missing:
+            self._notify(
+                tr("以下已下载的 Mod 源包已不在下载目录，请重新下载：\n") + "\n".join(f"· {n}" for n in missing),
+                ok=False,
+                hold_ms=6000,
+            )
+
+    def _is_gb_file_installed_in_game(
+        self,
+        game_id: str,
+        mod_id: int,
+        file_id: int,
+        md5: str,
+    ) -> bool:
+        """判断 GameBanana 文件是否已安装到指定游戏。
+
+        同一安装包可能用于多个游戏，不能以跨游戏查询结果代替当前游戏的安装状态。
+        """
+        idx = self._mod_index
+        mid = int(mod_id or 0)
+        if idx is None or not mid:
+            return False
+        try:
+            mods = idx.get_all_mods(game_id)
+        except Exception:
+            return False
+        want_md5 = str(md5 or "").strip().lower()
+        for m in mods:
+            gb = (m.info.custom_data or {}).get("gamebanana") or {}
+            try:
+                if int(gb.get("mod_id") or 0) != mid:
+                    continue
+            except (TypeError, ValueError):
+                continue
+            if file_id and int(gb.get("file_id") or 0) == int(file_id):
+                return True
+            if want_md5 and str(gb.get("file_md5") or "").strip().lower() == want_md5:
+                return True
+        return False
+
+    def _notify(self, text: str, *, ok: bool = True, hold_ms: int = 3000) -> None:
+        """显示不影响安装结果的滑入提示。
+
+        提示归属于主窗口，避免页面祖先被提升为原生窗口后干扰浮层的鼠标事件。
+        """
+        try:
+            from src.ui.widgets.toast import Toast
+
+            toast = getattr(self, "_store_toast", None)
+            if toast is None:
+                toast = Toast(self.window())
+                self._store_toast = toast
+            toast.done(text, ok=ok, hold_ms=hold_ms)
+        except Exception:
+            logger.info("提示（Toast 不可用）：%s", text)
