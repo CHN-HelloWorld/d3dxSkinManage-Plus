@@ -882,3 +882,91 @@ class GameBananaStorePage(QWidget):
             )
         display_name = official_name_from_records(records, gb_id) or query_name or local_game_id
         self._load_known_game(gb_id, local_game_id, display_name)
+
+    def _on_game_match_failed(self, local_game_id: str, gen: int, message: str) -> None:
+        """当前代次匹配失败时回到浏览视图并显示错误，忽略旧游戏的失败结果。"""
+        if gen != self._request_gen:
+            return
+        logger.warning("在线匹配 GameBanana 游戏失败：%s（网络/接口异常）", local_game_id)
+        self.stack.setCurrentIndex(self.VIEW_MAIN)
+        self._on_error(message)
+
+    def _show_unknown_game(self, local_game_id: str) -> None:
+        """切到「GameBanana 未收录」占位视图。"""
+        self._gb_game_id = None
+        # 显示当前游戏名称，优先英文名，其次中文名，最后使用内部编号。
+        display = local_game_id
+        try:
+            from src.core.game_service import GameService
+
+            g = GameService.instance().get_game(local_game_id)
+            if g:
+                display = (g.name_en or "").strip() or (g.name or "").strip() or local_game_id
+        except Exception:
+            pass
+        self.unknown_view.set_game_name(display)
+        self.stack.setCurrentIndex(self.VIEW_UNKNOWN)
+        self.grid.clear()
+        self._all_records = []
+        self.breadcrumb.set_path([])
+
+    # 分类加载。
+    def _kick_roots(self, gb_id: int) -> None:
+        """异步请求游戏根分类，将成功结果与发起时的请求代次绑定。"""
+        runner = self._make_runner()
+        gen = self._request_gen
+        runner.finished.connect(lambda roots, g=gen: self._on_roots_loaded(roots, g))
+        runner.failed.connect(self._on_error)
+        runner.run(lambda: self._cat_service.roots(gb_id))
+
+    def _on_roots_loaded(self, roots: list[GbCategory], gen: int) -> None:
+        """为当前代次缓存根分类面包屑，并进入默认分类；没有可用分类时显示空状态。"""
+        if gen != self._request_gen:
+            return
+        # 缓存根分类的面包屑子项，并选择默认分类。
+        self.breadcrumb.set_children(-1, roots)
+        target = self._pick_default(roots)
+        if target is None:
+            self.browse_view.show_empty()
+            return
+        new_path = [
+            GbCategory(
+                id=0, name=self._display_name or self._local_game_name, parent_id=None, item_count=0, icon_url=None
+            ),
+            GbCategory(id=-1, name="Mods", parent_id=None, item_count=0, icon_url=None),
+            target,
+        ]
+        self._set_path_and_query(new_path)
+
+    @staticmethod
+    def _pick_default(cats: list[GbCategory]) -> GbCategory | None:
+        """挑选默认展开的根分类。
+
+        优先选择名称包含 skin 或 character 的分类，再按内容数量确定结果。
+        没有名称匹配时选择内容数量最多的根分类。
+        """
+        if not cats:
+            return None
+        keywords = ("skin", "character")
+        priority = [c for c in cats if any(kw in c.name.lower() for kw in keywords)]
+        if priority:
+            return max(priority, key=lambda c: c.item_count)
+        return max(cats, key=lambda c: c.item_count)
+
+    # 面包屑
+    def _on_breadcrumb_path_changed(self, new_path: list[GbCategory]) -> None:
+        """只对包含实际分类的面包屑路径启动新的分类查询。"""
+        if len(new_path) <= 2:
+            return
+        self._set_path_and_query(new_path)
+
+    def _on_children_requested(self, parent_id: int) -> None:
+        """异步加载有效父分类的子项，虚拟根节点直接提供空子项结果。"""
+        if parent_id <= 0:
+            self.breadcrumb.set_children(parent_id, [])
+            return
+        runner = self._make_runner()
+        gen = self._request_gen
+        runner.finished.connect(lambda kids, p=parent_id, g=gen: self._on_children_loaded(p, kids, g))
+        runner.failed.connect(lambda error, p=parent_id, g=gen: self._on_children_error(p, error, g))
+        runner.run(lambda: self._cat_service.children(parent_id))
