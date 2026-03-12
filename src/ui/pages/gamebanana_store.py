@@ -639,3 +639,246 @@ class GameBananaStorePage(QWidget):
         except Exception:
             pass
         return super().eventFilter(obj, event)
+
+    def hideEvent(self, event):
+        """离开商店页时收起下载和详情浮层，并移除页面的全局点击过滤器。"""
+        # 顶层下载窗口不会随父控件自动隐藏，页面切走时须显式收起。
+        try:
+            if self.download_flyout.isVisible():
+                self.download_flyout.hide()
+        except RuntimeError:
+            pass
+        # 页面隐藏时同时收起详情浮层。
+        try:
+            if self.detail_view.isVisible():
+                self._hide_detail_floating()
+        except RuntimeError:
+            pass
+        # 卸载全局事件过滤器。
+        try:
+            QApplication.instance().removeEventFilter(self)
+        except Exception:
+            pass
+        super().hideEvent(event)
+
+    # 公开操作接口。
+    def refresh(self) -> None:
+        """重新匹配未解析的游戏，或获取当前分类、搜索结果的第一页。
+
+        同时清空筛选用的原始记录，避免混用刷新前后的数据。
+        """
+        if self._gb_game_id is None:
+            if self._local_game_name:
+                self.set_game(self._local_game_name, force=True)
+            return
+        self._error_hide_timer.stop()
+        self.error_bar.hide()
+        # 手动刷新先使分类、详情和更新缓存失效，随后从网络获取最新数据。
+        try:
+            self._client.invalidate_game_caches(self._gb_game_id)
+        except Exception as exc:
+            logger.debug("刷新时清缓存失败（忽略）: %s", exc)
+        # 递增请求代次，使旧分页响应失效。
+        self._request_gen += 1
+        self._cancel_inflight()  # 取消旧请求并释放并发名额，使刷新请求能够立即执行。
+        self._page = 1
+        self._backfill_attempts = 0
+        self.grid.clear()
+        self._all_records = []
+        self.browse_view.show_loading()
+        # 分类树未加载时先补取根分类，再执行分页请求，避免只显示加载状态。
+        if not self._path:
+            self._kick_roots(self._gb_game_id)
+        else:
+            self._fetch_next_page()
+
+    def reset_to_empty(self) -> None:
+        """删除或取消激活游戏时清空商店数据和卡片，并使在途响应失效。"""
+        self._request_gen += 1
+        self._cancel_inflight()  # 取消在途请求，避免已清空页面被旧响应重新填充。
+        self._gb_game_id = None
+        self._local_game_name = ""
+        self._pending_initial_game_id = None
+        self._display_name = ""
+        self._path = []
+        self._error_hide_timer.stop()
+        self.error_bar.hide()
+        try:
+            self._hide_detail_floating()
+        except Exception:
+            pass
+        self.grid.clear()
+        self._all_records = []
+        try:
+            self.breadcrumb.set_path([])
+            _sb = self.filter_bar.search_box
+            _sb.blockSignals(True)
+            _sb.clear()
+            _sb.blockSignals(False)
+        except (RuntimeError, AttributeError):
+            pass
+        self.stack.setCurrentIndex(self.VIEW_MAIN)
+        self.browse_view.show_empty()
+
+    def set_game(self, local_game_id: str, force: bool = False) -> None:
+        """切换商店面向的游戏，并使旧请求失效。
+
+        已匹配游戏加载浏览视图及分类；未匹配游戏显示未收录提示。
+        同一游戏正在加载或已经加载时复用当前状态，force=True 可强制重新解析。
+        以用户配置的英文名查询已保存的映射；名称改变后重新在线匹配。
+        """
+        overrides = self._game_store.get_gamebanana_overrides()
+        name_en = self._game_name_en(local_game_id)
+        gb_id = resolve_gb_game_id_by_name(name_en, local_game_id, overrides)
+        # 同一游戏正在加载或已经加载时不重复请求，避免游戏切换与显示事件同时触发。
+        # force=True 用于修改游戏信息后重新解析。
+        if (
+            not force
+            and gb_id is not None
+            and local_game_id == self._local_game_name
+            and gb_id == self._gb_game_id
+            and self._in_flight > 0
+        ):
+            return
+        self._local_game_name = local_game_id
+        self._invalidate_installed_cache()
+        self._request_gen += 1
+        self._cancel_inflight()  # 取消旧游戏请求，避免重试长期占用并发名额。
+        self._path = []
+        # 切换游戏时清空旧面包屑和搜索词，避免显示前一游戏的数据。
+        try:
+            self.breadcrumb.set_path([])
+            _sb = self.filter_bar.search_box
+            _sb.blockSignals(True)
+            _sb.clear()
+            _sb.blockSignals(False)
+        except (RuntimeError, AttributeError):
+            pass
+        self.detail_view._profile = None
+        # 切换游戏时收起详情并清除选中状态。
+        self._hide_detail_floating()
+        self._selected_mod_id = None
+        # 同步下载浮窗的游戏筛选条件。
+        try:
+            self.download_flyout.set_game_filter(local_game_id or None)
+            for row in self.download_flyout._row_widgets.values():
+                row._sync_with_state()
+        except Exception:
+            pass
+        # 切回游戏后恢复挂起的安装，包括上次运行保留的任务。延迟执行以等待
+        # _on_game_changed 完成对账、角色树重建、目录监听和预设应用，并留出主窗口绘制时间。
+        # 安装调度先于页面可见性检查，使商店页隐藏时也能恢复当前游戏的安装任务。
+        if local_game_id:
+            call_later(800, self, lambda gid=local_game_id: self._drain_pending_installs(gid))
+
+        # 商店隐藏时记录待加载游戏，不发送请求；清空远程游戏编号，使在途分页提前结束。
+        if not self.isVisible():
+            self._gb_game_id = None
+            self.grid.clear()
+            self._all_records = []
+            self._pending_initial_game_id = local_game_id or None
+            # 提前设置加载状态，避免首次显示时短暂出现上一游戏的空网格。
+            self.browse_view.show_loading()
+            logger.debug("商店页不可见，推迟加载游戏「%s」到下次可见", local_game_id)
+            return
+
+        if gb_id is None:
+            # 未保存当前名称的映射时，使用 NameMatch 接口在线查询。
+            self._try_online_match_game(local_game_id)
+            return
+        self._load_known_game(
+            gb_id,
+            local_game_id,
+            name_en or local_game_id,
+        )
+
+    def _game_name_en(self, local_game_id: str) -> str:
+        """读取用于 GameBanana 匹配的游戏英文名；不存在时返回空字符串。"""
+        try:
+            from src.core.game_service import GameService
+
+            g = GameService.instance().get_game(local_game_id)
+            if g and (g.name_en or "").strip():
+                return g.name_en.strip()
+        except Exception:
+            pass
+        return ""
+
+    def _load_known_game(
+        self,
+        gb_id: int,
+        local_game_id: str,
+        display_name: str,
+    ) -> None:
+        """按确定的游戏编号加载分类，面包屑使用配置或查询返回的名称。"""
+        self._gb_game_id = gb_id
+        self._display_name = display_name
+        # 本次运行首次进入该游戏时清除 API 缓存，后续切换复用；手动刷新另行处理。
+        if gb_id not in self._session_freshed_games:
+            self._session_freshed_games.add(gb_id)
+            try:
+                self._client.invalidate_game_caches(gb_id)
+            except Exception as exc:
+                logger.debug("首次进入清缓存失败（忽略）: %s", exc)
+        self.stack.setCurrentIndex(self.VIEW_MAIN)
+        self.breadcrumb.set_path(
+            [
+                GbCategory(id=0, name=display_name, parent_id=None, item_count=0, icon_url=None),
+                GbCategory(id=-1, name="Mods", parent_id=None, item_count=0, icon_url=None),
+            ]
+        )
+        self.grid.clear()
+        self._all_records = []
+        self.browse_view.show_loading()
+        self._kick_roots(gb_id)
+
+    def _try_online_match_game(self, local_game_id: str) -> None:
+        """在线查询游戏编号，匹配成功后保存映射并加载分类。"""
+        self._gb_game_id = None
+        # 优先使用游戏英文名查询，缺失时使用本地游戏编号。
+        query_name = self._game_name_en(local_game_id) or local_game_id
+
+        self.stack.setCurrentIndex(self.VIEW_MAIN)
+        self.grid.clear()
+        self._all_records = []
+        self.breadcrumb.set_path([])
+        self._error_hide_timer.stop()
+        self.error_bar.hide()
+        self.browse_view.show_loading()
+
+        gen = self._request_gen
+        runner = self._make_runner()
+        runner.finished.connect(
+            lambda records, lid=local_game_id, q=query_name, g=gen: self._on_game_match_result(records, lid, q, g)
+        )
+        runner.failed.connect(lambda message, lid=local_game_id, g=gen: self._on_game_match_failed(lid, g, message))
+        runner.run(lambda q=query_name: self._client.match_game(q))
+
+    def _on_game_match_result(
+        self,
+        records: list,
+        local_game_id: str,
+        query_name: str,
+        gen: int,
+    ) -> None:
+        """只处理当前代次的游戏匹配结果，保存英文名对应关系并加载在线游戏，未匹配时显示提示。"""
+        if gen != self._request_gen:
+            return  # 切换游戏后丢弃过期匹配结果。
+        gb_id = pick_gb_game_match(records, query_name)
+        if gb_id is None:
+            self._show_unknown_game(local_game_id)
+            return
+        # 按英文名保存匹配结果，后续同名查询直接复用；改名后重新匹配。
+        overrides = self._game_store.get_gamebanana_overrides()
+        cache_key = gb_override_key(self._game_name_en(local_game_id), local_game_id)
+        if overrides.get(cache_key) != gb_id:
+            overrides[cache_key] = gb_id
+            self._game_store.set_gamebanana_overrides(overrides)
+            logger.info(
+                "在线匹配 GameBanana 游戏成功：%s（key=%s）→ id=%s（已写入 overrides）",
+                local_game_id,
+                cache_key,
+                gb_id,
+            )
+        display_name = official_name_from_records(records, gb_id) or query_name or local_game_id
+        self._load_known_game(gb_id, local_game_id, display_name)
