@@ -1579,3 +1579,144 @@ class GameBananaStorePage(QWidget):
     def _clear_resizing_flag(self) -> None:
         """解除详情宽度调整期间的外部点击屏蔽状态。"""
         self._detail_resizing = False
+
+    def _set_selected_card(self, mod_id: int) -> None:
+        """选中指定 Mod 的可见卡片，并清除其他卡片的选中状态。
+
+        同时保存选中编号，供虚拟滚动创建卡片时恢复状态。
+        """
+        self._selected_mod_id = int(mod_id) if mod_id else None
+        try:
+            for card in self.grid.iter_cards():
+                rec = getattr(card, "record", None)
+                if rec is None or not hasattr(card, "set_selected"):
+                    continue
+                card.set_selected(int(rec.mod_id) == self._selected_mod_id)
+        except Exception:
+            pass
+
+    def _on_back_to_browse(self) -> None:
+        """收起详情浮层并清除浏览卡片的选中状态。"""
+        # 返回时收起详情并清除选中状态。
+        self._hide_detail_floating()
+
+    def _on_download_task_removed(self, file_id: int) -> None:
+        """移除文件任务的信号连接登记，并将详情按钮恢复为空闲状态。"""
+        self._wired_download_tasks.discard(int(file_id))
+        self.detail_view.set_file_state(file_id, "idle", progress=0)
+
+    def _on_download_requested(self, file: GbModFile) -> None:
+        """冻结下载所属游戏与详情，复用本地归档或任务，并仅为新任务连接进度和安装回调。"""
+        if self.detail_view._profile is None:
+            return
+        # 创建下载任务时冻结详情数据，避免异步完成后读取已切换的名称或安装元数据。
+        profile = self.detail_view._profile
+        game_id = self._local_game_name or ""
+        task = self._download_manager.request(
+            profile,
+            file,
+            game_id=game_id,
+        )
+        if task is None:
+            # md5 命中本地缓存：跳过下载，但仍需把详情按钮置为「已下载·安装」并触发安装流程。
+            # 重启后也可使用缓存文件恢复安装，并采用当前详情数据。
+            path = self._download_manager.has_local_md5(file.md5_checksum)
+            if path is not None:
+                self.detail_view.set_file_state(file.file_id, "done")
+                self._after_download(file, path, profile, game_id)
+            return
+        if task.state == "done" and task.archive_path.is_file():
+            self._after_download(file, task.archive_path, profile, game_id)
+            return
+        # 新任务立即显示下载状态，并通过进度、状态、失败和完成信号持续更新文件按钮。
+
+        # 仅为新任务连接信号；已在队列中的文件会复用任务，重复连接会导致重复安装。
+        if task.file.file_id in self._wired_download_tasks:
+            # 已连接的任务仅显示下载管理，不重复连接信号。
+            try:
+                self._show_download_flyout()
+            except Exception:
+                pass
+            return
+        self._wired_download_tasks.add(task.file.file_id)
+        self._on_task_state(file.file_id, task.state)
+        # 新下载入队后显示下载管理；命中本地缓存直接安装时不弹出下载浮窗。
+        try:
+            self._show_download_flyout()
+        except Exception:
+            pass
+        task.state_changed.connect(
+            lambda s, fid=file.file_id, t=task: (
+                self._on_task_state(fid, s) if self._download_manager.get_task(fid) is t else None
+            )
+        )
+        task.progress.connect(
+            lambda d, total, fid=file.file_id, t=task: (
+                self._on_task_progress(fid, d, total) if self._download_manager.get_task(fid) is t else None
+            )
+        )
+        task.failed.connect(
+            lambda _msg, fid=file.file_id, t=task: (
+                self.detail_view.set_file_state(fid, "failed") if self._download_manager.get_task(fid) is t else None
+            )
+        )
+        task.finished.connect(
+            lambda path, f=file, p=profile, g=task.game_id, t=task: (
+                self._after_download(f, path, p, g) if self._download_manager.get_task(f.file_id) is t else None
+            )
+        )
+
+    def _on_task_state(self, file_id: int, state: str) -> None:
+        """将下载任务状态转换为详情文件行的显示状态。
+
+        preparing 与 downloading 共用下载中状态，完成、失败和取消按各自结果更新按钮。
+        """
+        if state in ("queued", "preparing", "downloading"):
+            self.detail_view.set_file_state(file_id, "downloading")
+        elif state == "done":
+            self.detail_view.set_file_state(file_id, "done")
+        elif state in ("failed", "canceled"):
+            self.detail_view.set_file_state(file_id, "failed")
+        elif state == "paused":
+            self.detail_view.set_file_state(file_id, "idle")
+
+    def _on_task_progress(self, file_id: int, done_bytes: int, total: int) -> None:
+        """总量已知时将下载字节进度转换为百分比，更新详情中的文件按钮。"""
+        if total <= 0:
+            return
+        pct = max(0, min(100, int(done_bytes * 100 / total)))
+        self.detail_view.set_file_state(file_id, "downloading", progress=pct)
+
+    def _on_install_requested(self, file: GbModFile) -> None:
+        """跳过已安装的具体文件，优先安装本地归档，缓存失效时重新进入下载请求流程。"""
+        # 已安装的具体文件不重复触发安装；同一 Mod 的其他文件仍可安装。
+        profile = self.detail_view._profile
+        if profile is not None and self._is_gb_file_installed(
+            int(getattr(profile, "mod_id", 0) or 0),
+            int(file.file_id or 0),
+            file.md5_checksum or "",
+        ):
+            return
+        path = self._download_manager.has_local_md5(file.md5_checksum)
+        if path is not None:
+            # 即时安装使用当前游戏，无需记录下载期间游戏切换的上下文。
+            self._after_download(file, path, profile)
+        else:
+            # 按钮绘制后缓存仍可能消失，请求入口也处理没有校验和的已完成下载。
+            self._on_download_requested(file)
+
+    def _after_download(
+        self,
+        file: GbModFile,
+        archive_path,
+        profile=None,
+        game_id: str = "",
+    ) -> None:
+        """安装规划期间持有归档引用，无论成功、取消或异常都释放本次临时占用。"""
+        owner = f"download:{file.file_id}"
+        self._download_manager.retain(file.file_id, file.md5_checksum, owner=owner, path=archive_path)
+        try:
+            self._prepare_download_install(file, archive_path, profile, game_id)
+        finally:
+            # 返回前由宿主或待安装记录接管，取消选择和缺失资料也释放占用。
+            self._download_manager.release(owner)
