@@ -1290,3 +1290,64 @@ class GameBananaStorePage(QWidget):
                     (str(fid or ""), md5, path, getattr(m, "mod_id", ""))
                 )
         return mod_ids, file_keys, md5_keys
+
+    def _can_open_downloaded_mod(self, task) -> bool:
+        """判断下载记录是否能关联到仍存在的本地 Mod。"""
+        return self._downloaded_local_mod_id(task) is not None
+
+    def _downloaded_local_mod_id(self, task):
+        """按游戏范围及在线文件编号或摘要定位仍存在的本地 Mod。"""
+        from pathlib import Path
+
+        if self._local_game_name and task.game_id != self._local_game_name:
+            return None
+        self._cached_installed()
+        mid = int(getattr(task.profile, "mod_id", 0))
+        checksum = (task.file.md5_checksum or "").lower()
+        for fid, md5, path, local_id in self._installed_gb_paths.get(mid, ()):
+            if fid == str(task.file.file_id) or (checksum and checksum == md5):
+                if local_id and Path(path).exists():
+                    return local_id
+        return None
+
+    def _open_downloaded_file(self, task) -> None:
+        """将下载记录对应的本地 Mod 定位请求交给宿主概览页。"""
+        local_id = self._downloaded_local_mod_id(task)
+        if local_id is not None:
+            self.open_local_mod_in_overview_requested.emit(local_id)
+
+    def _cached_installed(self) -> tuple[set, set, set]:
+        """按需缓存安装索引，安装或删除事件使缓存失效后重新计算。
+
+        全部卡片共享查询结果，避免虚拟滚动创建卡片时重复扫描资源库。
+        """
+        if self._installed_cache is None:
+            self._installed_cache = self._scan_installed_gb()
+        return self._installed_cache
+
+    def _cached_installed_ids(self) -> set:
+        """返回安装快照中的在线 Mod 标识集合，供卡片徽章快速查询。"""
+        return self._cached_installed()[0]
+
+    def _is_gb_file_installed(self, mod_id: int, file_id: int, md5: str) -> bool:
+        """判断指定 GameBanana 文件是否已安装。
+
+        同一在线 Mod 的不同下载文件分别安装，须按 (mod_id, file_id) 判断；
+        file_id 缺失时改用 MD5 匹配。
+        """
+        _, file_keys, md5_keys = self._cached_installed()
+        mid = int(mod_id or 0)
+        if not mid:
+            return False
+        if file_id and (mid, int(file_id)) in file_keys:
+            return True
+        m = str(md5 or "").strip().lower()
+        return bool(m and (mid, m) in md5_keys)
+
+    def _invalidate_installed_cache(self) -> None:
+        """使安装状态快照失效，下次查询时统一重建标识集合与文件映射。"""
+        self._installed_cache = None
+
+    def _is_installed(self, rec: GbModRecord) -> bool:
+        """根据安装快照判断该在线 Mod 是否已有本地安装记录。"""
+        return rec.mod_id in self._cached_installed_ids()
