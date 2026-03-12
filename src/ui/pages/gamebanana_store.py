@@ -202,3 +202,118 @@ class _AsyncRunner(QObject):
         self._silent_on_failure = False
         self._retired = False
         self._completed.connect(self._on_completed, Qt.ConnectionType.QueuedConnection)
+
+    def run(self, coro_factory: Callable[[], Awaitable]) -> None:
+        """提交协程并登记弱引用完成回调，对象销毁时取消任务，避免后台结果访问无效 Qt 对象。"""
+        if self._retired:
+            return
+        future = self._worker.submit(coro_factory)
+        self._future = future
+        runner_ref = weakref.ref(self)
+
+        def _on_destroyed(_=None) -> None:
+            """对象销毁时标记退场并取消对应 Future，阻止后续结果发布。"""
+            runner = runner_ref()
+            if runner is not None:
+                runner._retired = True
+                runner._future = None
+            future.cancel()
+
+        self.destroyed.connect(_on_destroyed)
+
+        def _on_done(fut: Future) -> None:
+            """后台 Future 完成后仅向仍有效的运行器发送排队信号。"""
+            # 异步结果可能晚于任务对象和页面的销毁。
+            runner = runner_ref()
+            if runner is None or runner._retired or (not shiboken6.isValid(runner)):
+                return
+            try:
+                runner._completed.emit(fut)
+            except RuntimeError:
+                # 对象可能在弱引用检查后立即销毁。
+                pass
+
+        future.add_done_callback(_on_done)
+
+    def _retire(self) -> bool:
+        """仅执行一次退场，清除 Future 引用并通知页面更新请求计数，再延后销毁对象。"""
+        if self._retired:
+            return False
+        self._retired = True
+        self._future = None
+        self.retired.emit()
+        self.deleteLater()
+        return True
+
+    def _on_completed(self, future: Future) -> None:
+        """在界面线程先使运行器退场，再根据关闭、取消和异常状态选择发布结果。"""
+        # 界面投递时重新检查取消状态，先撤销请求再由处理器读取加载计数。
+        if not self._retire():
+            return
+        if self._silent_on_failure or self._worker._shutting_down or future.cancelled():
+            return
+        exc = future.exception()
+        if exc is not None:
+            if type(exc).__name__ not in self._SHUTDOWN_EXPECTED_EXC_NAMES:
+                logger.error("Async error in _AsyncRunner", exc_info=(type(exc), exc, exc.__traceback__))
+            self.failed.emit(friendly_error(exc))
+            return
+        self.finished.emit(future.result())
+
+    def cancel(self) -> None:
+        """导航切换时取消在途请求，释放客户端的并发名额并停止重试。
+
+        run_coroutine_threadsafe 返回的 Future 将取消请求传播到事件循环内的任务。
+        协程在 await 处收到 CancelledError，随后关闭请求并释放 semaphore；取消不作为错误上报。
+        """
+        self._silent_on_failure = True
+        fut = getattr(self, "_future", None)
+        self._retire()
+        if fut is not None:
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+
+
+class _DetailDragHandle(QFrame):
+    """详情浮层左侧的宽度拖动手柄。
+
+    手柄宽六像素，悬停时使用水平调整光标，拖动时报告宽度增量。
+    释放信号通知上层保存宽度，或在宽度过小时收起浮层。
+    """
+
+    drag_delta = Signal(int)  # 实时拖动；正值 = 浮窗变宽
+    drag_released = Signal()  # 拖动结束（释放鼠标）
+
+    HANDLE_WIDTH = 6
+
+    def __init__(self, parent=None) -> None:
+        """创建透明的详情宽度调整手柄，设置水平拖动光标并初始化拖动状态。"""
+        super().__init__(parent)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        # 手柄保持透明，仅通过水平调整光标提示拖动能力。
+        self.setStyleSheet("background-color: transparent;")
+        self.setFixedWidth(self.HANDLE_WIDTH)
+        self._dragging = False
+        self._last_global_x = 0
+
+    def enterEvent(self, event):
+        """保留基类鼠标进入处理，使透明手柄继续使用水平调整光标。"""
+        # 保留透明外观及水平调整光标。
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """非拖动状态下恢复手柄透明样式，再交由基类处理离开事件。"""
+        if not self._dragging:
+            self.setStyleSheet("background-color: transparent;")
+        super().leaveEvent(event)
+
+    def mousePressEvent(self, event):
+        """左键按下时记录全局横坐标并开始详情宽度拖动。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._dragging = True
+            self._last_global_x = int(event.globalPosition().x())
+            event.accept()
+            return
+        super().mousePressEvent(event)
