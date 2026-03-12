@@ -1094,3 +1094,199 @@ class GameBananaStorePage(QWidget):
         runner.run(coro_factory)
         self._page += 1
         self.grid.mark_loading()
+
+    def _on_page_loaded(self, result, gen: int) -> None:
+        """按请求代次和在途状态接收分页结果，缓存原始条目并按内容策略进入统计补全与渲染。"""
+        # 有其他请求在途时丢弃过期结果；若已无待处理请求，则使用此结果结束加载状态，
+        # 避免重复触发被幂等检查拦截后，页面缺少可用于完成加载的回调。
+        if gen != self._request_gen and self._in_flight > 0:
+            return
+        records, has_more = result
+        raw_records = list(records)  # 保留包含 NSFW 项的原始记录，用于下载量补全与筛选策略切换。
+        self._all_records.extend(records)
+        records = self._apply_nsfw(records)
+        if not records:
+            if self.grid.count() == 0:
+                self.browse_view.show_empty()
+            return
+
+        # apiv11 列表不返回下载量，因此先并发补全统计，再渲染卡片。
+        # 超过两秒仍未返回的项使用待加载占位，后台完成后更新。
+        self._enrich_then_render(raw_records, records, has_more, gen)
+
+    def _enrich_then_render(
+        self,
+        raw_records: list[GbModRecord],
+        records: list[GbModRecord],
+        has_more: bool,
+        gen: int,
+    ) -> None:
+        """补全下载量后渲染卡片，使各项统计尽量同时显示。
+
+        两秒后先使用已完成结果，未完成项显示待加载占位；后台请求完成后更新对应卡片。
+        """
+        mod_ids = [r.mod_id for r in raw_records if r.mod_id]
+        if not mod_ids:
+            self._render_records(records, has_more, gen)
+            return
+
+        runner = self._make_runner()
+
+        def _apply(counts: object) -> set[int]:
+            """将已获取的下载量写回记录，并返回尚未完成的 Mod 编号。"""
+            if not isinstance(counts, dict):
+                return set(mod_ids)
+            for r in raw_records:
+                if r.mod_id in counts:
+                    r.download_count = int(counts[r.mod_id])
+            return {mid for mid in mod_ids if mid not in counts}
+
+        def _on_done(counts) -> None:
+            """应用已返回的下载量后显示记录，对仍缺少统计的条目继续后台补全。"""
+            pending = _apply(counts)
+            self._render_records(records, has_more, gen)
+            if pending:
+                # 后台继续请求超时项，完成后替换占位文本。
+                self._fetch_download_counts(list(pending), gen)
+
+        def _on_fail(_msg) -> None:
+            """下载量查询失败时仍显示记录，并在后台补充统计。"""
+            # 请求失败时仍显示卡片，并在后台重试下载量补全。
+            self._render_records(records, has_more, gen)
+            self._fetch_download_counts(mod_ids, gen)
+
+        runner.finished.connect(_on_done)
+        runner.failed.connect(_on_fail)
+        runner.run(lambda mids=mod_ids: self._client.bulk_download_counts(mids, timeout=2.0))
+
+    def _render_records(
+        self,
+        records: list[GbModRecord],
+        has_more: bool,
+        gen: int,
+    ) -> None:
+        """分批提交卡片记录，供分页加载和下载量补全流程共用。"""
+        # 卡片由 self._make_card 创建，读取当前安装状态、选中状态和记录下载量；
+        # 卡片按 record.download_count 推断下载量是否待补全，避免闭包冻结旧状态。
+
+        # 每批提交 8 条记录，批次之间让出事件循环以处理绘制和输入。
+        # 网格按需创建可视卡片；全部批次提交后再判断是否需要继续回填。
+        chunk_size = 8
+        self._has_more = has_more
+        self.browse_view.show_grid()  # 提交首批记录前显示网格视图。
+
+        def _append_chunk(start_idx: int) -> None:
+            """按块追加当前代次记录，滚动时延后提交，批次结束后按阈值补充后续页面。"""
+            # 请求代次变化后停止提交当前批次。
+            if gen != self._request_gen:
+                return
+            # 滚动停止后再提交本批记录，避免卡片更新与滚动绘制争用主线程。
+            if self.grid.is_scrolling():
+                self.grid.run_when_idle(lambda s=start_idx: _append_chunk(s))
+                return
+            chunk = records[start_idx : start_idx + chunk_size]
+            if not chunk:
+                # 全部记录提交后判断是否需要回填视口。
+                if has_more and self.grid.count() < self._min_per_load and self._backfill_attempts < self._backfill_max:
+                    self._backfill_attempts += 1
+                    call_later(50, self, self._fetch_next_page)
+                return
+            self.grid.append_items(
+                chunk,
+                has_more=has_more,
+                card_factory=self._make_card,
+                card_binder=self._bind_card,
+                image_prefetcher=self._prefetch_thumbnail,
+                image_prefetch_canceller=self._cancel_thumbnail_prefetch,
+            )
+            call_later(0, self, lambda nxt=start_idx + chunk_size: _append_chunk(nxt))
+
+        _append_chunk(0)
+
+    def _fetch_download_counts(self, mod_ids: list[int], gen: int) -> None:
+        """后台批量补全下载量，并在主线程更新对应卡片。
+
+        超时补全、失败重试和内容策略切换可能请求同一批记录，因此每个请求代次内
+        每个 Mod 只补全一次，以免重复访问触发接口限流。
+        """
+        if gen != self._dl_asked_gen:
+            self._dl_asked_gen = gen
+            self._dl_asked.clear()
+        ids = [int(mid) for mid in mod_ids if mid and int(mid) not in self._dl_asked]
+        if not ids:
+            return
+        self._dl_asked.update(ids)
+        runner = self._make_runner()
+        runner.finished.connect(lambda result, g=gen: self._on_download_counts(result, g))
+        # 下载量补全失败不影响列表使用，无需显示错误提示。
+        runner.failed.connect(lambda *_: None)
+        runner.run(lambda ids=ids: self._client.bulk_download_counts(ids))
+
+    def _on_download_counts(self, counts: dict, gen: int) -> None:
+        """按在线 Mod 编号更新缓存记录和可见卡片下载量，统计结果可跨请求代次复用。"""
+        if not isinstance(counts, dict) or not counts:
+            return
+        # 下载量按 Mod 编号匹配，页面请求代次变化不影响其有效性。
+        _ = gen
+        # 先将结果写回记录，使离屏卡片创建时也能读取最新下载量。
+        for rec in self._all_records:
+            if rec.mod_id in counts:
+                try:
+                    rec.download_count = int(counts[rec.mod_id])
+                except (TypeError, ValueError):
+                    pass
+        # 立即更新可见卡片的下载量标签。
+        for card in self.grid.iter_cards():
+            mid = getattr(getattr(card, "record", None), "mod_id", 0)
+            if mid in counts:
+                card.update_downloads(counts[mid])
+
+    def _apply_nsfw(self, records: list[GbModRecord]) -> list[GbModRecord]:
+        """移除策略下过滤成人内容，其他策略保留条目并交给卡片控制预览。"""
+        if self._nsfw_policy == "remove":
+            return [r for r in records if not r.is_nsfw]
+        return records
+
+    def _scan_installed_gb(self) -> tuple[set, set, set]:
+        """一次扫描建立卡片和文件行共用的安装索引。
+
+        返回 (mod_ids, file_keys, md5_keys)：Mod 编号集合用于卡片徽章，
+        (mod_id, file_id) 集合用于文件行，(mod_id, md5) 集合用于缺少文件编号时的匹配。
+        这些集合共用一次查询，使后续卡片的安装状态判断保持常数开销。
+        """
+        mod_ids: set = set()
+        file_keys: set = set()
+        md5_keys: set = set()
+        self._installed_gb_paths = {}
+        idx = self._mod_index
+        if idx is None:
+            return mod_ids, file_keys, md5_keys
+        try:
+            mods = idx.get_all_mods() if hasattr(idx, "get_all_mods") else idx.get_mods()
+        except Exception:
+            return mod_ids, file_keys, md5_keys
+        for m in mods:
+            gb = (m.info.custom_data or {}).get("gamebanana") or {}
+            mid = gb.get("mod_id")
+            if not mid:
+                continue
+            mod_ids.add(mid)
+            try:
+                mid_i = int(mid)
+            except (TypeError, ValueError):
+                continue
+            fid = gb.get("file_id")
+            if fid:
+                try:
+                    file_keys.add((mid_i, int(fid)))
+                except (TypeError, ValueError):
+                    pass
+            md5 = str(gb.get("file_md5") or "").strip().lower()
+            if md5:
+                md5_keys.add((mid_i, md5))
+            path = getattr(m, "path", None)
+            if path:
+                self._installed_gb_paths.setdefault(mid_i, []).append(
+                    (str(fid or ""), md5, path, getattr(m, "mod_id", ""))
+                )
+        return mod_ids, file_keys, md5_keys
