@@ -2205,3 +2205,140 @@ class GameBananaStorePage(QWidget):
         """连接新任务的进度与状态信号，并重新计算下载管理按钮显示。"""
         self._hook_dl_task_signals(task)
         self._update_dl_button_progress()
+
+    def _on_dl_task_progress(self, _d: int, _t: int) -> None:
+        """任一任务进度变化时重新计算下载管理按钮的汇总状态。"""
+        self._update_dl_button_progress()
+
+    def _on_dl_task_state(self, _state: str) -> None:
+        """任一下载状态变化时刷新按钮的活动任务进度。"""
+        self._update_dl_button_progress()
+
+    def _update_dl_button_progress(self) -> None:
+        """显示当前游戏中完成度最低的活动下载进度。
+
+        任务筛选与下载浮层一致；没有活动任务时使用普通图标。
+        """
+        btn = getattr(self.filter_bar, "dl_manager_btn", None)
+        if btn is None or not hasattr(btn, "set_progress"):
+            return
+        try:
+            tasks = self._download_manager.active(game_id=self._local_game_name or None)
+        except Exception:
+            return
+
+        def _pct(t) -> int:
+            """计算任务已知总量下的下载百分比，总量未知时使用零。"""
+            d, tot = t.last_progress
+            return int(d * 100 / tot) if tot > 0 else 0
+
+        try:
+            downloading = [t for t in tasks if t.state == "downloading"]
+            preparing = [t for t in tasks if t.state == "preparing"]
+            if downloading:
+                # 以最低完成度表示整体进度，全部任务完成后进度环才达到终点。
+                btn.set_progress(min(_pct(t) for t in downloading))
+                n = len(downloading) + len(preparing)
+                btn.setToolTip(tr("下载管理 · {n} 个下载中", n=n) if n > 1 else tr("下载管理 · 下载中"))
+            elif preparing:
+                # 仅有准备中任务时总量未知，显示零进度。
+                btn.set_progress(0)
+                btn.setToolTip(tr("下载管理 · 准备中"))
+            else:
+                btn.set_progress(-1)  # 无进行中任务 → 纯图标
+                pending = [t for t in tasks if t.state in ("paused", "queued")]
+                btn.setToolTip(tr("下载管理 · 有暂停/排队任务") if pending else tr("下载管理"))
+        except Exception:
+            pass
+
+    def _fetch_updates_for_profile(self, profile: GbModProfile) -> None:
+        """详情页切换到更新标签时，异步请求 `/Updates` 端点。
+
+        ProfilePage 不返回完整 `_aUpdates`，因此单独获取后写入 profile.updates，
+        并调用 detail_view.refresh_updates_view 刷新。请求失败时保留当前更新列表。
+        """
+        if profile is None or not profile.mod_id:
+            return
+        runner = self._make_runner()
+        mod_id = int(profile.mod_id)
+        model = profile.model
+
+        def _on_done(updates) -> None:
+            """详情仍对应同一资源时写入更新日志并刷新日志视图，丢弃已切换目标的响应。"""
+            # 详情目标已改变时丢弃响应，避免将其他 Mod 的更新写入当前详情。
+            if self.detail_view._profile is None or int(getattr(self.detail_view._profile, "mod_id", 0)) != mod_id:
+                return
+            try:
+                self.detail_view._profile.updates = list(updates or [])
+                self.detail_view.refresh_updates_view()
+            except Exception as exc:
+                logger.warning("refresh_updates_view 失败: %s", exc)
+
+        def _on_fail(msg) -> None:
+            """记录更新日志读取失败并解除加载标记，保留主详情内容。"""
+            # 更新列表加载失败不影响详情主流程，无需显示错误提示。
+            logger.info("get_updates(%s/%d) 失败: %s", model.value, mod_id, msg)
+            try:
+                self.detail_view._updates_fetch_inflight = False
+            except Exception:
+                pass
+
+        runner.finished.connect(_on_done)
+        runner.failed.connect(_on_fail)
+        runner.run(lambda: self._client.get_updates(model, mod_id))
+
+    def _show_download_flyout(self) -> None:
+        """在下载管理按钮下方显示浮窗。
+
+        按钮点击和新任务入队共用此入口；已显示的浮窗只更新位置与层级，避免反复隐藏造成闪烁。
+        """
+        # 顶层下载窗口使用按钮的屏幕坐标定位，右上角与按钮右下角对齐。
+        btn = self.filter_bar.dl_manager_btn
+        # 将按钮注册为浮窗锚点，避免同一次点击先被外部点击过滤器关闭、再重新打开。
+        self.download_flyout.show_anchored_to(btn)
+        btn_rect = btn.rect()
+        anchor_global = btn.mapToGlobal(btn_rect.bottomRight())
+        fly_w = self.download_flyout.width() or 440
+        target_x = anchor_global.x() - fly_w
+        target_y = anchor_global.y() + 4
+        # 屏幕边界保护
+        screen = self.screen()
+        if screen is not None:
+            geo = screen.availableGeometry()
+            if target_x < geo.left() + 8:
+                target_x = geo.left() + 8
+            min_h = self.download_flyout.minimumHeight()
+            if target_y + min_h > geo.bottom():
+                target_y = btn.mapToGlobal(btn_rect.topRight()).y() - min_h - 4
+        # 显示并定位浮窗；已显示时只更新位置，避免重复播放淡入动画。
+        self.download_flyout.animate_show(target_x, target_y)
+
+    def _open_gamebanana_website(self) -> None:
+        """通过系统浏览器打开 GameBanana 网站首页。"""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl("https://gamebanana.com/"))
+
+    # 错误处理
+    def _on_error(self, msg: str) -> None:
+        """显示错误浮层并结束分页忙碌状态，空列表恢复空状态以便后续重试。"""
+        # 异常已转换为适合展示的说明，不包含堆栈或错误编号。
+        # 顶部浮层滑入，不挤占布局；5s 后自动滑出（_error_hide_timer 驱动）。
+        self._show_error_bar(msg)
+        # 失败时重置分页加载状态并收起加载条，允许滚动再次触发请求。
+        try:
+            self.grid.stop_loading()
+        except Exception:
+            pass
+        if self.grid.count() == 0:
+            self.browse_view.show_empty()
+
+    def _error_bar_geom(self, shown: bool) -> QRect:
+        """计算底部居中提示卡的位置；隐藏位置位于页面底边之外。"""
+        w = min(560, max(280, self.width() - 80))
+        h = self.error_bar.height()
+        x = max(0, (self.width() - w) // 2)
+        margin = 24
+        y = (self.height() - h - margin) if shown else self.height()
+        return QRect(x, y, w, h)
