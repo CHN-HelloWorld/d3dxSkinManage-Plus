@@ -2342,3 +2342,114 @@ class GameBananaStorePage(QWidget):
         margin = 24
         y = (self.height() - h - margin) if shown else self.height()
         return QRect(x, y, w, h)
+
+    def _show_error_bar(self, text: str) -> None:
+        """从页面底部显示独立提示浮层，五秒后自动收起。"""
+        self.error_label.setText(text)
+        self.error_bar.setGeometry(self._error_bar_geom(shown=False))  # 从页面底边之外开始动画。
+        self.error_bar.show()
+        self.error_bar.raise_()
+        anim.animate_geometry(self.error_bar, self._error_bar_geom(shown=True))
+        self._error_hide_timer.start(5000)
+
+    def _roll_up_error_bar(self) -> None:
+        """将错误提示移出页面，动画结束后隐藏浮层。"""
+        anim.animate_geometry(
+            self.error_bar,
+            self._error_bar_geom(shown=False),
+            on_finished=self.error_bar.hide,
+        )
+
+    def _reposition_error_bar(self) -> None:
+        """页面尺寸变化时立即校准仍可见错误浮层的位置。"""
+        if self.error_bar.isVisible():
+            self.error_bar.setGeometry(self._error_bar_geom(shown=True))
+
+    # 任务调度。
+    def _make_runner(self) -> _AsyncRunner:
+        """创建页面所属的异步运行器并增加在途计数，退场或销毁时只清理一次登记。"""
+        runner = _AsyncRunner(self._async_worker, self)
+        self._runners.append(runner)
+        # 创建时增加在途请求计数，_cleanup 负责递减，供界面判断加载是否结束。
+        self._in_flight += 1
+        page_ref = weakref.ref(self)
+        runner_ref = weakref.ref(runner)
+
+        def _cleanup(*_args) -> None:
+            """通过弱引用移除仍登记的运行器并递减在途计数，重复通知不重复结算。"""
+            page, item = page_ref(), runner_ref()
+            if page is None or item is None:
+                return
+            try:
+                page._runners.remove(item)
+            except ValueError:
+                return
+            page._in_flight = max(0, page._in_flight - 1)
+
+        runner.retired.connect(_cleanup)
+        runner.destroyed.connect(_cleanup)
+        return runner
+
+    def _cancel_inflight(self) -> None:
+        """切换游戏、刷新或复位时，取消所有在途网络请求。
+
+        请求代次变化仅使回调过期，协程仍可能因代理重试和直连回退长期占用 semaphore。
+        主动取消可释放并发名额、停止重试，并同步复位 _in_flight。
+        """
+        runners, self._runners = list(self._runners), []
+        self._in_flight = 0
+        for r in runners:
+            try:
+                r.cancel()
+            except Exception:
+                pass
+
+    def shutdown(self) -> None:
+        """幂等取消页面请求，在共享循环内限时关闭 HTTP 客户端，再关闭异步工作器。"""
+        if getattr(self, "_shutdown_started", False):
+            return
+        self._shutdown_started = True
+        # 取消工作时同时清理 Qt 任务对象，避免已取消对象长期挂在页面下。
+        self._cancel_inflight()
+        # 提交客户端关闭操作前设置停止标志，使异常处理器识别关闭期间的取消异常。
+        try:
+            self._async_worker._shutting_down = True
+        except Exception:
+            pass
+        try:
+            fut = self._async_worker.submit(lambda: self._client.aclose())
+            try:
+                fut.result(timeout=2.0)
+            except Exception:
+                pass
+        finally:
+            # 关闭工作线程时先取消并等待任务，再停止事件循环。
+            self._async_worker.shutdown()
+
+    def submit_coro(self, coro_factory: Callable[[], Awaitable]) -> asyncio.Future:
+        """将协程工厂提交到页面共享的事件循环，返回 concurrent.futures.Future。
+
+        商店和 Mod 更新检查共用 GameBananaClient，其 httpx 连接池必须始终在同一
+        事件循环使用，防止持久连接绑定到已关闭的临时循环。
+        """
+        return self._async_worker.submit(coro_factory)
+
+    def apply_proxy(self, proxy: str | None) -> None:
+        """在商店事件循环中异步更新客户端代理。
+
+        主窗口保存代理设置后调用；失败时记录日志，不阻塞界面线程。
+        """
+        if proxy == self._client.proxy:
+            return
+
+        def _reload_unresolved(_result) -> None:
+            """代理重新配置后，当前游戏尚未建立分类路径时重新刷新匹配与浏览内容。"""
+            if self._local_game_name and not self._path:
+                self.refresh()
+
+        # 代理更新独立于页面查询，完成后通过队列信号返回界面线程再重试。
+        # 不加入查询取消列表，避免切换游戏时中断已保存的代理设置。
+        runner = _AsyncRunner(self._async_worker, self)
+        runner.finished.connect(_reload_unresolved)
+        runner.failed.connect(lambda message: logger.warning("apply_proxy 失败: %s", message))
+        runner.run(lambda: self._client.update_proxy(proxy))
