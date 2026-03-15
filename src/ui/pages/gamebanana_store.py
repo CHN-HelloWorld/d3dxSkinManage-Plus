@@ -2118,3 +2118,90 @@ class GameBananaStorePage(QWidget):
                 self.detail_view.refresh_file_buttons()
         except Exception:
             pass
+
+    def refresh_installed_state(self) -> None:
+        """重新查询安装索引并更新可见卡片。
+
+        适用于角色目录级联删除等无法逐个提供在线 Mod 编号的操作。
+        """
+        # 查询前先使安装缓存失效。
+        self._invalidate_installed_cache()
+        self.download_flyout._refresh()
+        try:
+            for card in self.grid.iter_cards():
+                rec = getattr(card, "record", None)
+                if rec is None or not hasattr(card, "set_installed"):
+                    continue
+                card.set_installed(self._is_installed(rec))
+        except Exception:
+            pass
+        # 详情侧栏：刷新按钮态（按钮里 has_local_md5 判断已下载/未下载）
+        try:
+            self.detail_view.refresh_file_buttons()
+        except Exception:
+            pass
+
+    def _show_lightbox(self, url: str) -> None:
+        """优先请求高清预览并缓存到本地，成功后交给统一图片查看器打开。"""
+        # 将 preview_clicked 提供的缩略图 URL 转换为高清地址并写入磁盘缓存，
+        # 再在主线程使用 ImageViewerDialog 打开本地路径，支持滚轮缩放和拖动平移。
+        try:
+            from src.ui.widgets.gb_lightbox import _upgrade_to_1920
+
+            hi_url = _upgrade_to_1920(url)
+        except Exception:
+            hi_url = url
+        runner = self._make_runner()
+        runner.finished.connect(self._open_image_viewer)
+        runner.failed.connect(lambda *_: None)
+        runner.run(lambda u=hi_url: self._fetch_gb_image_file(u))
+
+    def _open_image_viewer(self, path) -> None:
+        """主线程回调：用内置 ImageViewerDialog 打开取回的本地预览图。"""
+        try:
+            local = str(path) if path else ""
+            if not local:
+                return
+            from src.ui.widgets.preview import ImageViewerDialog
+
+            dlg = ImageViewerDialog(local, parent=self.window())
+            dlg.exec()
+        except Exception as exc:
+            logger.warning("打开内置图片查看器失败: %s", exc)
+
+    def _toggle_flyout(self) -> None:
+        """切换下载浮窗显示状态，正在关闭时再次点击会转为显示。"""
+        fly = self.download_flyout
+        # 关闭动画期间再次点击时立即转为显示，避免中间可见状态干扰切换。
+        if fly.isVisible() and not getattr(fly, "_closing", False):
+            fly.animate_hide()
+            return
+        self._show_download_flyout()
+
+    def reposition_flyout_if_visible(self) -> None:
+        """主窗口移动或缩放时，将可见下载浮窗重新定位到下载按钮下方。"""
+        try:
+            if self.download_flyout.isVisible():
+                self._show_download_flyout()
+        except Exception:
+            pass
+
+    # 下载管理按钮的环形进度。
+    def _hook_dl_task_signals(self, task) -> None:
+        """下载进度和状态变化时更新下载管理按钮。
+
+        后台线程发出的信号由 Qt 排队投递到主线程槽函数。
+        """
+        try:
+            task.progress.connect(self._on_dl_task_progress)
+        except Exception:
+            pass
+        try:
+            task.state_changed.connect(self._on_dl_task_state)
+        except Exception:
+            pass
+
+    def _on_dl_task_added(self, task) -> None:
+        """连接新任务的进度与状态信号，并重新计算下载管理按钮显示。"""
+        self._hook_dl_task_signals(task)
+        self._update_dl_button_progress()
