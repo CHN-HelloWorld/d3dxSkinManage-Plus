@@ -1962,3 +1962,159 @@ class GameBananaStorePage(QWidget):
             toast.done(text, ok=ok, hold_ms=hold_ms)
         except Exception:
             logger.info("提示（Toast 不可用）：%s", text)
+
+    def _backfill_character_name_en(self, mm, node_id: str, name_en: str) -> None:
+        """经用户勾选后，将在线分类名称保存为目标目录的英文名。
+
+        后续同分类安装可按目录英文名精确匹配。仅填写空值，保留用户已有的英文名。
+        """
+        name_en = (name_en or "").strip()
+        if not node_id or not name_en:
+            return
+        try:
+            ch = mm.get_character(node_id)
+            if ch is None or (ch.name_en or "").strip():
+                return
+            if mm.update_character(node_id, ch.name, name_en, ch.node_type):
+                logger.info(
+                    "已把 GameBanana 分类「%s」记为目录 %s 的英文名",
+                    name_en,
+                    ch.display_name,
+                )
+        except Exception as exc:
+            logger.warning("回填目录英文名失败: %s", exc)
+
+    def _start_install(self, payload: dict) -> None:
+        """将安装请求交给宿主后台导入流水线，避免界面线程执行归档复制、压缩和校验。"""
+        wired = self.isSignalConnected(QMetaMethod.fromSignal(self.mod_install_requested))
+        if wired:
+            self.mod_install_requested.emit(payload)
+            return
+        self.apply_install_result(payload, self._install_synchronously(payload))
+
+    def _install_synchronously(self, payload: dict):
+        """无宿主时在当前线程执行导入。"""
+        from src.core.mod_intake import (
+            DuplicateIntakeError,
+            IntakeError,
+            ModIntakeService,
+        )
+        from src.core.mod_manager import ModManager
+
+        mm = ModManager()
+        service = ModIntakeService(mm)
+        try:
+            request = service.plan_request(
+                source_path=payload["archive_path"],
+                game_id=mm.current_game_id,
+                node_id=payload["node_id"],
+                display_name=payload.get("display_name", ""),
+                **(payload.get("plan") or {}),
+            )
+            return service.commit(service.prepare(request))
+        except DuplicateIntakeError as exc:
+            logger.warning("内容一致，已跳过: %s", exc)
+        except (IntakeError, InterruptedError, OSError) as exc:
+            logger.error("商店安装失败: %s", exc)
+        return None
+
+    def apply_install_result(self, payload: dict, mod) -> None:
+        """导入结束后更新预览、安装索引和界面状态。"""
+        profile = (payload or {}).get("profile")
+        if profile is None:
+            return
+        # 详情页有预览图 → 取第一张作为该 Mod 预览（异步取回，不阻塞）。同一内容
+        # 去重时 mod 为 None — 此时不补预览（已有 Mod 各自的预览不动）。
+        self._maybe_fetch_gb_preview(mod, profile)
+        # 立即更新当前可见卡片的安装徽章，并使安装缓存失效，
+        # 确保滚动时新建的卡片也能读取最新安装状态。
+        self._invalidate_installed_cache()
+        self.download_flyout._refresh()
+        try:
+            for card in self.grid.iter_cards():
+                mid = getattr(getattr(card, "record", None), "mod_id", 0)
+                if mid == profile.mod_id and hasattr(card, "set_installed"):
+                    card.set_installed(mid in self._cached_installed_ids())
+        except Exception:
+            pass
+        # 安装成功后刷新对应文件的已安装状态。
+        try:
+            self.detail_view.refresh_file_buttons()
+        except (AttributeError, RuntimeError):
+            pass
+
+    # GameBanana 预览图（详情页首图为主）
+    def _maybe_fetch_gb_preview(self, mod, profile) -> None:
+        """商店下载的 Mod 以 GameBanana 详情页第一张预览图作为预览图。
+
+        调用方已按「详情页是否有预览图」决定 import_mod 的 auto_preview：
+        - 详情页有预览图 → auto_preview=False（不扫包，避免把贴图误当预览）→ 此处取首图；
+        - 详情页无预览图 → auto_preview=True（已走自动扫包匹配）→ 此处 urls 为空直接返回。
+
+        预览图在用户浏览详情页时通常已被 ImageLoader 落入磁盘缓存，这里复用同一
+        磁盘缓存（独立 ImageCache 实例，绑定到 store 自有 loop，避免与 ImageLoader
+        的 loop 共享 inflight future 触发「Future attached to a different loop」），
+        异步取回后回主线程经 ModManager.save_preview 落库；失败全程静默，不打断导入。
+        """
+        try:
+            # 没有新增 Mod 或已有预览时不再补充图片。
+            if mod is None or getattr(mod, "preview_images", None):
+                return
+            urls = [u for u in (getattr(profile, "preview_images", None) or []) if u]
+            if not urls:
+                return
+            first_url = urls[0]
+            mod_id = mod.mod_id
+            runner = self._make_runner()
+            runner.finished.connect(lambda path, mid=mod_id: self._on_gb_preview_ready(mid, path))
+            # 预览加载失败不影响安装结果，无需显示错误提示。
+            runner.failed.connect(lambda *_: None)
+            runner.run(lambda u=first_url: self._fetch_gb_image_file(u))
+        except Exception as exc:
+            logger.warning("触发 GameBanana 预览图获取失败: %s", exc)
+
+    async def _fetch_gb_image_file(self, url: str):
+        """在商店事件循环中获取预览缓存，返回本地路径。"""
+        cache = ImageCache()
+        return await cache.fetch(url)
+
+    def _on_gb_preview_ready(self, mod_id: str, path) -> None:
+        """主线程回调：把取回的 GameBanana 预览图保存为该 Mod 的预览。"""
+        try:
+            local = str(path) if path else ""
+            if not local:
+                return
+            from src.core.mod_manager import ModManager
+
+            if ModManager().save_preview(mod_id, local):
+                logger.info("已用 GameBanana 详情页预览图作为预览: mod=%s", mod_id)
+        except Exception as exc:
+            logger.warning("保存 GameBanana 预览图失败: %s", exc)
+
+    def notify_mod_deleted(self, gb_mod_ids: list[int] | int) -> None:
+        """删除本地 Mod 后刷新对应的在线安装标记，支持单个编号或批量编号。"""
+        if isinstance(gb_mod_ids, int):
+            ids = {gb_mod_ids}
+        else:
+            ids = {int(i) for i in gb_mod_ids if i}
+        if not ids:
+            return
+        # 删除后使安装缓存失效，供离屏卡片创建时重新判断。
+        self._invalidate_installed_cache()
+        self.download_flyout._refresh()
+        try:
+            live = self._cached_installed_ids()
+            for card in self.grid.iter_cards():
+                mid = getattr(getattr(card, "record", None), "mod_id", 0)
+                if mid in ids and hasattr(card, "set_installed"):
+                    # 同一在线 Mod 的多个文件可独立安装，删除其中一项后仍需重新判断整体安装状态。
+                    card.set_installed(mid in live)
+        except Exception:
+            pass
+        # 详情正在显示该 Mod 时，按数据库状态重新计算各文件按钮。
+        try:
+            prof = self.detail_view._profile
+            if prof is not None and int(getattr(prof, "mod_id", 0)) in ids:
+                self.detail_view.refresh_file_buttons()
+        except Exception:
+            pass
