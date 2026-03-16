@@ -47,3 +47,55 @@ python -m venv .venv
 代码与注释规范见[贡献指南](CONTRIBUTING.md)，测试和性能验证见[测试说明](tests/README.md)。
 默认语言包的编辑方法见[语言包指南](config/languages/README.md)。
 
+## 构建 Windows 发行包
+
+主程序使用 Nuitka，原生更新器使用 Visual Studio 2022 的 C++17 工具链。
+先按[更新器说明](updater/README.md)构建更新器，再运行：
+
+```powershell
+.venv\Scripts\python.exe scripts/release/build.py --install-deps --with-updater --zip
+```
+
+也可双击根目录的 `构建工具.bat`。构建产物位于 `build/`，详细选项见
+[构建指南](docs/构建指南.md)。公开发行前需配置自己的更新源；仓库不会假定一个尚未确定的 GitHub 地址。
+
+## 插件开发
+
+```powershell
+.venv\Scripts\python.exe scripts/plugins/new_plugin.py com.example.mod-summary --name "Mod 统计助手"
+.venv\Scripts\python.exe scripts/plugins/plugin_tool.py check plugins/com.example.mod-summary
+```
+
+插件从应用根目录的 `plugins/` 加载，首次启用需要确认信任和权限。
+随包提供 Mod 清单导出、预设检查和预设轮换三个实用教学示例。
+SDK 2.0 支持多文件包、按需激活、版本依赖、可取消后台任务、可释放资源和可观察配置。
+脚手架生成可直接运行的多文件插件；接口、打包与验证步骤见
+[插件开发指南](docs/tutorials/zh/插件开发指南.md)。
+
+## 目录
+
+| 路径 | 用途 |
+| --- | --- |
+| `src/core/`、`src/models/` | 资源管理、持久化、操作事务与数据模型 |
+| `src/services/` | 压缩、图像、网络和更新服务 |
+| `src/ui/` | PySide6 界面、后台任务与交互组件 |
+| `src/plugin_sdk/`、`src/plugins/` | 插件公开接口与宿主运行时 |
+| `resources/` | 主题、图标、署名素材与项目短片 |
+| `config/languages/` | 默认中文、英文语言包及格式说明 |
+| `plugins/` | 随包插件示例与本地安装位置 |
+| [`scripts/`](scripts/README.md) | 按职责分类的构建、质量检查、语言包、插件、资源、启动和性能工具 |
+| `updater/` | 原生 C++ 更新器及其测试 |
+| `tests/` | 自动化测试与人工验证说明 |
+| `docs/` | 用户与开发者文档 |
+
+## 许可证与第三方资源
+
+本项目采用 **PolyForm Noncommercial License 1.0.0 与署名完整性附加条款**。
+非商业使用、修改和分发须遵守 [LICENSE](LICENSE)，并保留要求的署名。
+该许可不属于 OSI 认可的开源许可证。
+
+第三方资源保持其原有许可，见[第三方声明](THIRD_PARTY_NOTICES.md)。
+
+## 独立视频资源
+
+从源码制作完整发行包前，按[短片资源说明](resources/about/story/README.md)准备独立视频资源。
