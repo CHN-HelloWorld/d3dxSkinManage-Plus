@@ -158,3 +158,30 @@ Sorting supports name, import time, author, age rating, enabled state, and other
 
 The NSFW dropdown controls whether local X-rated preview images are shown normally, hidden, or blurred. It does not automatically delete or disable Mods. The local overview and gallery share this display preference; the online page has its own NSFW policy.
 
+### 3.10 Adding, removing, and deleting preview images
+
+Drag in an image, click **Add preview image**, or paste an image from the clipboard into a supported preview area. Mods support multiple images; categories and games each use a single cover image.
+
+Use the arrows to browse multiple images. Changing the displayed image affects the card preview. The image viewer supports zooming in and out and dragging to pan; follow the window's hints for its controls.
+
+- **Remove / do not use**: removes the reference and keeps the corresponding file.
+- **Delete**: deletes the corresponding image file. The relevant interface explains the scope before the operation.
+- **Delete all preview images**: affects multiple images for this Mod. Check the target before confirming.
+
+Manually added Mod previews are normally copied into the container's `.d3dxmeta/previews/`. Previews inside the archive may be extracted to the cache. When backing up a Mod, keep the complete container, not just cached images.
+
+### 3.11 Moving items and selecting in bulk
+
+| Action | Default method |
+| --- | --- |
+| Add to / remove from selection | `Ctrl` + click |
+| Select a range | `Shift` + click |
+| Select the entire current list | `Ctrl+A` |
+| Cut selected items | `Ctrl+X` |
+| Move to the target category | Enter the target category, then press `Ctrl+V` |
+| Cancel cutting | `Esc` |
+| Delete | `Delete` or the context menu |
+| Export | `Ctrl+Shift+E` or **Export** in the context menu |
+
+Cut items are marked in orange while awaiting a move. Pasting at the original level does not move them, and you cannot paste a parent category into its own subtree. The edit dialog has no category field for moving an item; use the move operations above to change its category.
+
