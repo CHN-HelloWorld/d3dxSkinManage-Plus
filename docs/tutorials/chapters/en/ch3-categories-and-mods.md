@@ -84,3 +84,36 @@ Discovered content is identified, verified, and brought under management to form
 
 **Do not edit or remove a container's identity marker.** The application uses these markers to identify Mods and checks the related files. Keep each container complete; see Chapter 4.
 
+### 3.6 Enabling, disabling, and conflicts
+
+Any of these actions can toggle a single Mod:
+
+- Double-click its card or list row.
+- Click **Enable** / **Disable** in the details panel on the right.
+- Choose **Enable** / **Disable** from its context menu.
+- Select a single Mod in the overview list and press the default `Space`.
+
+After a Mod is enabled successfully, its status changes and the card shows a green marker. The first activation may require extraction; wait for that item's progress to finish. A parked copy that meets the requirements can be restored more quickly when enabled again.
+
+If another Mod is already enabled under a character/object, the application asks whether to disable the conflicting item and enable the new one. If you choose not to be prompted again, similar conflicts will follow that preference.
+
+**Disable All** applies to the current folder and its subfolders. At the root level, it covers the current game. An active search does not mean that only search results will be disabled; read the confirmation carefully.
+
+Related write operations may be temporarily unavailable during deployment, preset switching, or file recovery. Let the current task finish before continuing, rather than repeatedly clicking Enable or Delete.
+
+### 3.7 Details panel: information, keys, and variants
+
+![Mod details](../../images/guide-en/04-Mod信息.webp)
+
+*The example Mod uses a geometric placeholder cover. Separate details tabs appear beneath it.*
+
+| Tab | Contents |
+| --- | --- |
+| **Information** | Available information such as author, version, age rating, tags, description, source, and path |
+| **Keys: N** | Bindings detected in INI files, grouped by file; record a key or enter it manually |
+| **Variants: N** | The Mod's default configuration and saved named appearances, with controls to switch and manage them |
+
+If there are no keys or variants, the corresponding empty state appears. This does not mean the Mod is unusable. The variant count reflects saved named configurations, and support also depends on whether the Mod declares variables that can be saved.
+
+Selecting a category shows category information and actions. Selecting multiple items shows the selection count instead of combining fields from several Mods for editing.
+
