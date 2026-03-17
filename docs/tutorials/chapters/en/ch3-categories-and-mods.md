@@ -117,3 +117,44 @@ If there are no keys or variants, the corresponding empty state appears. This do
 
 Selecting a category shows category information and actions. Selecting multiple items shows the selection count instead of combining fields from several Mods for editing.
 
+### 3.8 Editing Mods and tags
+
+Select a single Mod and click **Edit**, or use the default `F2`.
+
+![Edit Mod](../../images/guide-en/09-编辑Mod.webp)
+
+You can edit the display name, author, version, source URL, description, age rating, and tags. Expand **File Info** to see the path, SHA-1, and import time, and to copy the path or hash.
+
+**Also rename the Mod file or folder** controls whether the name on disk changes too. If unchecked, only the display name changes. If checked, the application handles name conflicts and related paths; check the result after saving.
+
+**Click Save changes to commit the information and tag edits from this session.** The dialog also supports `Ctrl+Enter` to save. If you close it with changes, you can choose to continue editing or discard them.
+
+There are three kinds of tag operations:
+
+| Operation | Effect |
+| --- | --- |
+| Add or remove tags on the current Mod | Changes the association between the current Mod and those tags |
+| Edit a shared tag's name or color | After saving, every Mod referencing that tag in the same game displays the change |
+| Delete a tag and all its references | Removes it from the current game's tag library and all Mods referencing it; after confirmation, the change still needs to be saved through the main edit dialog |
+
+You can reuse tags, choose preset colors, or enter custom colors. Click tag chips to filter by them. Deleting an entire shared tag is different from removing one tag from the current Mod.
+
+### 3.9 Search, tag filters, and sorting
+
+The search box searches names, authors, and tags. With a search term entered, it finds matches throughout the current category's subtree. Clearing the search returns to browsing the current level.
+
+Click **Tags** to expand the tags used in the current game. Two combination modes are available:
+
+| Mode | Example: selecting both `配色` (Color scheme) and `日常` (Everyday) |
+| --- | --- |
+| **Match all** | Shows only Mods with both tags |
+| **Match any** | Matches Mods with either tag |
+
+Selected conditions appear as chips. Remove them individually, or click **Clear** to clear only the tags. Tag filtering is temporarily unavailable when the type filter is set to categories or characters/objects; switch back to all types or Mods to use it again.
+
+Search text, type, age rating, and tags can all affect results at the same time. If there are no results, check the conditions before rebuilding the index.
+
+Sorting supports name, import time, author, age rating, enabled state, and other criteria. Chinese names are sorted by pinyin.
+
+The NSFW dropdown controls whether local X-rated preview images are shown normally, hidden, or blurred. It does not automatically delete or disable Mods. The local overview and gallery share this display preference; the online page has its own NSFW policy.
+
