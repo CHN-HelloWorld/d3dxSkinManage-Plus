@@ -121,3 +121,44 @@ Sharing a Mod therefore does not guarantee that no file operations will occur. I
 
 Switching shows progress and a cancel action, while restricting conflicting operations such as enabling/disabling, deletion, and switching games. Cancellation or failure attempts to roll back completed steps; unfinished rollbacks retain records for recovery. Wait for the task to finish handling its result before modifying resources again.
 
+### 4.8 Editing a Mod's in-game keys
+
+Select the Mod and open the **Keys** tab in the details panel:
+
+![INI key bindings](../../images/guide-en/06-按键设置.webp)
+
+Keys are grouped by INI file. Some bindings provide both a forward and a backward key. Names come from the Mod's own section definitions.
+
+There are two editing methods:
+
+- Click a key field and press the key or Ctrl / Alt / Shift combination you want to use. `Esc` cancels recording.
+- Open **Manual input** and enter 3DMigoto key tokens as instructed. Special keys and controller tokens depend on loader support.
+
+**Key changes save directly; no additional overall Save button is needed.** Changes are written to the container's INI override layer. For an enabled Mod, they are also synchronized to its deployed copy. If the game is running, reload as required by the loader for the changes to take effect.
+
+An option to open the source INI appears where supported. If saving is rejected because the file changed externally, reselect the Mod, check the latest contents, and then edit again.
+
+These settings change the Mod's in-game keys. **Settings → Shortcuts** changes the manager's controls; the two are saved separately.
+
+### 4.9 Saving an appearance variant for a Mod
+
+Variants record numerical options that the Mod author declares as persistent, such as color schemes or accessory toggles. They cannot add appearances to a Mod that has no such variables.
+
+Basic workflow:
+
+1. Enable the target Mod and switch to the appearance you want in the game.
+2. Use the loader's action for saving configuration. Common 3DMigoto setups write `d3dx_user.ini` on an F10 reload or a normal game exit.
+3. Return to the manager, select the Mod, and open **Variants**.
+4. Click **Save current state as a new variant**, enter a name, and confirm with **Save and use**.
+5. The new configuration appears in the list, and the current preset references it.
+
+![Named variants](../../images/guide-en/07-变体管理.webp)
+
+***Mod defaults** and named configurations are listed separately. The selected option is marked **Currently in use** when the Mod is enabled, or **Use next time** when it is disabled.*
+
+Names must be unique within the same Mod and contain no more than 40 characters. Saving requires the Mod to be enabled and valid configuration to be readable.
+
+If the configuration is reported as incomplete, return to the game, save it, and read it again. Choose **Fill with defaults and save** only when you intend to do so. This fills any unread values with defaults, which may not exactly match the appearance currently shown in the game.
+
+**No variants can be saved** usually means that no appearance variables suitable for saving were found. The Mod can still be enabled and disabled normally.
+
