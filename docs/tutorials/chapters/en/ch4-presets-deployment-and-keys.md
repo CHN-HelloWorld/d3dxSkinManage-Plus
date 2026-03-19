@@ -162,3 +162,30 @@ If the configuration is reported as incomplete, return to the game, save it, and
 
 **No variants can be saved** usually means that no appearance variables suitable for saving were found. The Mod can still be enabled and disabled normally.
 
+### 4.10 Switching, updating, copying, and deleting variants
+
+| Action | Result |
+| --- | --- |
+| Click **Mod defaults** | Uses the Mod's default configuration |
+| Click a named configuration | Applies it if the Mod is enabled, or selects it for next time if disabled |
+| Save current state as a new variant | Creates a separate configuration and switches the current preset to use it |
+| Update an existing variant | Writes the captured current state into that configuration. Other presets referencing it use the new contents the next time they are applied |
+| Rename | Keeps the variant's identity and references; changes only its display name |
+| Create copy | Creates a new variant that can be adjusted independently |
+| Delete | Changes all preset references to that variant to Mod defaults; also restores defaults if the variant is currently in use |
+
+Management actions are in the more menu on each configuration row. Before updating a shared configuration, the application lists the presets referencing it. If you want to change only one setup, create a copy first.
+
+**Temporary in-game changes do not automatically overwrite named configurations.** When **Unsaved appearance changes** appears, save a new configuration or update the existing one as needed.
+
+Multiple presets can reference the same named variant. Copying a preset preserves these references; it does not automatically create separate variant files for each preset. Copy the variant separately when you need independent settings.
+
+After restoring a variant, reload through the loader if the game is running. A successful save in the application means the configuration has been written; it does not mean the running game has already refreshed its appearance.
+
+### 4.11 Sharing variants with others
+
+Named configurations are stored in the Mod container's `.d3dxmeta/variants/`. For sharing, use **Export** with **Include metadata and previews** enabled. You can also back up the entire container.
+
+Import checks the variant format and whether its variables can be matched to the Mod. Mismatched content, duplicate identities, damaged files, and similar issues may be rejected. You cannot apply an arbitrary variant JSON from another Mod directly.
+
+A game's private working state records serve a different purpose from named variants. For a full backup on your machine, retain `config/`, `data/`, and external resources. An export package is sufficient for sharing a single Mod.
