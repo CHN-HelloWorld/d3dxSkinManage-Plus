@@ -58,3 +58,27 @@ Support for reading ZIP, 7z, and RAR is included with the application. **Creatin
 
 Deployment always uses extracted copies. Progress that does not change continuously does not necessarily mean a task has stalled; archive format, file count, and disk performance all affect the processing stages.
 
+### 4.4 Enabling, parking, and disabling
+
+Enabling first checks the source container, metadata, deployment location, and operations in progress. It then prepares resources, applies the effective INI content and configuration, and publishes the finished copy to the deployment folder.
+
+Temporary preparation folders may start with `DISABLED_` and include `.partial`. They are not exposed to the loader as normal enabled copies before completion. After a failure, cancellation, or unexpected application exit, recovery may still need to process these folders.
+
+Disabling first captures the required runtime configuration and synchronizes the INI, then removes the copy currently used by the game:
+
+- A deployment still referenced by other Mod presets may be parked as `DISABLED_...` for faster restoration next time.
+- Copies that no longer need to be retained may be cleaned up.
+- The source container remains in the library.
+
+3DMigoto normally excludes parked folders using `exclude_recursive = DISABLED*`. If you changed the loader configuration yourself, make sure these folders are still excluded.
+
+Do not enable a parked copy by renaming its prefix in File Explorer. Use Enable or Apply Preset in the application so that the actual files remain consistent with the records.
+
+### 4.5 Deployment folder and external changes
+
+**Mod folder** must match the location read by the loader. It is configured separately from **3DMigoto**; actual Mod deployment is unavailable if it is not set.
+
+The application monitors managed source files and deployment folders for changes. If a deployment folder is moved externally, a source container changes, a disk goes offline, or identity markers conflict, address the report in the interface before resuming operations.
+
+Use the migration workflow on the Games page to change the deployment location. If the application reports changed files, uncertain ownership, or unfinished recovery, do not delete the database, transaction records, or markers to force it to continue. They may contain information needed for rollback and recovery.
+
