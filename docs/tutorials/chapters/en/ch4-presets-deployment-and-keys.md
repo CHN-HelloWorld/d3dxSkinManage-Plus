@@ -82,3 +82,42 @@ The application monitors managed source files and deployment folders for changes
 
 Use the migration workflow on the Games page to change the deployment location. If the application reports changed files, uncertain ownership, or unfinished recovery, do not delete the database, transaction records, or markers to force it to continue. They may contain information needed for rollback and recovery.
 
+### 4.6 Creating and using Mod presets
+
+Click the current preset name in the overview toolbar to open the preset list:
+
+![Mod preset management](../../images/guide-en/08-组合预设.webp)
+
+*Click once to select a preset for management. Only **Apply** on the right switches the setup. The preset in use has a status marker.*
+
+| Action | How to use it |
+| --- | --- |
+| Create | Click **New Preset** to create an empty setup, then name it |
+| Apply | Click **Apply** on the target row and wait for deployment to finish |
+| Rename | Select a preset and click **Rename**, or double-click its name |
+| Copy | Select a preset and click **Copy**, or use the default `Ctrl+C` and `Ctrl+V` |
+| Select multiple | Use `Ctrl` to add selections or `Shift` to select a range; you can also select all within the list |
+| Delete | Select presets and click **Delete**, then confirm the scope |
+
+Each game has its own default preset, which is retained and cannot be deleted. When deleting a user preset that is currently in use, the application switches to the default preset before completing deletion. Check the dialog and task results.
+
+**A new preset starts empty.** To keep an existing setup and make small changes, copy that preset before applying it. Applying an empty preset means that Mods from other presets will no longer be enabled.
+
+The current preset updates its selections as you enable or disable Mods. When you save or switch a named variant for an individual Mod, the current preset also records the selected variant reference.
+
+### 4.7 How switching presets affects files
+
+Switching is based on the differences between the two presets:
+
+| Difference | Handling |
+| --- | --- |
+| A Mod is no longer used by the target preset | Parks or removes its deployment |
+| The target needs a Mod with a usable parked copy | Verifies and restores the copy |
+| The target needs a Mod with no usable copy | Extracts and deploys it for the first time |
+| Both presets use the same Mod | Keeps reusable deployment files and handles configuration according to the target preset |
+| The same Mod references different variants | Applies the target variant's configuration; INI and user configuration files may still be written |
+
+Sharing a Mod therefore does not guarantee that no file operations will occur. It also depends on the variants, overrides, and whether the deployment is still valid.
+
+Switching shows progress and a cancel action, while restricting conflicting operations such as enabling/disabling, deletion, and switching games. Cancellation or failure attempts to roll back completed steps; unfinished rollbacks retain records for recovery. Wait for the task to finish handling its result before modifying resources again.
+
