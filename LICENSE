@@ -1,0 +1,268 @@
+d3dxSkinManage-Plus — License / 使用许可
+
+Copyright (c) 2026 Aether (https://github.com/CHN-HelloWorld)
+and the d3dxSkinManage-Plus contributors.
+
+Required Notice: Copyright (c) 2026 Aether and the d3dxSkinManage-Plus
+contributors — https://github.com/CHN-HelloWorld
+
+
+本项目以 PolyForm Noncommercial License 1.0.0 授权，并附加「署名完整性
+附加条款」（Attribution Integrity Addendum）。两部分共同构成本项目的
+完整许可，缺一不可。
+
+This project is licensed under the PolyForm Noncommercial License 1.0.0,
+together with the Attribution Integrity Addendum below. Both parts form
+the complete license and apply jointly.
+
+
+================================================================================
+概述 / Summary   （非约束性，仅作导读 — informative, non-binding）
+================================================================================
+
+简言之 / In short:
+
+  • 源代码对社区完全开放，可自由查看、学习、修改，并在非商业范围内
+    复制与分发。
+    The source is open to the community: free to view, study, modify,
+    and — for non-commercial purposes — copy and distribute.
+
+  • 禁止出售、倒卖本程序，或借其直接牟利等任何商业用途。
+    Selling or reselling the program, or any other commercial use, is
+    prohibited.
+
+  • 禁止删除、篡改本程序「关于」页中的原作者致敬与贡献者署名，
+    或以任何方式歪曲作者 / 贡献者身份。
+    The attribution on the program's "About" page must not be removed,
+    altered, or falsified.
+
+本许可为「非商业 · 源代码可用」许可，并非严格意义上的 OSI 开源许可。
+若本「概述」与下文正式条款存在歧义，以正式条款为准。
+
+This is a noncommercial, source-available license — NOT an OSI-approved
+open-source license. If this Summary and the formal terms below differ,
+the formal terms govern.
+
+
+================================================================================
+PART I — PolyForm Noncommercial License 1.0.0
+================================================================================
+
+<https://polyformproject.org/licenses/noncommercial/1.0.0>
+
+## Acceptance
+
+In order to get any license under these terms, you must agree
+to them as both strict obligations and conditions to all
+your licenses.
+
+## Copyright License
+
+The licensor grants you a copyright license for the
+software to do everything you might do with the software
+that would otherwise infringe the licensor's copyright
+in it for any permitted purpose.  However, you may
+only distribute the software according to [Distribution
+License](#distribution-license) and make changes or new works
+based on the software according to [Changes and New Works
+License](#changes-and-new-works-license).
+
+## Distribution License
+
+The licensor grants you an additional copyright license
+to distribute copies of the software.  Your license
+to distribute covers distributing the software with
+changes and new works permitted by [Changes and New Works
+License](#changes-and-new-works-license).
+
+## Notices
+
+You must ensure that anyone who gets a copy of any part of
+the software from you also gets a copy of these terms or the
+URL for them above, as well as copies of any plain-text lines
+beginning with `Required Notice:` that the licensor provided
+with the software.  For example:
+
+> Required Notice: Copyright Yoyodyne, Inc. (http://example.com)
+
+## Changes and New Works License
+
+The licensor grants you an additional copyright license to
+make changes and new works based on the software for any
+permitted purpose.
+
+## Patent License
+
+The licensor grants you a patent license for the software that
+covers patent claims the licensor can license, or becomes able
+to license, that you would infringe by using the software.
+
+## Noncommercial Purposes
+
+Any noncommercial purpose is a permitted purpose.
+
+## Personal Uses
+
+Personal use for research, experiment, and testing for
+the benefit of public knowledge, personal study, private
+entertainment, hobby projects, amateur pursuits, or religious
+observance, without any anticipated commercial application,
+is use for a permitted purpose.
+
+## Noncommercial Organizations
+
+Use by any charitable organization, educational institution,
+public research organization, public safety or health
+organization, environmental protection organization,
+or government institution is use for a permitted purpose
+regardless of the source of funding or obligations resulting
+from the funding.
+
+## Fair Use
+
+You may have "fair use" rights for the software under the
+law. These terms do not limit them.
+
+## No Other Rights
+
+These terms do not allow you to sublicense or transfer any of
+your licenses to anyone else, or prevent the licensor from
+granting licenses to anyone else.  These terms do not imply
+any other licenses.
+
+## Patent Defense
+
+If you make any written claim that the software infringes or
+contributes to infringement of any patent, your patent license
+for the software granted under these terms ends immediately. If
+your company makes such a claim, your patent license ends
+immediately for work on behalf of your company.
+
+## Violations
+
+The first time you are notified in writing that you have
+violated any of these terms, or done anything with the software
+not covered by your licenses, your licenses can nonetheless
+continue if you come into full compliance with these terms,
+and take practical steps to correct past violations, within
+32 days of receiving notice.  Otherwise, all your licenses
+end immediately.
+
+## No Liability
+
+***As far as the law allows, the software comes as is, without
+any warranty or condition, and the licensor will not be liable
+to you for any damages arising out of these terms or the use
+or nature of the software, under any kind of legal claim.***
+
+## Definitions
+
+The **licensor** is the individual or entity offering these
+terms, and the **software** is the software the licensor makes
+available under these terms.
+
+**You** refers to the individual or entity agreeing to these
+terms.
+
+**Your company** is any legal entity, sole proprietorship,
+or other kind of organization that you work for, plus all
+organizations that have control over, are under the control of,
+or are under common control with that organization.  **Control**
+means ownership of substantially all the assets of an entity,
+or the power to direct its management and policies by vote,
+contract, or otherwise.  Control can be direct or indirect.
+
+**Your licenses** are all the licenses granted to you for the
+software under these terms.
+
+**Use** means anything you do with the software requiring one
+of your licenses.
+
+
+================================================================================
+PART II — 署名完整性附加条款 / Attribution Integrity Addendum
+================================================================================
+
+本附加条款是在 PART I 的 PolyForm Noncommercial License 1.0.0 之上追加的
+条件与义务。依 PolyForm 的「Acceptance」条款，你必须将本附加条款同样作为
+获得任何许可的严格义务与条件一并接受。违反本附加条款即构成对许可的违反，
+其补正与终止后果适用 PolyForm 的「Violations」条款。
+
+This Addendum adds conditions and obligations on top of the PolyForm
+Noncommercial License 1.0.0 in PART I. Under PolyForm's "Acceptance" clause,
+you must accept this Addendum as strict obligations and conditions to all your
+licenses. Violating this Addendum is a violation of the license; the "cure and
+termination" consequences in PolyForm's "Violations" clause apply.
+
+1. 受保护的署名 / Protected Attribution
+
+   「受保护的署名」指本软件「关于」页（About 页，源代码见
+   `src/ui/pages/about.py`）所载明的全部归属与致敬信息，包括但不限于：
+   (a) 对原 d3dxSkinManage 作者 numLinka 的致敬，及其社区贡献的陈述，
+       以及「本项目与原 d3dxSkinManage 无代码引用、衍生或隶属关系」
+       这一事实声明；
+   (b) 对本项目创始人及各贡献者（如 Aether、kKevin0001，及日后加入者）
+       的署名与角色说明；
+   (c) 本许可声明本身及上述「Required Notice」。
+
+   "Protected Attribution" means all attribution and tribute information set
+   out on this software's "About" page (source: `src/ui/pages/about.py`),
+   including but not limited to: (a) the tribute to numLinka, the original
+   author of d3dxSkinManage, the statement of their community contribution,
+   and the factual statement that this project has no code reference,
+   derivation, or affiliation with the original d3dxSkinManage; (b) the credits
+   and roles of this project's founder and contributors (such as Aether,
+   kKevin0001, and future contributors); and (c) this license notice itself
+   and the Required Notice above.
+
+2. 你不得 / You must not
+
+   (a) 在本软件或其任何衍生作品、再分发副本中删除、隐藏、停用、覆盖，
+       或实质性削弱「受保护的署名」的可见性与可达性；
+   (b) 篡改、伪造或歪曲「受保护的署名」所陈述的事实——包括冒充作者或
+       贡献者、错误标注原创归属、谎称本项目与原 d3dxSkinManage 之间存在
+       代码引用 / 衍生 / 隶属关系，或反过来否认对原作者应有的致敬；
+   (c) 以使他人对作者 / 贡献者身份产生错误认知为目的，作任何增、删、改。
+
+   (a) remove, hide, disable, obscure, or materially diminish the visibility
+       or accessibility of the Protected Attribution in the software or in any
+       derivative work or redistributed copy;
+   (b) alter, fabricate, or misrepresent the facts stated in the Protected
+       Attribution — including impersonating an author or contributor,
+       misattributing original authorship, falsely asserting any code
+       reference / derivation / affiliation between this project and the
+       original d3dxSkinManage, or conversely denying the due tribute to the
+       original author;
+   (c) make any addition, deletion, or modification for the purpose of
+       misleading others as to the identity of an author or contributor.
+
+3. 你可以 / You may
+
+   如实新增真实贡献者的署名，或在保持既有事实准确、致敬与许可声明完整的
+   前提下，改进「关于」页的措辞与呈现形式。本条款保护的是署名「事实的真实
+   与完整」，而非冻结其文字表达。
+
+   add accurate credits for genuine contributors, and improve the wording and
+   presentation of the "About" page, provided the existing facts remain
+   accurate and the tribute and license notice remain complete. This Addendum
+   protects the truth and integrity of the attribution facts, not the exact
+   wording.
+
+4. 存续 / Survival
+
+   上述义务随本软件一并传递；任何再分发副本或衍生作品的接收者同样受其约束。
+
+   These obligations travel with the software; any recipient of a redistributed
+   copy or derivative work is equally bound by them.
+
+
+================================================================================
+语言 / Governing language
+================================================================================
+
+本许可的中文与英文文本同等重要；如两者存在不可调和的冲突，以中文文本为准。
+（PART I 的 PolyForm Noncommercial License 1.0.0 以其官方英文原文为准。）
+
+The Chinese and English texts of this license are equally authoritative; in
+case of an irreconcilable conflict, the Chinese text governs. (PART I, the
+PolyForm Noncommercial License 1.0.0, is governed by its official English text.)
