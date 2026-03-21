@@ -471,3 +471,218 @@ class GameBananaClient:
                         tr("GameBanana 批量文件查询失败：{exc}", exc=exc), partial_files=out
                     ) from exc
             return out
+
+    async def get_download_page(
+        self,
+        model: GbModel,
+        mod_id: int,
+        *,
+        update_check: bool = False,
+    ) -> list[GbModFile]:
+        """读取资源文件列表；用于更新检查时严格验证活动文件证据，避免无效响应被当作已是最新。"""
+        payload = await self._get(f"/{model.value}/{mod_id}/DownloadPage", update_check=update_check)
+        files = payload.get("_aFiles") if isinstance(payload, dict) else None
+        if not files and isinstance(payload, list):
+            files = payload
+        if update_check:
+            parsed = self._active_update_files(files)
+            if parsed is None:
+                raise ValueError(tr("GameBanana 未返回有效的活动文件列表"))
+            return parsed
+        return [GbModFile.from_api(f) for f in (files or [])]
+
+    async def get_updates(
+        self,
+        model: GbModel,
+        mod_id: int,
+        *,
+        update_check: bool = False,
+        force: bool = False,
+    ) -> list[GbModUpdateEntry]:
+        """获取并缓存资源更新记录，强制刷新时先使该资源的缓存失效。"""
+        # 更新记录使用持久化缓存，在有效期内复用，减少重复请求。
+        key = f"updates:{model.value}:{mod_id}"
+        if force:
+            self._cache.invalidate(key)
+        payload = await self._cache.get_or_fetch(
+            key,
+            GbApiCache.MEM_TTL_DEFAULT,
+            lambda: self._get(f"/{model.value}/{mod_id}/Updates", update_check=update_check),
+            persist=True,
+        )
+        records = self._extract_records(payload)
+        return [GbModUpdateEntry.from_api(r) for r in records]
+
+    async def search(
+        self,
+        query: str,
+        *,
+        game_id: int,
+        page: int = 1,
+        model: GbModel | None = None,
+        sort: str = "best_match",
+    ) -> tuple[list[GbModRecord], bool]:
+        """在指定游戏和资源类型内分页搜索，返回解析后的记录及下一页可用状态。"""
+        params: dict[str, Any] = {
+            "_sSearchString": query,
+            "_idGameRow": game_id,
+            "_nPage": page,
+            "_nPerpage": DEFAULT_PAGE_SIZE,
+            "_sModelName": (model.value if model is not None else GbModel.MOD.value),
+        }
+        sort_param = _SORT_ALIASES.get(sort)
+        if sort_param:
+            params["_sSort"] = sort_param
+        payload = await self._get("/Util/Search/Results", **params)
+        records = self._extract_records(payload)
+        return [GbModRecord.from_api(r) for r in records], self._extract_has_more(payload)
+
+    async def subfeed(
+        self,
+        game_id: int,
+        page: int = 1,
+        *,
+        sort: str = "default",
+    ) -> tuple[list[GbModRecord], bool]:
+        """分页读取游戏订阅动态，默认沿用服务端排序，仅传递受支持的自定义排序。"""
+        params: dict[str, Any] = {
+            "_nPage": page,
+            "_nPerpage": DEFAULT_PAGE_SIZE,
+        }
+        # Subfeed 排序由服务端决定，默认排序不传 _sSort。
+
+        if sort and sort != "default":
+            mapped = _SORT_ALIASES.get(sort)
+            if mapped:
+                params["_sSort"] = mapped
+        payload = await self._get(f"/Game/{game_id}/Subfeed", **params)
+        records = self._extract_records(payload)
+        return [GbModRecord.from_api(r) for r in records], self._extract_has_more(payload)
+
+    # 下载次数
+    # apiv11 列表接口不返回 _nDownloadCount，须通过独立请求补全。
+
+    # 通过 Mod/Multi 批量获取下载量，减少逐项请求及限流开销。
+    _DL_CACHE_TTL = 3600
+    # 每批最多 50 个编号，限制 URL 长度及单批失败的影响范围。
+    _DL_BATCH = 50
+    # 收到限流响应后暂停下载量请求，避免非关键统计持续触发重试。
+    _DL_RATE_LIMIT_COOLDOWN = 120.0
+
+    def _dl_rate_limited(self) -> bool:
+        """判断下载量查询是否仍处于独立的限流冷却期。"""
+        return time.time() < getattr(self, "_dl_blocked_until", 0.0)
+
+    def _trip_dl_rate_limit(self) -> None:
+        """启动下载量查询冷却期，使界面在限流期间保留占位显示。"""
+        self._dl_blocked_until = time.time() + self._DL_RATE_LIMIT_COOLDOWN
+        logger.warning(
+            "下载量接口被限流（429），静默 %.0f 秒；期间卡片下载量显示占位",
+            self._DL_RATE_LIMIT_COOLDOWN,
+        )
+
+    async def _fetch_download_counts_batch(self, mod_ids: list[int]) -> dict[int, int]:
+        """一次请求取多个 Mod 的下载量。返回 {mod_id: count}，整批失败则抛。"""
+        payload = await self._get(
+            "/Mod/Multi",
+            _csvRowIds=",".join(str(m) for m in mod_ids),
+            _csvProperties="_idRow,_nDownloadCount",
+        )
+        out: dict[int, int] = {}
+        rows = payload if isinstance(payload, list) else []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                mid = int(row.get("_idRow") or 0)
+            except (TypeError, ValueError):
+                continue
+            if mid <= 0:
+                continue
+            try:
+                out[mid] = int(row.get("_nDownloadCount") or 0)
+            except (TypeError, ValueError):
+                out[mid] = 0
+        return out
+
+    async def bulk_download_counts(
+        self,
+        mod_ids: list[int],
+        *,
+        timeout: float | None = None,
+    ) -> dict[int, int]:
+        """批量读取下载量，返回成功获取的 Mod 编号与计数。
+
+        使用 Mod/Multi 按批请求，结果按 dl:{mod_id} 分别缓存一小时，供翻页和重新筛选复用。
+        缺失项不填零，由调用方保持待加载状态；超过总体时限时返回已完成的部分结果。
+        """
+        if not mod_ids:
+            return {}
+
+        uniq: list[int] = []
+        seen: set[int] = set()
+        for m in mod_ids:
+            mid = int(m or 0)
+            if mid > 0 and mid not in seen:
+                seen.add(mid)
+                uniq.append(mid)
+
+        # 缓存命中项直接返回，其余项组成网络请求批次。
+        out: dict[int, int] = {}
+        misses: list[int] = []
+        for mid in uniq:
+            cached = self._cache.peek(f"dl:{mid}")
+            if cached is None:
+                misses.append(mid)
+            else:
+                try:
+                    out[mid] = int(cached)
+                except (TypeError, ValueError):
+                    misses.append(mid)
+        if not misses:
+            return out
+        # 限流静默期内不发送请求，缺失项保持待加载状态。
+        if self._dl_rate_limited():
+            logger.debug("下载量接口处于限流静默期，跳过 %d 个未缓存项", len(misses))
+            return out
+
+        batches = [misses[i : i + self._DL_BATCH] for i in range(0, len(misses), self._DL_BATCH)]
+
+        async def _run_batch(batch: list[int]) -> dict[int, int]:
+            """获取一批 Mod 下载量并逐项缓存；失败返回空结果，收到限流响应时启动冷却。"""
+            try:
+                got = await self._fetch_download_counts_batch(batch)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429:
+                    self._trip_dl_rate_limit()
+                else:
+                    logger.debug("批量下载量失败（HTTP %s）", e.response.status_code)
+                return {}
+            except Exception as e:
+                logger.debug("批量下载量失败：%s", e)
+                return {}
+            # 按 Mod 编号分别缓存结果，供后续页面复用。
+            for mid, cnt in got.items():
+                self._cache.put(f"dl:{mid}", self._DL_CACHE_TTL, cnt)
+            return got
+
+        tasks = [asyncio.ensure_future(_run_batch(b)) for b in batches]
+        if timeout is None:
+            for got in await asyncio.gather(*tasks, return_exceptions=True):
+                if isinstance(got, dict):
+                    out.update(got)
+            return out
+
+        done, pending = await asyncio.wait(tasks, timeout=timeout)
+        for t in pending:
+            t.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+        for t in done:
+            try:
+                got = t.result()
+            except Exception:
+                continue
+            if isinstance(got, dict):
+                out.update(got)
+        return out
