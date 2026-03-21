@@ -1,0 +1,162 @@
+[
+  {
+    "_idRow": 310001,
+    "_tsDateUpdated": 1700001000,
+    "_aFiles": [
+      {
+        "_idRow": 410001,
+        "_sFile": "sample_skin_1_3.zip",
+        "_nFilesize": 101024,
+        "_tsDateAdded": 1700000300,
+        "_nDownloadCount": 1,
+        "_sDownloadUrl": "https://gamebanana.com/dl/410001",
+        "_sMd5Checksum": "71166ddef70aa95a990f28e20104fc76",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sVersion": "1.3",
+        "_sDescription": "示例皮肤版本 1.3"
+      },
+      {
+        "_idRow": 410002,
+        "_sFile": "sample_source.zip",
+        "_nFilesize": 102048,
+        "_tsDateAdded": 1700000400,
+        "_nDownloadCount": 2,
+        "_sDownloadUrl": "https://gamebanana.com/dl/410002",
+        "_sMd5Checksum": "bd5b173a804347987835b91cf617a188",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sDescription": "示例源文件"
+      },
+      {
+        "_idRow": 410003,
+        "_sFile": "sample_skin_1_3_5.zip",
+        "_nFilesize": 103072,
+        "_tsDateAdded": 1700000500,
+        "_nDownloadCount": 3,
+        "_sDownloadUrl": "https://gamebanana.com/dl/410003",
+        "_sMd5Checksum": "2aa02d9f97939254a7a72dafd49d2ba2",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sVersion": "1.3.5",
+        "_sDescription": "示例皮肤版本 1.3.5"
+      }
+    ]
+  },
+  {
+    "_idRow": 310002,
+    "_tsDateUpdated": 1700001000,
+    "_aFiles": [
+      {
+        "_idRow": 420001,
+        "_sFile": "sample_outfit.rar",
+        "_nFilesize": 101024,
+        "_tsDateAdded": 1700000600,
+        "_nDownloadCount": 1,
+        "_sDownloadUrl": "https://gamebanana.com/dl/420001",
+        "_sMd5Checksum": "dd5bcbbb85f04161e5101a45239430a6",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sDescription": "示例服装归档"
+      }
+    ]
+  },
+  {
+    "_idRow": 310003,
+    "_tsDateUpdated": 1700001000,
+    "_aFiles": [
+      {
+        "_idRow": 430003,
+        "_sFile": "sample_variant_1_2.zip",
+        "_nFilesize": 103072,
+        "_tsDateAdded": 1700000300,
+        "_nDownloadCount": 3,
+        "_sDownloadUrl": "https://gamebanana.com/dl/430003",
+        "_sMd5Checksum": "803d8fdc1019df4347c99d467fb607ab",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sVersion": "1.2",
+        "_sDescription": "示例变体版本 1.2"
+      },
+      {
+        "_idRow": 430004,
+        "_sFile": "sample_variant_1_2_alternate.zip",
+        "_nFilesize": 104096,
+        "_tsDateAdded": 1700000400,
+        "_nDownloadCount": 4,
+        "_sDownloadUrl": "https://gamebanana.com/dl/430004",
+        "_sMd5Checksum": "1e567a31ce6734abcf2cbe01f448db94",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": false,
+        "_bHasContents": true,
+        "_sVersion": "1.2",
+        "_sDescription": "示例替代变体"
+      },
+      {
+        "_idRow": 430002,
+        "_sFile": "sample_variant_1_1.zip",
+        "_nFilesize": 102048,
+        "_tsDateAdded": 1700000200,
+        "_nDownloadCount": 2,
+        "_sDownloadUrl": "https://gamebanana.com/dl/430002",
+        "_sMd5Checksum": "4bfa0360323c0be7b654a4fe26c4f880",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": true,
+        "_bHasContents": true,
+        "_sVersion": "1.1",
+        "_sDescription": "示例变体版本 1.1"
+      },
+      {
+        "_idRow": 430001,
+        "_sFile": "sample_variant_1_0.zip",
+        "_nFilesize": 101024,
+        "_tsDateAdded": 1700000100,
+        "_nDownloadCount": 1,
+        "_sDownloadUrl": "https://gamebanana.com/dl/430001",
+        "_sMd5Checksum": "552cc21080dbd1b5cfd29d5b63a35d55",
+        "_sAnalysisState": "done",
+        "_sAnalysisResult": "ok",
+        "_sAnalysisResultVerbose": "File passed preliminary analysis",
+        "_sAvState": "done",
+        "_sAvResult": "clean",
+        "_bIsArchived": true,
+        "_bHasContents": true,
+        "_sVersion": "1.0",
+        "_sDescription": "示例初始版本"
+      }
+    ]
+  }
+]

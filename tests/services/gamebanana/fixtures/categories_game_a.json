@@ -1,0 +1,7 @@
+{
+  "_aRecords": [
+    {"_idRow": 5000, "_sName": "Skins",   "_nItemCount": 1234, "_idParentCategoryRow": null},
+    {"_idRow": 5001, "_sName": "Effects", "_nItemCount": 56,   "_idParentCategoryRow": null}
+  ],
+  "_aMetadata": {"_bIsComplete": true}
+}
