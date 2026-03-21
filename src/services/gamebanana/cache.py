@@ -192,3 +192,162 @@ class GbApiCache:
         while len(self._entries) > self._max:
             old_key, _ = self._entries.popitem(last=False)
             self._remove_disk(old_key)
+
+    def invalidate(self, key: str) -> int:
+        """使单个键的内存和磁盘缓存失效，返回移除条目数。"""
+        existed = self._entries.pop(key, None) is not None
+        self._remove_disk(key)
+        return 1 if existed else 0
+
+    def invalidate_prefix(self, prefix: str) -> int:
+        """使指定前缀的内存及磁盘缓存失效，返回清除数量，供手动刷新获取最新数据。"""
+        keys = [k for k in self._entries if k.startswith(prefix)]
+        for k in keys:
+            self._entries.pop(k, None)
+            self._remove_disk(k)
+        return len(keys)
+
+    def clear(self) -> None:
+        """清空内存条目并尽力删除磁盘缓存，不取消正在进行的请求。"""
+        self._entries.clear()
+        try:
+            for f in self._persist_dir.glob("*.json"):
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+        except OSError:
+            pass
+
+
+class ImageCache:
+    """按 URL 哈希命名的图像磁盘缓存。
+
+    新文件写入后检查容量，超限时按修改时间清理至软水位。
+    容量配置 image_cache_max_mb 为 0 时不限制。
+    """
+
+    # 清理到上限的一定比例，为后续写入预留空间，避免频繁触发清理。
+    _EVICT_TARGET_RATIO = 0.9
+
+    def __init__(self, base_dir: Path | None = None) -> None:
+        """建立图片缓存目录和同 URL 请求表，使用异步锁协调共享下载。"""
+        # 默认落到可丢弃缓存目录 cache/gb_images（见 paths.get_gb_image_cache_dir）。
+        self._base = Path(base_dir) if base_dir else get_gb_image_cache_dir()
+        self._base.mkdir(parents=True, exist_ok=True)
+        self._inflight: dict[str, asyncio.Future] = {}
+        self._lock = asyncio.Lock()
+
+    def get_path(self, url: str) -> Path:
+        """按完整 URL 的散列生成缓存路径，沿用不含查询参数的扩展名。"""
+        h = hashlib.sha1(url.encode("utf-8")).hexdigest()
+        suffix = Path(url.split("?", 1)[0]).suffix or ".bin"
+        return self._base / f"{h}{suffix}"
+
+    # 缓存容量管理。
+
+    @staticmethod
+    def _max_bytes() -> int:
+        """用户配置的缓存上限（字节）；0 或读取失败 → 0 表示不限制。"""
+        try:
+            from src.core.config import Config
+
+            mb = int(Config.instance().get("gamebanana.image_cache_max_mb", 0) or 0)
+            return max(0, mb) * 1024 * 1024
+        except Exception:
+            return 0
+
+    def total_size(self) -> int:
+        """当前缓存目录占用字节数。"""
+        total = 0
+        try:
+            for p in self._base.iterdir():
+                if p.is_file():
+                    try:
+                        total += p.stat().st_size
+                    except OSError:
+                        pass
+        except OSError:
+            pass
+        return total
+
+    def _evict_if_needed(self) -> None:
+        """超出容量上限时按修改时间清理到软水位。
+
+        写入新文件后同步检查；不限制容量时直接返回，单个文件删除失败不影响其他项。
+        """
+        limit = self._max_bytes()
+        if limit <= 0:
+            return
+        try:
+            files = [p for p in self._base.iterdir() if p.is_file()]
+        except OSError:
+            return
+        total = 0
+        stats: list[tuple[float, int, Path]] = []
+        for p in files:
+            try:
+                st = p.stat()
+            except OSError:
+                continue
+            stats.append((st.st_mtime, st.st_size, p))
+            total += st.st_size
+        if total <= limit:
+            return
+        target = int(limit * self._EVICT_TARGET_RATIO)
+        stats.sort(key=lambda t: t[0])  # 最旧优先
+        for _mtime, size, p in stats:
+            if total <= target:
+                break
+            try:
+                p.unlink()
+                total -= size
+            except OSError:
+                pass
+
+    async def fetch(self, url: str) -> Path:
+        """复用非空本地文件；未命中时合并同 URL 下载、重试瞬态错误并执行缓存清理。"""
+        path = self.get_path(url)
+        if path.exists() and path.stat().st_size > 0:
+            return path
+
+        async with self._lock:
+            future = self._inflight.get(url)
+            if future is None:
+                future = asyncio.get_running_loop().create_future()
+                self._inflight[url] = future
+                primary = True
+            else:
+                primary = False
+
+        if primary:
+            try:
+                from src.utils.proxy import get_active_proxy_url
+
+                proxy = get_active_proxy_url()
+                # 最多重试三次并采用指数退避，处理临时限流、服务端错误和网络中断。
+                async with httpx.AsyncClient(timeout=30, follow_redirects=True, proxy=proxy) as client:
+                    async for attempt in AsyncRetrying(
+                        stop=stop_after_attempt(3),
+                        wait=wait_exponential(multiplier=1, min=1, max=4),
+                        retry=retry_if_exception(_is_transient_http_error),
+                        reraise=True,
+                    ):
+                        with attempt:
+                            resp = await client.get(url)
+                            resp.raise_for_status()
+                            path.parent.mkdir(parents=True, exist_ok=True)
+                            path.write_bytes(resp.content)
+                # 写入后按需清理旧缓存。
+                self._evict_if_needed()
+                future.set_result(path)
+                return path
+            except BaseException as exc:
+                future.set_exception(exc)
+                # 消费没有等待者的 Future 异常，避免产生未处理异常告警；已有等待者仍能接收异常。
+                future.add_done_callback(lambda f: f.exception())
+                raise
+            finally:
+                async with self._lock:
+                    self._inflight.pop(url, None)
+        return await future
