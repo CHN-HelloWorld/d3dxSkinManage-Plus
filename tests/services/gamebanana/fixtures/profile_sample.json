@@ -1,0 +1,38 @@
+{
+  "_idRow": 123456,
+  "_sModelName": "Mod",
+  "_sName": "Sample Mod",
+  "_sProfileUrl": "https://gamebanana.com/mods/123456",
+  "_aSubmitter": {
+    "_idRow": 5555,
+    "_sName": "Author",
+    "_sAvatarUrl": "https://images.gamebanana.com/avatars/5555.png",
+    "_sProfileUrl": "https://gamebanana.com/members/5555"
+  },
+  "_aPreviewMedia": {
+    "_aImages": [
+      {"_sBaseUrl": "https://images.gamebanana.com/img/ss/mods", "_sFile": "abc.jpg", "_sFile220": "220-abc.jpg"}
+    ]
+  },
+  "_sDescription": "<p>Hello</p>",
+  "_nViewCount": 1000,
+  "_nLikeCount": 50,
+  "_nDownloadCount": 200,
+  "_nPostCount": 10,
+  "_bIsNsfw": false,
+  "_tsDateUpdated": 1700000000,
+  "_aCategory": {"_idRow": 5000, "_sName": "Skins"},
+  "_aFiles": [
+    {
+      "_idRow": 999,
+      "_sFile": "mod.zip",
+      "_sDescription": "v1",
+      "_sDownloadUrl": "https://gamebanana.com/dl/999",
+      "_nFilesize": 5000000,
+      "_tsDateAdded": 1700000000,
+      "_sMd5Checksum": "deadbeefdeadbeefdeadbeefdeadbeef",
+      "_sAvResult": "clean"
+    }
+  ],
+  "_aUpdates": []
+}

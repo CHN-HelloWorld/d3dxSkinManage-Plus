@@ -1,0 +1,102 @@
+{
+  "_bIsTrashed": false,
+  "_bIsWithheld": false,
+  "_aArchivedFiles": [
+    {
+      "_idRow": 430002,
+      "_sFile": "sample_variant_1_1.zip",
+      "_nFilesize": 102048,
+      "_tsDateAdded": 1700000200,
+      "_nDownloadCount": 2,
+      "_sDownloadUrl": "https://gamebanana.com/dl/430002",
+      "_sMd5Checksum": "4bfa0360323c0be7b654a4fe26c4f880",
+      "_sAnalysisState": "done",
+      "_sAnalysisResult": "ok",
+      "_sAnalysisResultVerbose": "File passed preliminary analysis",
+      "_sAvState": "done",
+      "_sAvResult": "clean",
+      "_bIsArchived": true,
+      "_bHasContents": true,
+      "_sVersion": "1.1",
+      "_sDescription": "示例变体版本 1.1"
+    },
+    {
+      "_idRow": 430001,
+      "_sFile": "sample_variant_1_0.zip",
+      "_nFilesize": 101024,
+      "_tsDateAdded": 1700000100,
+      "_nDownloadCount": 1,
+      "_sDownloadUrl": "https://gamebanana.com/dl/430001",
+      "_sMd5Checksum": "552cc21080dbd1b5cfd29d5b63a35d55",
+      "_sAnalysisState": "done",
+      "_sAnalysisResult": "ok",
+      "_sAnalysisResultVerbose": "File passed preliminary analysis",
+      "_sAvState": "done",
+      "_sAvResult": "clean",
+      "_bIsArchived": true,
+      "_bHasContents": true,
+      "_sVersion": "1.0",
+      "_sDescription": "示例初始版本"
+    }
+  ],
+  "_aFiles": [
+    {
+      "_idRow": 430003,
+      "_sFile": "sample_variant_1_2.zip",
+      "_nFilesize": 103072,
+      "_tsDateAdded": 1700000300,
+      "_nDownloadCount": 3,
+      "_sDownloadUrl": "https://gamebanana.com/dl/430003",
+      "_sMd5Checksum": "803d8fdc1019df4347c99d467fb607ab",
+      "_sAnalysisState": "done",
+      "_sAnalysisResult": "ok",
+      "_sAnalysisResultVerbose": "File passed preliminary analysis",
+      "_sAvState": "done",
+      "_sAvResult": "clean",
+      "_bIsArchived": false,
+      "_bHasContents": true,
+      "_sVersion": "1.2",
+      "_sDescription": "示例变体版本 1.2"
+    },
+    {
+      "_idRow": 430004,
+      "_sFile": "sample_variant_1_2_alternate.zip",
+      "_nFilesize": 104096,
+      "_tsDateAdded": 1700000400,
+      "_nDownloadCount": 4,
+      "_sDownloadUrl": "https://gamebanana.com/dl/430004",
+      "_sMd5Checksum": "1e567a31ce6734abcf2cbe01f448db94",
+      "_sAnalysisState": "done",
+      "_sAnalysisResult": "ok",
+      "_sAnalysisResultVerbose": "File passed preliminary analysis",
+      "_sAvState": "done",
+      "_sAvResult": "clean",
+      "_bIsArchived": false,
+      "_bHasContents": true,
+      "_sVersion": "1.2",
+      "_sDescription": "示例替代变体"
+    }
+  ],
+  "_bAcceptsDonations": true,
+  "_bShowRipePromo": true,
+  "_sLicense": "<p>合成测试数据许可说明。</p>",
+  "_aOwner": {
+    "_sName": "SampleAuthor"
+  },
+  "_aDonationMethods": [
+    {
+      "_sTitle": "Example support page",
+      "_sValue": "https://example.invalid/creator",
+      "_sInputType": "text",
+      "_sInputPlaceholder": "Example support URL",
+      "_sIconClasses": "MiscIcon SupportIcon",
+      "_aValidator": {
+        "_regexValidPattern": "^https?://example\\.invalid/.+$",
+        "_sWarningMessage": "Expected a URL under https://example.invalid/"
+      },
+      "_sValueTemplate": "<a target=\"_blank\" href=\"%VALUE%\">Example support page</a>",
+      "_bIsUrl": true,
+      "_sFormattedValue": "<a target=\"_blank\" href=\"https://example.invalid/creator\">Example support page</a>"
+    }
+  ]
+}

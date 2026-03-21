@@ -1,0 +1,2 @@
+# 运行依赖统一由 pyproject.toml 声明。
+-e .
