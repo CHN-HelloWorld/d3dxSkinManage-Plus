@@ -289,3 +289,185 @@ class GameBananaClient:
             if total is not None:
                 return page * per_page < int(total)
         return False
+
+    async def match_game(self, name: str) -> list[dict]:
+        """通过 /Util/Game/NameMatch 按游戏名称查询 GameBanana 候选记录。
+
+        返回包含 _idRow、_sName 和 _sProfileUrl 的原始记录列表，
+        由 pick_gb_game_match 选择与用户自定义游戏匹配的记录。
+        """
+        name = (name or "").strip()
+        if not name:
+            return []
+        payload = await self._get("/Util/Game/NameMatch", _sName=name)
+        return self._extract_records(payload)
+
+    # 根分类包含在游戏 ProfilePage 的 _aModRootCategories 字段中。
+    # 服务端未提供独立的 Game/Categories 路由。
+
+    async def categories(self, game_id: int) -> list[GbCategory]:
+        """通过可持久化缓存获取指定游戏的根分类，并将有效记录转换为分类模型。"""
+        key = f"cat:{game_id}"
+        # 分类树缓存写入磁盘，重启后可在有效期内复用。
+        payload = await self._cache.get_or_fetch(
+            key,
+            GbApiCache.CAT_TTL_SECONDS,
+            lambda: self._get(f"/Game/{game_id}/ProfilePage"),
+            persist=True,
+        )
+        records: list[dict] = []
+        if isinstance(payload, dict):
+            records = payload.get("_aModRootCategories") or []
+        return [GbCategory.from_api(r) for r in records if isinstance(r, dict)]
+
+    async def sub_categories(self, parent_id: int) -> list[GbCategory]:
+        """读取 /apiv11/ModCategory/{id}/SubCategories 返回的子分类。
+
+        响应包含名称、图标、URL 和内容数量，能够表示没有 Mod 的子分类。
+        接口不提供 _idRow，分类编号从 _sUrl 的末段解析。
+        """
+        # 请求失败须进入选择器的错误状态；返回空列表会把失败缓存为正常结果。
+
+        payload = await self._get(f"/ModCategory/{parent_id}/SubCategories")
+        if not isinstance(payload, list):
+            raise ValueError("Invalid category response: expected a list")
+        out: list[GbCategory] = []
+        for rec in payload:
+            if not isinstance(rec, dict):
+                continue
+            url = rec.get("_sUrl") or rec.get("_sProfileUrl") or ""
+            try:
+                cid = int(url.rsplit("/", 1)[-1])
+            except (ValueError, IndexError):
+                continue
+            out.append(
+                GbCategory(
+                    id=cid,
+                    name=rec.get("_sName", "") or f"#{cid}",
+                    parent_id=parent_id,
+                    item_count=int(rec.get("_nItemCount") or 0),
+                    icon_url=rec.get("_sIconUrl") or None,
+                )
+            )
+        # 按名称排序，便于在较长的分类列表中定位。
+        return sorted(out, key=lambda c: c.name.lower())
+
+    async def mods_by_category(
+        self,
+        cat_id: int,
+        page: int = 1,
+        *,
+        sort: str = "best_match",
+    ) -> tuple[list[GbModRecord], bool]:
+        """按分类、页码和受支持排序查询 Mod，返回记录列表及后续分页标记。"""
+        params: dict[str, Any] = {
+            "_aFilters[Generic_Category]": cat_id,
+            "_nPage": page,
+            "_nPerpage": DEFAULT_PAGE_SIZE,
+        }
+        sort_param = _SORT_ALIASES.get(sort)
+        if sort_param:
+            params["_sSort"] = sort_param
+        payload = await self._get("/Mod/Index", **params)
+        records = self._extract_records(payload)
+        return [GbModRecord.from_api(r) for r in records], self._extract_has_more(payload)
+
+    async def get_profile(self, model: GbModel, mod_id: int) -> GbModProfile:
+        """按资源类型与编号获取详情，使用可持久化缓存复用有效期内的响应。"""
+        key = f"profile:{model.value}:{mod_id}"
+        # 详情缓存写入磁盘，重启后在有效期内无需重复请求。
+        payload = await self._cache.get_or_fetch(
+            key,
+            GbApiCache.MEM_TTL_DEFAULT,
+            lambda: self._get(f"/{model.value}/{mod_id}/ProfilePage"),
+            persist=True,
+        )
+        return GbModProfile.from_api(payload)
+
+    @staticmethod
+    def _active_update_files(payload: Any) -> list[GbModFile] | None:
+        """Multi 包含归档文件；缺项/畸形数据与确实没有活动文件必须区分。"""
+        if not isinstance(payload, list):
+            return None
+        files = []
+        for row in payload:
+            if not isinstance(row, dict):
+                return None
+            archived = row.get("_bIsArchived", False)
+            if not isinstance(archived, bool):
+                return None
+            if archived:
+                continue
+            if _positive_int(row.get("_idRow")) is None or _positive_int(row.get("_tsDateAdded")) is None:
+                return None
+            if any(
+                not isinstance(row.get(key), str) or not row[key].strip()
+                for key in ("_sFile", "_sDownloadUrl", "_sMd5Checksum")
+            ):
+                return None
+            files.append(GbModFile.from_api(row))
+        return files
+
+    async def bulk_update_files(self, mod_ids: list[int], *, force: bool = False) -> dict[int, list[GbModFile]]:
+        """批量读取活动文件，供手动和自动更新检查共用。
+
+        Multi 响应的 _aFiles 包含文件指纹和归档标志；页面更新时间可能早于文件时间，
+        因此按文件信息判断更新。自动检查缓存十分钟，force=True 时重新请求。
+        批次失败后停止并携带已完成结果；仅对成功批次中的缺失记录进行补充查询。
+        """
+        ids = list(dict.fromkeys(mid for value in mod_ids if (mid := _positive_int(value)) is not None))
+        if not ids:
+            return {}
+        # 同一 client 的同时自动检测共享缓存结果，避免相同 ID 在缓存填入前重复发批次。
+        async with self._update_files_lock:
+            self._ensure_update_requests_allowed()
+            out: dict[int, list[GbModFile]] = {}
+            missing = []
+            for mid in ids:
+                key = f"update_files:Mod:{mid}"
+                if force:
+                    self._cache.invalidate(key)
+                cached = self._cache.peek(key)
+                if cached is None:
+                    missing.append(mid)
+                else:
+                    out[mid] = list(cached)
+
+            for offset in range(0, len(missing), self._UPDATE_FILES_BATCH):
+                batch = missing[offset : offset + self._UPDATE_FILES_BATCH]
+                try:
+                    payload = await self._get(
+                        "/Mod/Multi",
+                        update_check=True,
+                        _csvRowIds=",".join(str(mid) for mid in batch),
+                        _csvProperties="_idRow,_aFiles",
+                    )
+                    rows = payload.get("_aRecords") if isinstance(payload, dict) else payload
+                    if not isinstance(rows, list):
+                        raise ValueError(tr("GameBanana 未返回有效的批量文件列表"))
+                    batch_ids = set(batch)
+                    recognized_count = 0
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        mid = _positive_int(row.get("_idRow"))
+                        if mid not in batch_ids:
+                            continue
+                        recognized_count += 1
+                        files = self._active_update_files(row.get("_aFiles"))
+                        if files is None:
+                            continue
+                        out[mid] = files
+                        self._cache.put(f"update_files:Mod:{mid}", GbApiCache.MEM_TTL_DEFAULT, files)
+                    # 合法记录的文件字段可能全为 null（尤其其余项已命中缓存时）。
+                    # 这种缺项仍能有界补查，不能与损坏/不匹配的整批响应混为一谈。
+                    if not recognized_count:
+                        raise ValueError(tr("GameBanana 批次中没有可识别的 Mod 记录"))
+                except UpdateCheckError as exc:
+                    exc.partial_files = out
+                    raise
+                except Exception as exc:
+                    raise UpdateCheckError(
+                        tr("GameBanana 批量文件查询失败：{exc}", exc=exc), partial_files=out
+                    ) from exc
+            return out
