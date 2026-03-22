@@ -727,3 +727,176 @@ class GbDownloadManager(QObject):
         """释放一个消费者；最后一个占用释放后执行此前登记的删包请求。"""
         self._consumers.pop(owner, None)
         self._delete_unused_archives()
+
+    def has_other_consumers(self, file_id: int, owners: set[str]) -> bool:
+        """同一网络任务是否还有 owners 之外的消费者（网络任务按 file ID 共享）。"""
+        return any(consumer.file_id == file_id and owner not in owners for owner, consumer in self._consumers.items())
+
+    def _bind_consumer_paths(self, file_id: int, path: Path) -> None:
+        """为同一文件尚未取得路径的使用者绑定解析后的归档绝对路径。"""
+        resolved = path.resolve()
+        for consumer in self._consumers.values():
+            if consumer.file_id == file_id and consumer.path is None:
+                consumer.path = resolved
+
+    def _archive_md5s(self, path: Path) -> set[str]:
+        """从已有元数据识别共享缓存，避免在 GUI 线程重读大文件算 MD5。"""
+        parsed_md5, _ = download_store.parse_download_name(path.name)
+        checksums = {parsed_md5} if parsed_md5 else set()
+        checksums.update(
+            md5 for md5, cached in self._md5_to_path.items() if md5 and md5 != "nomd5" and cached.resolve() == path
+        )
+        checksums.update(
+            consumer.md5 for consumer in self._consumers.values() if consumer.md5 and consumer.path == path
+        )
+        checksums.update(
+            (task.file.md5_checksum or "").lower()
+            for task in (*self._tasks.values(), *self._removed_running_tasks)
+            if task.file.md5_checksum and task.archive_path.resolve() == path
+        )
+        return checksums
+
+    def delete_archive_when_unused(self, path: Path) -> None:
+        """仅在下载目录内登记删包；同路径或同非空 MD5 的消费者全部释放后才删除。"""
+        resolved = Path(path).resolve()
+        if not resolved.is_relative_to(self._base.resolve()):
+            return
+        self._pending_deletions.setdefault(resolved, set()).update(self._archive_md5s(resolved))
+        self._delete_unused_archives()
+
+    def _delete_unused_archives(self) -> None:
+        """仅在没有使用者或活动下载占用时删除已登记的归档，删除后刷新本地索引。"""
+        changed = False
+        for path, checksums in list(self._pending_deletions.items()):
+            checksums.update(self._archive_md5s(path))
+            if any(
+                consumer.path == path or (consumer.md5 and consumer.md5 in checksums)
+                for consumer in self._consumers.values()
+            ):
+                continue
+            # 删条目后协程可能尚未结束；等终态信号后再清理成品，不阻塞 GUI。
+            if any(
+                task.state not in TASK_TERMINAL_STATES and task.archive_path.resolve() == path
+                for task in (*self._tasks.values(), *self._removed_running_tasks)
+            ):
+                continue
+            existed = path.is_file()
+            deleted_bytes = download_store.delete_if_download(path, base=self._base)
+            if not path.exists():
+                self._pending_deletions.pop(path, None)
+                # 空文件删除返回 0，也需要刷新缓存和下载面板。
+                changed = changed or existed or bool(deleted_bytes)
+        if changed:
+            self.refresh_local_index()
+
+    def request(
+        self,
+        profile: GbModProfile,
+        file: GbModFile,
+        *,
+        game_id: str,
+        consumer: str | None = None,
+    ) -> GbDownloadTask | None:
+        """登记文件使用者并复用缓存或任务；缓存命中返回空值，否则创建或重试下载任务。"""
+        md5 = (file.md5_checksum or "").lower()
+        previous = self._tasks.get(file.file_id)
+        if previous is not None and previous.state == "done" and not previous.archive_path.is_file():
+            # 归档已清理时，完成记录不能作为可复用的下载结果。
+            self.delete_task(file.file_id)
+        self.retain(file.file_id, md5, owner=f"download:{file.file_id}" if consumer is None else consumer)
+        # 通过 has_local_md5 同时检查磁盘状态并移除失效索引。
+        if md5 and self.has_local_md5(md5) is not None:
+            return None
+        if file.file_id in self._tasks:
+            task = self._tasks[file.file_id]
+            if task.state in ("failed", "canceled", "paused"):
+                self.retry(file.file_id)
+            return task
+        safe = _safe_name(file.file_name)
+        archive = self._base / f"{md5 or 'nomd5'}__{file.file_id}__{safe}"
+        task = GbDownloadTask(profile, file, archive, game_id=game_id)
+        task.finished.connect(lambda p, t=task: self._on_task_done(t, p))
+        task.state_changed.connect(lambda state, t=task: self._on_task_state_changed(t, state))
+        self._tasks[file.file_id] = task
+        self._bind_consumer_paths(file.file_id, archive)
+        self.task_added.emit(task)
+        self.queue_changed.emit()
+        self._schedule(task)
+        return task
+
+    def _schedule(self, task: GbDownloadTask) -> None:
+        """将任务绑定到下载循环并跨线程提交协程，通过完成回调消费未被等待的异常。"""
+        if self._loop is None:
+            logger.error("下载 loop 未就绪，任务无法调度：file_id=%s", task.file.file_id)
+            return
+        # 绑定事件循环后，等待响应头的任务也能接收取消请求。
+        task.bind_loop(self._loop)
+
+        async def runner():
+            """在下载管理器的事件循环中运行单个任务的下载协程。"""
+            await task._run_async()
+
+        try:
+            fut = asyncio.run_coroutine_threadsafe(runner(), self._loop)
+        except RuntimeError as e:
+            logger.error("提交下载协程失败：%s", e)
+            return
+
+        def _log_result(f) -> None:
+            """记录异步提交结果中未被调用方等待的异常。
+
+            下载主体以外的异常处理或清理分支仍可能失败，须通过完成回调消费异常。
+            """
+            try:
+                f.result()
+            except concurrent.futures.CancelledError:
+                pass
+            except Exception:
+                logger.exception("下载协程异常退出：file_id=%s", task.file.file_id)
+
+        fut.add_done_callback(_log_result)
+
+    def _on_task_state_changed(self, task: GbDownloadTask, state: str) -> None:
+        """终态时释放已移除任务的引用；失败或取消仅解除同一任务的占用，避免影响后续重试。"""
+        if state in TASK_TERMINAL_STATES:
+            self._removed_running_tasks.discard(task)
+        if state in ("failed", "canceled"):
+            # 被删除的旧任务晚到的信号不能释放同 file ID 的新任务占用。
+            if self._tasks.get(task.file.file_id) is task:
+                self.release(f"download:{task.file.file_id}")
+            else:
+                self._delete_unused_archives()
+
+    def _on_task_done(self, task: GbDownloadTask, path: Path) -> None:
+        """索引完成归档并绑定使用者路径，仅为当前任务保存历史，再清理无引用归档并通知队列变化。"""
+        md5 = (task.file.md5_checksum or "").lower()
+        if md5:
+            self._md5_to_path[md5] = path
+        self._bind_consumer_paths(task.file.file_id, path)
+        if self._tasks.get(task.file.file_id) is task:
+            self._persist_history(task.file, path, task.profile, task.game_id)
+        self._delete_unused_archives()
+        # 等待中的更新可直接导入缓存，不占用新的下载并发名额。
+        self.queue_changed.emit()
+
+    def _persist_history(
+        self,
+        file: GbModFile,
+        path: Path,
+        profile: GbModProfile,
+        game_id: str,
+    ) -> None:
+        """把一条完成的下载写进 queue.json（始终带版本号与全部字段）。"""
+        entry = {
+            "mod_id": getattr(profile, "mod_id", 0),
+            "file_id": file.file_id,
+            "md5": (file.md5_checksum or "").lower(),
+            "name": file.file_name,
+            "path": str(path),
+            "download_url": getattr(file, "download_url", ""),
+            "game_id": game_id,
+            "ts": datetime.now().isoformat(),
+        }
+        items = [e for e in self._read_queue_items() if not (isinstance(e, dict) and e.get("file_id") == file.file_id)]
+        items.insert(0, entry)
+        self._write_queue_items(items[:50])  # 历史记录上限 50
