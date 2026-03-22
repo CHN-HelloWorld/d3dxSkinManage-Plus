@@ -586,3 +586,144 @@ class GbDownloadManager(QObject):
             t._state = "done"
             t._run_finished.set()
             self._tasks[file_id] = t
+
+    # queue.json：唯一当前结构 {"schema_version": 1, "items": [...]}
+
+    @property
+    def _queue_file(self) -> Path:
+        """返回下载目录内保存任务历史的队列文件路径。"""
+        return self._base / "queue.json"
+
+    @classmethod
+    def _queue_entry_ok(cls, entry: object) -> bool:
+        """校验历史记录的必填字段及类型。
+
+        无校验和的来源允许 MD5 为空；路径、名称和游戏编号必须有效，
+        才能用于文件操作及所属游戏筛选。
+        """
+        if not isinstance(entry, dict):
+            return False
+        for key in ("mod_id", "file_id"):
+            value = entry.get(key)
+            if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                return False
+        if entry["file_id"] <= 0:
+            return False
+        for key in ("md5", "name", "path", "download_url", "game_id", "ts"):
+            value = entry.get(key)
+            if not isinstance(value, str):
+                return False
+            if key != "md5" and not value.strip():
+                return False
+        return True
+
+    def _read_queue_items(self) -> list[dict]:
+        """读取下载队列的 items 列表。
+
+        JSON 或根结构无效时，将队列文件重命名为带时间戳的 invalid 备份，
+        再创建空队列；已下载的压缩包保留并由缓存扫描识别。
+        schema_version 不限制读取，单项有效性由字段校验确定。
+        """
+        queue_file = self._queue_file
+        if not queue_file.exists():
+            return []
+        try:
+            data = json.loads(queue_file.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
+            self._backup_invalid_queue(f"无法解析: {e}")
+            return []
+        if not isinstance(data, dict):
+            self._backup_invalid_queue(f"根节点是 {type(data).__name__}，不是对象")
+            return []
+        version = data.get("schema_version")
+        if version != QUEUE_SCHEMA_VERSION:
+            logger.info(
+                "queue.json schema_version=%r 与本程序的 %d 不同，按「缺失即默认」照常读取",
+                version,
+                QUEUE_SCHEMA_VERSION,
+            )
+        items = data.get("items")
+        if not isinstance(items, list):
+            self._backup_invalid_queue(f"items 是 {type(items).__name__}，不是列表")
+            return []
+        return [
+            {**item, "path": resolve_stored_path(item["path"])} if self._queue_entry_ok(item) else item
+            for item in items
+        ]
+
+    def _write_queue_items(self, items: list[dict]) -> None:
+        """按当前版本写入队列记录，将有效路径转换为存储形式，写入失败时记录警告。"""
+        stored = [
+            {**item, "path": to_stored_path(item["path"])} if self._queue_entry_ok(item) else item for item in items
+        ]
+        payload = {"schema_version": QUEUE_SCHEMA_VERSION, "items": stored}
+        try:
+            self._queue_file.write_text(json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        except OSError as e:
+            logger.warning("queue.json 写回失败：%s", e)
+
+    def _backup_invalid_queue(self, reason: str) -> None:
+        """为无效队列选择不冲突的时间戳文件名并尝试改名备份，备份失败时记录原因。"""
+        stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        target = self._queue_file.with_name(f"queue.json.invalid-{stamp}")
+        seq = 1
+        while target.exists():
+            target = self._queue_file.with_name(f"queue.json.invalid-{stamp}-{seq}")
+            seq += 1
+        logger.error("queue.json 无效（%s），已备份为 %s 并从空队列起步", reason, target)
+        try:
+            os.replace(self._queue_file, target)
+        except OSError as e:
+            logger.warning("备份无效 queue.json 失败：%s", e)
+
+    def has_local_md5(self, md5: str) -> Path | None:
+        """返回指定 MD5 对应的本地完成文件，不存在时返回 None。
+
+        命中索引后再次确认文件存在；外部删除产生的失效索引须移除，以允许重新下载。
+        """
+        key = (md5 or "").lower()
+        path = self._md5_to_path.get(key)
+        if path is None:
+            return None
+        try:
+            if path.exists():
+                return path
+        except OSError:
+            pass
+        self._md5_to_path.pop(key, None)
+        return None
+
+    def refresh_local_index(self) -> None:
+        """重新扫描下载目录，同步本地文件索引并通知界面更新。
+
+        外部清理下载文件后调用，避免安装流程使用已失效的缓存路径。
+        """
+        self._scan_cache()
+        self.queue_changed.emit()
+
+    def get_task(self, file_id: int) -> GbDownloadTask | None:
+        """按在线文件编号返回当前任务，未登记时返回空值。"""
+        return self._tasks.get(file_id)
+
+    def retain(self, file_id: int, md5: str, *, owner: str, path: Path | None = None) -> None:
+        """登记下载、更新或安装对文件的占用；同一 owner 重复登记只更新元数据。"""
+        checksum = (md5 or "").lower()
+        if path is None:
+            path = self.has_local_md5(checksum) if checksum else None
+            task = self._tasks.get(file_id)
+            if path is None and task is not None:
+                path = task.archive_path
+            previous = self._consumers.get(owner)
+            if path is None and previous is not None and (previous.file_id, previous.md5) == (file_id, checksum):
+                path = previous.path
+        self._consumers[owner] = _DownloadConsumer(
+            file_id,
+            checksum,
+            Path(path).resolve() if path is not None else None,
+        )
+        self._delete_unused_archives()
+
+    def release(self, owner: str) -> None:
+        """释放一个消费者；最后一个占用释放后执行此前登记的删包请求。"""
+        self._consumers.pop(owner, None)
+        self._delete_unused_archives()
