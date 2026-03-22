@@ -170,3 +170,115 @@ class GbDownloadTask(QObject):
         self._spd_anchor_bytes = downloaded
         remain = total - downloaded
         self._eta_seconds = (remain / self._speed_bps) if (self._speed_bps > 1 and remain > 0) else -1.0
+
+    def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
+        """由管理器在调度前记录下载协程所属的事件循环。"""
+        self._loop = loop
+
+    def _abort_running(self) -> bool:
+        """请求取消正在等待的协程，返回是否已发送中断请求。
+
+        准备期间可能尚未进入数据接收循环，因此不能仅依赖循环内的标志检查。
+        """
+        loop, aio = self._loop, self._aio_task
+        if loop is None or aio is None or aio.done():
+            return False
+        try:
+            loop.call_soon_threadsafe(aio.cancel)
+            return True
+        except RuntimeError:
+            return False
+
+    def cancel(self) -> None:
+        """取消任务，并按协程状态清理下载分片。
+
+        排队或暂停中的任务没有活动协程，可立即修改状态并删除分片。
+        活动任务记录取消意图后中断 await，由协程退出时统一清理；
+        尚未开始执行的协程在入口检查取消标志。
+        """
+        self._cancelled = True
+        if self._state in ("queued", "paused"):
+            self._part_path().unlink(missing_ok=True)
+            self._set_state("canceled")
+            return
+        if self._state in TASK_RUNNING_STATES:
+            self._interrupt = "canceled"
+            self._abort_running()
+
+    def _part_path(self) -> Path:
+        """下载分片路径；完成校验后重命名为正式归档。"""
+        return self.archive_path.with_suffix(self.archive_path.suffix + ".part")
+
+    def pause(self) -> None:
+        """请求暂停。
+
+        准备和下载阶段都中断当前 await；即使服务器迟迟不返回下一块数据也能暂停。
+        已写入的分片随文件上下文关闭后保留；queued 时直接置 paused。
+        """
+        if self._state == "downloading":
+            self._pause_requested = True
+            self._interrupt = "paused"
+            self._abort_running()
+        elif self._state == "preparing":
+            self._interrupt = "paused"
+            self._abort_running()
+        elif self._state == "queued":
+            self._set_state("paused")
+
+    def resume(self) -> None:
+        """将暂停、失败或取消的任务重新入队，由管理器调度执行。"""
+        if self._state not in ("paused", "failed", "canceled"):
+            return
+        self._cancelled = False
+        self._pause_requested = False
+        self._interrupt = None
+        with self._run_lock:
+            self._run_started = False
+            self._run_finished.clear()
+        # 根据分片实际长度恢复进度，使界面与续传起点一致。
+        # 分片已被取消或校验失败流程删除时从零开始。
+        try:
+            self._last_downloaded = self._part_path().stat().st_size
+        except OSError:
+            self._last_downloaded = 0
+        if self._last_total <= 0:
+            self._last_total = self._expected_total()
+        self._set_state("queued")
+
+    def wait_finished(self, timeout: float = 3.0) -> bool:
+        """等待下载协程退出，仅供关闭流程等后台等待场景使用。
+
+        界面线程应请求异步清理，由协程完成文件删除；从未启动的任务视为已结束。
+        """
+        with self._run_lock:
+            if not self._run_started:
+                return True
+        return self._run_finished.wait(timeout)
+
+    @property
+    def is_running(self) -> bool:
+        """判断协程是否仍在执行或清理资源。"""
+        if self._state in TASK_RUNNING_STATES:
+            return True
+        with self._run_lock:
+            started = self._run_started
+        return started and not self._run_finished.is_set()
+
+    def request_cleanup(self, *, delete_product: bool) -> None:
+        """请求协程退出时清理分片，并可同时删除完成文件。
+
+        清理由文件所有者执行，避免主线程等待或在协程仍写入时提前删除。
+        """
+        self._cleanup_part = True
+        self._cleanup_product = delete_product
+
+    def _do_cleanup_files(self) -> None:
+        """执行文件清理请求，记录失败但不打断协程退出。"""
+        targets = [self._part_path()]
+        if self._cleanup_product:
+            targets.append(self.archive_path)
+        for p in targets:
+            try:
+                p.unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("清理下载文件失败：%s（%s）", p, e)
