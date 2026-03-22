@@ -282,3 +282,307 @@ class GbDownloadTask(QObject):
                 p.unlink(missing_ok=True)
             except OSError as e:
                 logger.warning("清理下载文件失败：%s（%s）", p, e)
+
+    def _expected_total(self) -> int:
+        """返回已知文件总长度，优先使用接口元数据，其次使用之前收到的总长度。
+
+        续传响应的 Content-Length 仅表示剩余内容长度，不能直接作为完整文件长度。
+        """
+        try:
+            size = int(getattr(self.file, "size_bytes", 0) or 0)
+        except (TypeError, ValueError):
+            size = 0
+        return size if size > 0 else max(self._last_total, 0)
+
+    async def _prime_resume(self, tmp: Path) -> tuple[int, hashlib._Hash]:
+        """检查分片并返回续传偏移与对应的 MD5 计算状态。
+
+        续传前重新读取已有分片以恢复增量哈希；分片为空、长度无效或无法读取时重新下载。
+        分块读取之间让出事件循环，保证处理大型分片时仍能响应暂停和取消。
+        """
+        fresh = hashlib.md5()
+        try:
+            size = tmp.stat().st_size
+        except OSError:
+            return 0, fresh
+        if size <= 0:
+            tmp.unlink(missing_ok=True)
+            return 0, fresh
+        total = self._expected_total()
+        if total and size >= total:
+            # 分片已达到或超过总长度但尚未通过校验，不能作为续传基础。
+            logger.info("残留分片(%s B)不小于总长(%s B)，改为整体重下", size, total)
+            tmp.unlink(missing_ok=True)
+            return 0, fresh
+        primed = hashlib.md5()
+        try:
+            with open(tmp, "rb") as f:
+                while True:
+                    block = f.read(1 << 20)
+                    if not block:
+                        break
+                    primed.update(block)
+                    await asyncio.sleep(0)
+        except OSError as e:
+            logger.warning("重算残留分片的 MD5 失败，改为整体重下：%s", e)
+            tmp.unlink(missing_ok=True)
+            return 0, fresh
+        return size, primed
+
+    def _resolve_range(self, resp: httpx.Response, want_from: int) -> tuple[int, int, bool]:
+        """根据响应头判断续传是否有效，返回偏移、总长度及是否丢弃分片。
+
+        仅接受状态码 206、匹配的 Content-Range 起点及一致的文件总长度。
+        服务端未按请求提供有效分段响应时重新下载，完成后仍执行 MD5 校验。
+        """
+        length = int(resp.headers.get("content-length", 0) or 0)
+        known = self._expected_total()
+        if want_from <= 0:
+            return 0, length or known, False
+        if resp.status_code != 206:
+            logger.info("服务端未接受断点续传（HTTP %s），改为整体重下", resp.status_code)
+            return 0, length or known, True
+        m = _CONTENT_RANGE.search(resp.headers.get("content-range", "") or "")
+        if m is None:
+            logger.warning("206 响应缺少可解析的 Content-Range，改为整体重下")
+            return 0, length or known, True
+        start = int(m.group(1))
+        full = 0 if m.group(3) == "*" else int(m.group(3))
+        if start != want_from:
+            logger.warning("Content-Range 起点 %s 与请求 %s 不符，改为整体重下", start, want_from)
+            return 0, full or known, True
+        total = full or (want_from + length if length else 0) or known
+        if known and total and total != known:
+            logger.warning("续传总长 %s 与 API 记录 %s 不符，改为整体重下", total, known)
+            return 0, known, True
+        return want_from, total, False
+
+    async def _run_async(self) -> None:
+        """保证同轮任务只执行一次下载，处理续传、中断和摘要校验，成功后将分片发布为完整归档。"""
+        with self._run_lock:
+            if self._run_started:
+                already_running = True
+            else:
+                self._run_started = True
+                already_running = False
+        if already_running:
+            while not self._run_finished.is_set():
+                await asyncio.sleep(0.01)
+            return
+        # 通过单次运行检查后才登记活动任务，避免重复协程覆盖任务引用，
+        # 使取消请求始终指向实际下载的协程。
+        self._aio_task = asyncio.current_task()
+        # 处理调度后、协程开始前收到的取消或暂停请求。
+        if self._cancelled:
+            self._part_path().unlink(missing_ok=True)
+            self._set_state("canceled")
+            self._aio_task = None
+            self._run_finished.set()
+            return
+        if self._state in ("paused", "canceled"):
+            self._aio_task = None
+            self._run_finished.set()
+            return
+        self._interrupt = None
+        self._set_state("preparing")
+        tmp = self._part_path()
+        try:
+            from src.utils.proxy import get_active_proxy_url
+
+            proxy = get_active_proxy_url()
+            self.archive_path.parent.mkdir(parents=True, exist_ok=True)
+            # 续传偏移及已处理分片内容的哈希状态；偏移为零时重新下载。
+            resume_from, md5 = await self._prime_resume(tmp)
+            headers = {"Range": f"bytes={resume_from}-"} if resume_from > 0 else None
+            interrupted: str | None = None  # "canceled" | "paused"——退出循环后据此收尾
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True, proxy=proxy) as client:
+                async with client.stream(
+                    "GET",
+                    self.file.download_url,
+                    headers=headers,
+                ) as resp:
+                    resp.raise_for_status()
+                    start, total, discard = self._resolve_range(resp, resume_from)
+                    if discard:
+                        md5 = hashlib.md5()
+                    downloaded = start
+                    # 续传时追加写入，否则截断无效分片后重新写入。
+                    self._set_state("downloading")
+                    self._emit_progress(downloaded, total)
+                    with open(tmp, "ab" if start > 0 else "wb") as f:
+                        async for chunk in resp.aiter_bytes(chunk_size=64 * 1024):
+                            if self._cancelled:
+                                interrupted = "canceled"
+                                break
+                            if self._pause_requested:
+                                self._pause_requested = False
+                                interrupted = "paused"
+                                break
+                            f.write(chunk)
+                            md5.update(chunk)
+                            downloaded += len(chunk)
+                            self._emit_progress(downloaded, total)
+            # 退出文件上下文后再删除，避免 Windows 文件占用错误。
+            if interrupted == "canceled":
+                # 取消时删除未完成分片，避免后续将其作为可安装文件使用。
+                tmp.unlink(missing_ok=True)
+                self._set_state("canceled")
+                return
+            if interrupted == "paused":
+                # 暂停保留分片，仅在本次运行中支持续传；启动扫描会清理之前的分片。
+                self._set_state("paused")
+                return
+            actual = md5.hexdigest()
+            expected = (self.file.md5_checksum or "").lower()
+            if expected and actual != expected:
+                # 校验失败后删除无效分片，防止下一次继续在损坏内容上续传。
+                tmp.unlink(missing_ok=True)
+                self._set_state("failed")
+                self.failed.emit(f"MD5 mismatch: {actual} != {expected}")
+                return
+            tmp.replace(self.archive_path)
+            self._set_state("done")
+            self.finished.emit(self.archive_path)
+        except asyncio.CancelledError:
+            # 根据已保存的中断意图区分暂停与取消，不将用户操作作为错误传播。
+            if self._interrupt == "paused":
+                self._set_state("paused")
+            else:
+                tmp.unlink(missing_ok=True)
+                self._set_state("canceled")
+        except Exception as exc:
+            logger.exception("Download failed")
+            self._set_state("failed")
+            self.failed.emit(str(exc))
+        finally:
+            self._interrupt = None
+            self._aio_task = None
+            # 在协程退出时执行已登记清理，避免界面线程等待。
+            if self._cleanup_part:
+                self._do_cleanup_files()
+            self._run_finished.set()
+
+
+@dataclass
+class _DownloadConsumer:
+    """记录归档消费者关联的文件编号、摘要及已解析路径，供引用保护和延后删除使用。"""
+
+    file_id: int
+    md5: str
+    path: Path | None
+
+
+class GbDownloadManager(QObject):
+    """管理下载任务、缓存归档、使用者引用和历史记录，并通过独立事件循环执行下载。"""
+
+    task_added = Signal(GbDownloadTask)
+    task_removed = Signal(int)
+    queue_changed = Signal()
+
+    def __init__(self, base_dir: Path | None = None, parent: QObject | None = None) -> None:
+        """索引现有归档、清理启动前残留分片、恢复展示记录，并建立下载事件循环。"""
+        super().__init__(parent)
+        self._base = Path(base_dir) if base_dir else get_gb_download_dir()
+        self._base.mkdir(parents=True, exist_ok=True)
+        self._tasks: dict[int, GbDownloadTask] = {}
+        self._md5_to_path: dict[str, Path] = {}
+        self._consumers: dict[str, _DownloadConsumer] = {}
+        self._pending_deletions: dict[Path, set[str]] = {}
+        self._removed_running_tasks: set[GbDownloadTask] = set()
+        # 加载持久化记录用于任务列表展示。
+        # 历史记录只恢复界面所需字段，不包含完整的在线详情和文件对象。
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._worker_thread: threading.Thread | None = None
+        self._scan_cache(clean_partials=True)
+        self._restore_history()
+        self._start_loop()
+
+    def shutdown(self) -> None:
+        """请求停止后台事件循环并最多等待线程两秒，不在此处等待活动下载完成。"""
+        if self._loop is not None:
+            try:
+                self._loop.call_soon_threadsafe(self._loop.stop)
+            except RuntimeError:
+                pass
+        if self._worker_thread is not None:
+            self._worker_thread.join(timeout=2)
+
+    def _start_loop(self) -> None:
+        """启动下载专用事件循环线程，构造阶段最多等待五秒以便后续提交任务。"""
+        ready = threading.Event()
+
+        def run():
+            """在线程中创建并运行下载事件循环，循环停止后关闭其资源。"""
+            loop = asyncio.new_event_loop()
+            # 将事件循环中未被调用方消费的异常交给本模块日志记录。
+            loop.set_exception_handler(self._on_loop_error)
+            self._loop = loop
+            asyncio.set_event_loop(loop)
+            ready.set()
+            try:
+                loop.run_forever()
+            finally:
+                loop.close()
+
+        self._worker_thread = threading.Thread(
+            target=run,
+            name="gb-download-loop",
+            daemon=True,
+        )
+        self._worker_thread.start()
+        # 等待事件循环就绪后再返回，使构造完成后提交的任务能够被调度。
+        ready.wait(timeout=5)
+
+    @staticmethod
+    def _on_loop_error(_loop, context: dict) -> None:
+        """记录下载事件循环中未被任务调用方处理的异常。"""
+        exc = context.get("exception")
+        msg = context.get("message") or "asyncio 未处理错误"
+        if exc is not None:
+            logger.error("下载 loop 异常：%s", msg, exc_info=exc)
+        else:
+            logger.error("下载 loop 异常：%s（context=%r）", msg, context)
+
+    def _scan_cache(self, *, clean_partials: bool = False) -> None:
+        """按文件名摘要重建完整归档索引，排除分片，并可在启动时清理遗留分片。"""
+        self._md5_to_path.clear()
+        for p in self._base.glob("*__*"):
+            name = p.name
+            # 未完成分片不属于已下载文件，不加入 MD5 路径索引。
+            # 启动时尚无活动下载，可清理之前运行留下的分片；任务上下文不支持跨进程续传。
+            if name.endswith(".part"):
+                if clean_partials:
+                    try:
+                        p.unlink()
+                        logger.debug("清理残留的未完成下载: %s", name)
+                    except OSError:
+                        pass
+                continue
+            md5, _, _ = name.partition("__")
+            if md5:
+                self._md5_to_path[md5.lower()] = p
+
+    def _restore_history(self) -> None:
+        """将下载队列中的有效历史记录恢复到任务列表。
+
+        历史记录用于展示及文件定位、链接复制、记录删除；重新下载仍创建新任务。
+        必填字段缺失或类型错误的记录直接跳过。
+        """
+        for entry in self._read_queue_items():
+            if not self._queue_entry_ok(entry):
+                logger.warning("queue.json 历史条目字段不合法，已丢弃：%r", entry)
+                continue
+            file_id = entry["file_id"]
+            if file_id in self._tasks:
+                continue
+            profile = _HistoryProfile(mod_id=entry["mod_id"], name=entry["name"])
+            file = _HistoryFile(
+                file_id=file_id,
+                file_name=entry["name"],
+                md5_checksum=entry["md5"],
+                download_url=entry["download_url"],
+            )
+            t = GbDownloadTask(profile, file, Path(entry["path"]), game_id=entry["game_id"])
+            t._state = "done"
+            t._run_finished.set()
+            self._tasks[file_id] = t
