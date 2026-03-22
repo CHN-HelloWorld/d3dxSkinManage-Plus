@@ -212,3 +212,178 @@ class ImageLoader(QObject):
         if size is None or size.isEmpty():
             return url, 0, 0, False
         return url, size.width(), size.height(), bool(crop_to_size)
+
+    def _cached_pixmap(self, key: _ImageKey, *, promote: bool) -> QPixmap | None:
+        """读取已浏览或预取缓存，按需提升预取条目，并在界面线程转换为可显示像素对象。"""
+        generation = self._memory_cache.generation
+        pixmap = self._memory_cache.get(key)
+        if pixmap is None:
+            pixmap = self._prefetch_cache.get(key)
+            if pixmap is not None and promote:
+                self._prefetch_cache.remove(key)
+                self._memory_cache.put(key, pixmap, expected_generation=generation)
+        return QPixmap.fromImage(pixmap) if isinstance(pixmap, QImage) else pixmap
+
+    def try_cached(
+        self,
+        url: str,
+        target,
+        *,
+        size: QSize | None = None,
+        crop_to_size: bool = False,
+    ) -> bool:
+        """立即恢复已完成的像素，不重新下载或排队。"""
+        with self._request_lock:
+            if self._shutting_down:
+                return False
+            pixmap = self._cached_pixmap(self._image_key(url, size, crop_to_size), promote=True)
+            if pixmap is None:
+                return False
+            self.cancel_for(target)
+            try:
+                target.setPixmap(pixmap)
+            except RuntimeError:
+                return False
+            return True
+
+    def load(
+        self,
+        url: str,
+        target,
+        *,
+        size: QSize | None = None,
+        placeholder: QPixmap | None = None,
+        crop_to_size: bool = False,
+    ) -> None:
+        """撤销控件旧请求，优先使用缓存；未命中时设置占位图并登记具有独立身份的共享加载请求。"""
+        target_id = id(target)
+        loader_ref = weakref.ref(self)
+
+        def _target_collected(ref) -> None:
+            """控件被回收时撤销仍对应同一弱引用的请求，避免误删标识复用后的新请求。"""
+            loader = loader_ref()
+            if loader is not None:
+                with loader._request_lock:
+                    current = loader._inflight.get(target_id)
+                    if current is not None and current.target_ref is ref:
+                        loader._retire_request(current)
+
+        with self._request_lock:
+            if self._shutting_down:
+                return
+            # 先撤销旧请求，避免其排队结果满足新的同 URL 请求。
+            self.cancel_for(target)
+            if self.try_cached(url, target, size=size, crop_to_size=crop_to_size):
+                return
+            if placeholder is not None:
+                target.setPixmap(placeholder)
+            if self._loop is None or self._loop.is_closed():
+                return
+            key = self._image_key(url, size, crop_to_size)
+            work = self._work_for(key, size)
+            request = _ImageRequest(target_id, weakref.ref(target, _target_collected), work)
+            self._inflight[target_id] = request
+            work.requests[target_id] = request
+            self._dispatch()
+
+    def prefetch(
+        self,
+        url: str,
+        *,
+        size: QSize | None = None,
+        crop_to_size: bool = False,
+    ) -> bool:
+        """无控件时预取像素；有界队列已满则返回 False。"""
+        with self._request_lock:
+            if (
+                self._shutting_down
+                or self._loop is None
+                or self._loop.is_closed()
+                or not image_cache_budget.prefetch_allowed
+            ):
+                return False
+            key = self._image_key(url, size, crop_to_size)
+            if self._cached_pixmap(key, promote=False) is not None:
+                return True
+            work = self._works.get(key)
+            if work is None or not work.prefetch:
+                pending = sum(item.prefetch for item in self._works.values())
+                if pending >= _MAX_PENDING_PREFETCH:
+                    return False
+            if work is None:
+                work = self._work_for(key, size)
+            work.prefetch = True
+            self._dispatch()
+            return True
+
+    def cancel_prefetch(
+        self,
+        url: str,
+        *,
+        size: QSize | None = None,
+        crop_to_size: bool = False,
+    ) -> None:
+        """撤销预取需求，保留仍有可见消费者的工作。"""
+        with self._request_lock:
+            work = self._works.get(self._image_key(url, size, crop_to_size))
+            if work is not None:
+                work.prefetch = False
+                if not work.requests:
+                    self._discard_work(work)
+
+    def _work_for(self, key: _ImageKey, size: QSize | None) -> _ImageWork:
+        """复用同键工作或创建排队工作，创建时复制目标尺寸并捕获两类缓存代次。"""
+        work = self._works.get(key)
+        if work is None:
+            work = _ImageWork(key, QSize(size) if size is not None else None)
+            work.cache_generations = self._memory_cache.generation, self._prefetch_cache.generation
+            self._works[key] = work
+            self._queued[key] = work
+        return work
+
+    def _dispatch(self) -> None:
+        """在请求锁内调用，对获取、转换和投递统一限制并发。"""
+        while not self._shutting_down and len(self._active) < _MAX_ACTIVE_IMAGES:
+            work = next((item for item in self._queued.values() if item.requests), None)
+            if work is None:
+                if not image_cache_budget.prefetch_allowed:
+                    # 丢弃排队的预取，可见请求仍可重新发起。
+                    for queued in list(self._queued.values()):
+                        self._queued.pop(queued.key, None)
+                        self._works.pop(queued.key, None)
+                    return
+                if sum(not item.requests for item in self._active) >= _MAX_ACTIVE_PREFETCH:
+                    return
+                work = next(iter(self._queued.values()), None)
+            if work is None:
+                return
+            self._queued.pop(work.key)
+            self._active.add(work)
+            coroutine = self._cache.fetch(work.key[0])
+            try:
+                future = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+            except RuntimeError:
+                coroutine.close()
+                self._finish_work(work)
+                continue
+            work.future = future
+            loader_ref = weakref.ref(self)
+
+            def fetched(done, item=work, reference=loader_ref):
+                """下载完成后通过弱引用转交工作结果，加载器已回收时不再访问其状态。"""
+                loader = reference()
+                if loader is not None:
+                    loader._on_fetch_done(done, item)
+
+            future.add_done_callback(fetched)
+
+    def cancel_for(self, target) -> None:
+        """在请求锁保护下撤销指定控件当前的图像请求。"""
+        with self._request_lock:
+            request = self._inflight.get(id(target))
+            if request is not None:
+                self._retire_request(request)
+
+    def _is_current(self, work: _ImageWork) -> bool:
+        """确认加载器未关闭且该键仍指向同一工作对象，防止旧工作覆盖新请求。"""
+        return not self._shutting_down and self._works.get(work.key) is work
