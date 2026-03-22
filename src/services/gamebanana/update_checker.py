@@ -281,3 +281,226 @@ class ModUpdateChecker(QObject):
             run.finished = True
             self._running = False
             self.finished.emit(counts)
+
+    def start(self, jobs, ignored_map, *, force: bool) -> bool:
+        """拒绝重入检查，通过共享调度器或独立线程启动新轮次，启动失败也进入统一结算。"""
+        if self._running:
+            logger.warning("ModUpdateChecker 已在运行，忽略重复 start")
+            return False
+        jobs = list(jobs)
+        ignored_map = dict(ignored_map or {})
+        run = self._begin_run(jobs)
+        if self._submit is not None:
+            # 所有共享客户端调用使用同一个长期事件循环，避免连接池跨循环复用已关闭连接。
+            try:
+                future = self._submit(lambda: self._run_all(jobs, ignored_map, force, _run=run))
+                run.future = future
+            except Exception as e:
+                logger.error("ModUpdateChecker 提交到共享 loop 失败: %s", e)
+                self._event.emit(run, "error", str(e) or type(e).__name__)
+                return True
+
+            def _on_submit_done(f) -> None:
+                """将共享调度器的完成、取消或异常结果转入携带轮次身份的界面事件。"""
+                # factory 尚未开始就被取消/提交层异常也必须收尾。所有路径共用 GUI
+                # 线程的单次终态入口，旧 Future 的 callback 不能清掉新一轮的 busy。
+                try:
+                    counts = f.result()
+                except (asyncio.CancelledError, FutureCancelledError):
+                    self._event.emit(run, "cancelled", None)
+                except Exception as e:
+                    logger.error("ModUpdateChecker 运行异常: %s", e)
+                    self._event.emit(run, "error", str(e) or type(e).__name__)
+                else:
+                    self._event.emit(run, "finished", counts)
+
+            future.add_done_callback(_on_submit_done)
+            return True
+        # 没有共享调度器时创建独立事件循环。
+        # 此路径只能使用独立客户端，不能跨循环复用商店的连接池。
+        self._thread = threading.Thread(
+            target=self._thread_main,
+            args=(run, jobs, ignored_map, force),
+            name="ModUpdateChecker",
+            daemon=True,
+        )
+        try:
+            self._thread.start()
+        except Exception as exc:
+            logger.error("ModUpdateChecker 启动线程失败: %s", exc)
+            self._event.emit(run, "error", str(exc) or type(exc).__name__)
+        return True
+
+    def cancel(self) -> bool:
+        """使当前轮次的排队结果失效，并向所属事件循环请求取消；没有活动轮次时返回假。"""
+        run = self._run
+        if run is None or run.finished:
+            return False
+        run.cancelled.set()
+        # 立即使排队结果失效并解除界面忙碌状态，网络协程在所属循环中取消。
+        self._event.emit(run, "cancelled", None)
+        if run.future is not None and run.future.cancel():
+            return True
+        if run.loop is not None and run.task is not None and not run.task.done():
+            try:
+                run.loop.call_soon_threadsafe(run.task.cancel)
+            except RuntimeError:
+                pass  # 独立事件循环自行结束，无需关闭共享客户端。
+        return True
+
+    def _thread_main(self, run, jobs, ignored_map, force: bool) -> None:
+        """在独立线程的事件循环执行检查，将取消或运行异常转发到界面结算入口。"""
+        try:
+            asyncio.run(self._run_all(jobs, ignored_map, force, _run=run))
+        except asyncio.CancelledError:
+            self._event.emit(run, "cancelled", None)
+        except Exception as e:
+            logger.error("ModUpdateChecker 运行异常: %s", e)
+            self._event.emit(run, "error", str(e) or type(e).__name__)
+
+    async def _run_all(self, jobs, ignored_map, force: bool, *, _run: _CheckRun | None = None) -> dict:
+        """绑定本轮所在的循环与任务，执行批量检查并统一发送完成、取消或错误信号。"""
+        run = _run if _run is not None else self._begin_run(jobs)
+        run.loop = asyncio.get_running_loop()
+        run.task = asyncio.current_task()
+        try:
+            self._raise_if_cancelled(run)
+            counts = await self._check_all(run, jobs, ignored_map, force)
+        except asyncio.CancelledError:
+            self._event.emit(run, "cancelled", None)
+            raise
+        except Exception as exc:
+            self._event.emit(run, "error", str(exc) or type(exc).__name__)
+            raise
+        self._event.emit(run, "finished", counts)
+        return counts
+
+    @staticmethod
+    def _raise_if_cancelled(run: _CheckRun) -> None:
+        """检查本轮取消标记，取消时通过异步取消异常退出调用链。"""
+        if run.cancelled.is_set():
+            raise asyncio.CancelledError
+
+    def _release_shared_request(self, task: asyncio.Task) -> None:
+        """释放已结束的共享日志请求引用，并消费非取消异常以避免未处理任务警告。"""
+        self._shared_requests.discard(task)
+        if not task.cancelled():
+            task.exception()  # 取消检查后共享请求仍可完成，异常也必须被取走。
+
+    async def _check_all(self, run: _CheckRun, jobs, ignored_map, force: bool) -> dict:
+        """按在线资源合并本地副本，批量获取文件证据，再以有限并发完成各组比较与日志查询。"""
+        total = len(jobs)
+        counts = {"found": 0, "up_to_date": 0, "failed": 0}
+        groups: dict[int, list[tuple[str, GbInstallMetadata]]] = {}
+        for mid, gb_meta in jobs:
+            groups.setdefault(gb_meta.mod_id, []).append((mid, gb_meta))
+        files_by_mod: dict[int, list[GbModFile]] = {}
+        request_failure: str | None = None
+
+        if groups:
+            try:
+                files_by_mod = await self._client.bulk_update_files(list(groups), force=force)
+            except UpdateCheckError as exc:
+                files_by_mod = exc.partial_files
+                request_failure = str(exc) or type(exc).__name__
+            except Exception as exc:
+                request_failure = str(exc) or type(exc).__name__
+            if request_failure is not None:
+                logger.warning("Mod 更新批量检测中止后续请求：%s", request_failure)
+            logger.info(
+                "Mod 更新批量文件检查：%d 个本地 Mod，%d 个 GameBanana ID，取得 %d 个文件列表",
+                total,
+                len(groups),
+                len(files_by_mod),
+            )
+            self._raise_if_cancelled(run)
+            self._event.emit(run, "progress", (0, total))
+
+        def complete(mid, info=None, error=None):
+            """取消检查通过后累计单项结果，并发出绑定本地 Mod 标识的结果事件。"""
+            self._raise_if_cancelled(run)
+            if error is not None:
+                counts["failed"] += 1
+                self._event.emit(run, "result", (mid, "failed", error))
+            elif info is not None:
+                counts["found"] += 1
+                info.local_mod_id = mid
+                self._event.emit(run, "result", (mid, "found", info))
+            else:
+                counts["up_to_date"] += 1
+                self._event.emit(run, "result", (mid, "up_to_date", None))
+
+        def blocks_requests(exc):
+            """判断当前故障是否应阻止后续网络请求，包括更新限流、服务端故障和连接错误。"""
+            return (
+                isinstance(exc, (UpdateCheckError, httpx.NetworkError, httpx.TimeoutException))
+                or isinstance(exc, httpx.HTTPStatusError)
+                and (exc.response.status_code == 429 or exc.response.status_code >= 500)
+            )
+
+        async def run_group(mod_id, local_jobs):
+            """复用同一在线资源的文件证据，按需补充下载页和更新日志，再分别结算本地副本。"""
+            nonlocal request_failure
+            try:
+                self._raise_if_cancelled(run)
+                files = files_by_mod.get(mod_id)
+                if files is None:
+                    if request_failure is not None:
+                        raise UpdateCheckError(request_failure)
+                    # 仅对成功批次中的缺失项请求 DownloadPage，不额外查询详情。
+                    files = await self._client.get_download_page(GbModel.MOD, mod_id, update_check=True)
+                results = [
+                    (mid, gb_meta, detect_update(gb_meta, None, files, [], ignored_map.get(mid, set())))
+                    for mid, gb_meta in local_jobs
+                ]
+                updates = []
+                if request_failure is None and any(info is not None for _, _, info in results):
+                    try:
+                        self._raise_if_cancelled(run)
+                        # 日志请求可能与商店共用 cache inflight；取消本轮只能退出等待，
+                        # 不能取消共享 Future。只保留已开始的至多两个日志请求收尾。
+                        request = asyncio.create_task(
+                            self._client.get_updates(
+                                GbModel.MOD,
+                                mod_id,
+                                update_check=True,
+                                force=force,
+                            )
+                        )
+                        self._shared_requests.add(request)
+                        request.add_done_callback(self._release_shared_request)
+                        updates = await asyncio.shield(request)
+                        updates = sorted(updates, key=lambda entry: entry.date_added_ts, reverse=True)
+                    except Exception as exc:
+                        if blocks_requests(exc):
+                            request_failure = str(exc) or type(exc).__name__
+                        logger.debug("Mod %s 更新日志获取失败：%s", mod_id, exc)
+                for mid, gb_meta, info in results:
+                    if info is not None:
+                        info.changelog = [entry for entry in updates if entry.date_added_ts > gb_meta.file_ts]
+                    complete(mid, info)
+            except Exception as exc:
+                message = str(exc) or type(exc).__name__
+                if blocks_requests(exc):
+                    request_failure = message
+                for mid, _ in local_jobs:
+                    complete(mid, error=message)
+
+        # 只启动固定数量的 worker，避免每个本地副本各排一个网络任务。
+        pending = iter(groups.items())
+
+        async def worker():
+            """从共享分组迭代器领取并顺序处理任务，每组开始前检查本轮是否取消。"""
+            for mod_id, local_jobs in pending:
+                self._raise_if_cancelled(run)
+                await run_group(mod_id, local_jobs)
+
+        workers = [asyncio.create_task(worker()) for _ in range(min(self._DETAIL_CONCURRENCY, len(groups)))]
+        try:
+            await asyncio.gather(*workers)
+        finally:
+            for task in workers:
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(*workers, return_exceptions=True)
+        return counts
