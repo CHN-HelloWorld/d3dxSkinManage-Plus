@@ -387,3 +387,188 @@ class ImageLoader(QObject):
     def _is_current(self, work: _ImageWork) -> bool:
         """确认加载器未关闭且该键仍指向同一工作对象，防止旧工作覆盖新请求。"""
         return not self._shutting_down and self._works.get(work.key) is work
+
+    def _retire_request(self, request: _ImageRequest) -> None:
+        """仅撤销仍在注册表中的请求；没有接收者且无需预取时使共享工作失效。"""
+        if self._inflight.get(request.target_id) is not request:
+            return
+        self._inflight.pop(request.target_id)
+        work = request.work
+        work.requests.pop(request.target_id, None)
+        if not work.requests and not work.prefetch:
+            self._discard_work(work)
+
+    def _discard_work(self, work: _ImageWork) -> None:
+        """移除失效工作并尝试取消图像处理；共享下载继续收尾，完成前保留其并发占用。"""
+        if self._works.get(work.key) is work:
+            self._works.pop(work.key)
+            self._queued.pop(work.key, None)
+        # 原始图像请求可能共享 Future；等待其完成，
+        # 取消一个协程可能同时取消其他消费者的下载。
+        # 已过期但仍活动的工作在回调完成前继续占用并发名额。
+        if work.scaling and work.future is not None:
+            work.future.cancel()
+        self._dispatch()
+
+    def _finish_work(self, work: _ImageWork) -> None:
+        """清除本项仍有效的接收者与工作引用，释放并发名额并继续调度队列。"""
+        if self._works.get(work.key) is work:
+            self._works.pop(work.key)
+            self._queued.pop(work.key, None)
+        for request in work.requests.values():
+            if self._inflight.get(request.target_id) is request:
+                self._inflight.pop(request.target_id)
+        work.requests.clear()
+        work.future = None
+        self._active.discard(work)
+        self._dispatch()
+
+    def _on_fetch_done(self, future: Future, work: _ImageWork) -> None:
+        """在锁内核对下载工作身份，成功后交给图像线程池处理，失败时转发空结果。"""
+        with self._request_lock:
+            if not self._is_current(work):
+                self._finish_work(work)
+                return
+            try:
+                path = future.result()
+            except BaseException as exc:
+                if not _is_shutdown_noise(exc):
+                    logger.warning("ImageLoader fetch failed: %s (%s)", work.key[0], exc)
+                self._emit_finished(work, None)
+                return
+            try:
+                transformed = self._executor.submit(
+                    _transform_pixmap,
+                    str(path),
+                    work.size,
+                    work.key[3],
+                )
+            except RuntimeError:
+                self._finish_work(work)
+                return
+            work.future = transformed
+            work.scaling = True
+            loader_ref = weakref.ref(self)
+
+            def scaled(done):
+                """通过加载器弱引用转交图像处理完成结果，避免后台回调持有已关闭的加载器。"""
+                loader = loader_ref()
+                if loader is not None:
+                    loader._on_scale_done(done, work)
+
+            transformed.add_done_callback(scaled)
+
+    def _on_scale_done(self, future: Future, work: _ImageWork) -> None:
+        """接收仍有效的图像处理结果，记录非关闭异常并将结果排队送回界面线程。"""
+        with self._request_lock:
+            if not self._is_current(work):
+                self._finish_work(work)
+                return
+            try:
+                pixmap = future.result()
+            except BaseException as exc:
+                if not _is_shutdown_noise(exc):
+                    logger.warning("ImageLoader scale failed: %s (%s)", work.key[0], exc)
+                pixmap = None
+            self._emit_finished(work, pixmap)
+
+    def _emit_finished(self, work: _ImageWork, pixmap: QImage | None) -> None:
+        """发送携带工作身份的图像结果；信号对象已销毁时直接释放工作状态。"""
+        try:
+            self._signals.finished.emit(work, work.key[0], pixmap)
+        except RuntimeError:
+            self._finish_work(work)
+
+    def _on_finished(self, work: _ImageWork, url: str, pixmap: QImage | QPixmap | None) -> None:
+        """在界面线程再次验证工作与接收者身份，按原缓存代次入库并更新仍绑定本请求的控件。"""
+        with self._request_lock:
+            # 仅在界面投递时确认请求仍有效，避免取消或重新绑定前排队的结果被使用。
+
+            if not self._is_current(work):
+                self._finish_work(work)
+                return
+            requests = list(work.requests.values())
+            valid = pixmap is not None and not pixmap.isNull()
+            if valid:
+                cache = self._memory_cache if requests else self._prefetch_cache
+                generation = work.cache_generations[0 if requests else 1]
+                image = pixmap if isinstance(pixmap, QImage) else pixmap.toImage()
+                cache.put(work.key, image, expected_generation=generation)
+                pixmap = QPixmap.fromImage(image)
+            # 新请求不能加入正在投递的工作项；每次调用控件前重新检查接收者，
+            # 因为 setPixmap 的重写方法可能同步重新绑定其他消费者。
+
+            self._works.pop(work.key)
+            if valid:
+                for request in requests:
+                    if self._inflight.get(request.target_id) is not request:
+                        continue
+                    self._inflight.pop(request.target_id)
+                    work.requests.pop(request.target_id, None)
+                    target = request.target_ref()
+                    if target is not None:
+                        try:
+                            target.setPixmap(pixmap)
+                        except RuntimeError:
+                            pass
+            self._finish_work(work)
+
+    def _shutdown(self) -> None:
+        """幂等撤销请求并清空缓存，请求后台资源退出；网络线程最多等待两秒，图像执行器不阻塞等待。"""
+        with self._request_lock:
+            if self._shutting_down:
+                return
+            self._shutting_down = True
+            futures = []
+            for work in self._active:
+                if work.future is not None:
+                    futures.append(work.future)
+                    work.future = None
+                work.requests.clear()
+            self._inflight.clear()
+            self._works.clear()
+            self._queued.clear()
+            self._active.clear()
+            self._memory_cache.clear()
+            self._prefetch_cache.clear()
+            image_cache_budget.unregister(self._memory_cache)
+            image_cache_budget.unregister(self._prefetch_cache)
+        # 先断开界面更新信号，避免关闭期间的异步结果访问已销毁控件。
+        try:
+            self._signals.finished.disconnect()
+        except (TypeError, RuntimeError):
+            # 信号未连接或对象已销毁时无需处理。
+            pass
+        # 取消在途 Future，使请求在事件循环关闭前完成取消处理。
+        for fut in futures:
+            try:
+                fut.cancel()
+            except Exception:
+                pass
+        # 先停止网络事件循环并等待任务取消。
+        try:
+            if self._loop is not None and not self._loop.is_closed():
+                self._loop.call_soon_threadsafe(self._loop.stop)
+        except Exception:
+            pass
+        try:
+            if self._loop_thread is not None:
+                self._loop_thread.join(timeout=2)
+        except Exception:
+            pass
+        # 再关闭图像处理执行器。
+        try:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        except Exception:
+            pass
+
+    def shutdown(self) -> None:
+        """终止加载任务和事件循环，避免关闭应用后残留未完成的异步工作。"""
+        self._shutdown()
+
+    def __del__(self) -> None:
+        """析构时尽力触发幂等关闭，避免资源清理异常逃出析构函数。"""
+        try:
+            self._shutdown()
+        except Exception:
+            pass
