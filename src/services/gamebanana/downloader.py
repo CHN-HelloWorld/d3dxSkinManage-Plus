@@ -900,3 +900,125 @@ class GbDownloadManager(QObject):
         items = [e for e in self._read_queue_items() if not (isinstance(e, dict) and e.get("file_id") == file.file_id)]
         items.insert(0, entry)
         self._write_queue_items(items[:50])  # 历史记录上限 50
+
+    def _drop_from_history(self, file_id: int) -> None:
+        """从持久化队列移除指定文件的记录，仅在内容确有变化时写回。"""
+        items = self._read_queue_items()
+        kept = [e for e in items if not (isinstance(e, dict) and e.get("file_id") == file_id)]
+        if len(kept) == len(items):
+            return
+        self._write_queue_items(kept)
+
+    def cancel(self, file_id: int) -> None:
+        """向已登记的指定下载任务转发取消请求。"""
+        task = self._tasks.get(file_id)
+        if task is not None:
+            task.cancel()
+
+    def pause(self, file_id: int) -> None:
+        """向已登记的指定任务请求暂停，由任务保留可续传分片。"""
+        task = self._tasks.get(file_id)
+        if task is not None:
+            task.pause()
+
+    def resume(self, file_id: int) -> None:
+        """恢复指定任务的运行状态并重新提交下载，任务不存在时忽略。"""
+        task = self._tasks.get(file_id)
+        if task is None:
+            return
+        task.resume()
+        self._schedule(task)
+
+    def retry(self, file_id: int) -> None:
+        """仅对失败、取消或暂停的任务重置状态并重新调度。"""
+        task = self._tasks.get(file_id)
+        if task and task.state in ("failed", "canceled", "paused"):
+            task.resume()
+            self._schedule(task)
+
+    def delete_task(self, file_id: int, *, delete_file: bool = False) -> None:
+        """删除任务，并按需请求清理下载文件。
+
+        活动协程负责退出时清理文件，界面线程不等待其结束。
+        """
+        task = self._tasks.pop(file_id, None)
+        if task is None:
+            self.release(f"download:{file_id}")
+            return
+        if task.is_running:
+            # 任务删除后不再保留下载分片，完成文件是否删除由参数决定。
+            if task.state not in TASK_TERMINAL_STATES:
+                self._removed_running_tasks.add(task)
+            task.request_cleanup(delete_product=False)
+            task.cancel()
+        else:
+            # 没有活动协程时直接清理对应文件。
+            try:
+                task._part_path().unlink(missing_ok=True)
+            except OSError as e:
+                logger.warning("delete archive 失败: %s", e)
+        if delete_file:
+            self.delete_archive_when_unused(task.archive_path)
+        self.release(f"download:{file_id}")
+        self._drop_from_history(file_id)
+        self.task_removed.emit(file_id)
+        self.queue_changed.emit()
+
+    def clear_completed(self, *, game_id: str | None = None) -> None:
+        """清理已结束的任务记录；指定 game_id 时仅处理该游戏，与面板过滤范围一致。"""
+        done = [
+            fid
+            for fid, t in self._tasks.items()
+            if t.state in TASK_TERMINAL_STATES and (game_id is None or t.game_id == game_id)
+        ]
+        for fid in done:
+            del self._tasks[fid]
+            self.release(f"download:{fid}")
+            self._drop_from_history(fid)
+            self.task_removed.emit(fid)
+        self.queue_changed.emit()
+
+    def clear_all(self, *, delete_files: bool = False, game_id: str | None = None) -> None:
+        """取消并清除任务，delete_files 控制是否同时删除文件。
+
+        指定 game_id 时只处理该游戏，保持操作范围与下载面板一致。
+        """
+        for fid in [fid for fid, t in self._tasks.items() if game_id is None or t.game_id == game_id]:
+            self.delete_task(fid, delete_file=delete_files)
+
+    def active(self, *, game_id: str | None = None) -> list[GbDownloadTask]:
+        """返回当前任务；game_id 为 None 时不筛选，否则精确匹配所属游戏。"""
+        tasks = list(self._tasks.values())
+        if game_id is not None:
+            tasks = [t for t in tasks if t.game_id == game_id]
+        return tasks
+
+
+# 历史任务仅恢复界面展示和文件操作所需的字段。
+
+
+class _HistoryProfile:
+    """供历史任务展示使用的详情字段。"""
+
+    def __init__(self, *, mod_id: int, name: str) -> None:
+        """恢复下载历史展示需要的资源编号与名称。"""
+        self.mod_id = mod_id
+        self.name = name
+
+
+class _HistoryFile:
+    """供历史任务展示使用的文件字段。"""
+
+    def __init__(
+        self,
+        *,
+        file_id: int,
+        file_name: str,
+        md5_checksum: str,
+        download_url: str,
+    ) -> None:
+        """恢复历史下载的文件身份、名称、摘要和地址，供文件定位与记录展示使用。"""
+        self.file_id = file_id
+        self.file_name = file_name
+        self.md5_checksum = md5_checksum
+        self.download_url = download_url
