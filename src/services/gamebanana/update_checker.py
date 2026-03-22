@@ -131,3 +131,153 @@ class UpdateInfo:
             local_name=str(d.get("local_name") or ""),
             local_preview=resolve_stored_path(str(d.get("local_preview") or "")),
         )
+
+
+def detect_update(
+    gb_meta: GbInstallMetadata,
+    profile: GbModProfile | None,
+    files: list[GbModFile],
+    updates: list[GbModUpdateEntry],
+    ignored_file_ids,
+) -> UpdateInfo | None:
+    """按文件时间、内容指纹和忽略规则判断更新，无有效更新时返回 None。"""
+    if not files:
+        return None
+    ignored = set(ignored_file_ids or set())
+    cur_md5 = (gb_meta.file_md5 or "").lower()
+    candidates = [
+        f
+        for f in files
+        if f.date_added_ts > gb_meta.file_ts and (f.md5_checksum or "").lower() != cur_md5 and f.file_id not in ignored
+    ]
+    if not candidates:
+        return None
+    candidates = sorted(candidates, key=lambda f: f.date_added_ts, reverse=True)
+    latest = candidates[0]
+    # 缺少安装时间和指纹时，若本地版本号与最新文件版本一致则视为已更新，
+    # 避免仅有来源 URL 的记录反复提示同一版本。
+    baseline_unknown = gb_meta.file_ts == 0 and not (gb_meta.file_md5 or "")
+    if baseline_unknown and (gb_meta.version or "") and latest.version == gb_meta.version:
+        return None
+    changelog = sorted(
+        [u for u in (updates or []) if u.date_added_ts > gb_meta.file_ts],
+        key=lambda u: u.date_added_ts,
+        reverse=True,
+    )
+    page_url = (getattr(profile, "page_url", "") or gb_meta.page_url) if profile else gb_meta.page_url
+    return UpdateInfo(
+        local_mod_id="",
+        gb_mod_id=gb_meta.mod_id,
+        current_version=gb_meta.version,
+        current_file_ts=gb_meta.file_ts,
+        latest_file=latest,
+        latest_version=latest.version or "",
+        candidate_files=candidates,
+        changelog=changelog,
+        page_url=page_url,
+    )
+
+
+def pick_default_file(candidate_files: list[GbModFile], local_original_name: str) -> GbModFile:
+    """使用 rapidfuzz 选择与本地文件名最接近的更新文件，供界面默认选中。"""
+    if not candidate_files:
+        raise ValueError("candidate_files is empty")
+    hay = (local_original_name or "").lower()
+    if not hay:
+        return candidate_files[0]
+
+    def score(f: GbModFile) -> float:
+        """按文件名包含关系和模糊匹配计算相似度，返回用于默认候选排序的零到一分数。"""
+        cl = (f.file_name or "").lower()
+        if cl and cl in hay or (hay and hay in cl):
+            return 1.0
+        return max(fuzz.partial_ratio(cl, hay), fuzz.token_set_ratio(cl, hay)) / 100.0
+
+    return max(candidate_files, key=score)
+
+
+@dataclass
+class _CheckRun:
+    """保存单轮更新检查的任务、取消标记、计数与异步句柄，用于隔离迟到结果。"""
+
+    jobs: list
+    cancelled: threading.Event = field(default_factory=threading.Event)
+    counts: dict[str, int] = field(default_factory=lambda: {"found": 0, "up_to_date": 0, "failed": 0})
+    completed_ids: set[str] = field(default_factory=set)
+    finished: bool = False
+    future: object = None
+    loop: asyncio.AbstractEventLoop | None = None
+    task: asyncio.Task | None = None
+
+
+class ModUpdateChecker(QObject):
+    """批量文件级检测；相同远端 ID 共用数据，详情请求有界且只按需发送。"""
+
+    _DETAIL_CONCURRENCY = 2
+
+    progress = Signal(int, int)  # 参数：已完成数量、总数。
+    mod_update_found = Signal(str, object)  # 参数：本地 Mod 标识、更新信息。
+    mod_up_to_date = Signal(str)  # 参数：本地 Mod 标识。
+    mod_check_failed = Signal(str, str)  # 参数：本地 Mod 标识、错误信息。
+    finished = Signal(dict)  # 结果包含发现更新、已是最新和失败三类计数。
+    _event = Signal(object, str, object)  # 参数：运行标识、事件和数据；在此对象所属线程投递。
+
+    def __init__(self, client, parent: QObject | None = None, *, submit=None) -> None:
+        """保存在线客户端与可选共享调度器，建立单轮检查状态及跨线程结果分发入口。"""
+        super().__init__(parent)
+        self._client = client
+        # 可注入异步提交函数，返回 concurrent.futures.Future。
+        # 注入后由商店提供的长期事件循环执行检查，
+        # 使共用的 httpx 客户端及连接池始终属于同一循环。
+        self._submit = submit
+        self._thread: threading.Thread | None = None
+        # 通过显式状态防止重复启动检查。
+        self._running = False
+        self._run: _CheckRun | None = None
+        self._shared_requests: set[asyncio.Task] = set()
+        self._event.connect(self._dispatch_event)
+
+    def _begin_run(self, jobs) -> _CheckRun:
+        """复制本轮任务并登记运行状态，使后续结果携带可核对的轮次身份。"""
+        run = _CheckRun(list(jobs))
+        self._run = run
+        self._running = True
+        return run
+
+    @Slot(object, str, object)
+    def _dispatch_event(self, run: _CheckRun, event: str, payload) -> None:
+        """在界面线程核对轮次和取消状态，去重单项结果并仅发布一次本轮终态。"""
+        # 不能只在 worker 发信号前检查取消：那时的信号可能已经排进 Qt 队列，
+        # 用户取消并开始新一轮后才送达。轮次身份必须在 GUI 线程实际分发时再次校验。
+        if run is not self._run or run.finished:
+            return
+        if run.cancelled.is_set() and event != "cancelled":
+            return
+        if event == "result":
+            mid, kind, value = payload
+            if mid in run.completed_ids:
+                return
+            run.completed_ids.add(mid)
+            run.counts[kind] += 1
+            if kind == "found":
+                self.mod_update_found.emit(mid, value)
+            elif kind == "failed":
+                self.mod_check_failed.emit(mid, value)
+            else:
+                self.mod_up_to_date.emit(mid)
+            if run is self._run and not run.finished:
+                self.progress.emit(len(run.completed_ids), len(run.jobs))
+        elif event == "progress":
+            self.progress.emit(*payload)
+        elif event == "error":
+            for mid, _ in run.jobs:
+                self._dispatch_event(run, "result", (mid, "failed", payload))
+            self._dispatch_event(run, "finished", None)
+        elif event in {"finished", "cancelled"}:
+            counts = dict(payload if payload is not None else run.counts)
+            if event == "cancelled":
+                run.cancelled.set()
+                counts["cancelled"] = True
+            run.finished = True
+            self._running = False
+            self.finished.emit(counts)
