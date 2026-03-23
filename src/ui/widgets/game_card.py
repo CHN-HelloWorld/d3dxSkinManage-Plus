@@ -229,3 +229,110 @@ class GameCard(QFrame):
             return
         self._draft = on
         self._update_status()
+
+    @property
+    def game_id(self) -> str:
+        """返回绑定游戏的标识，未绑定时返回空字符串。"""
+        return self._game.id if self._game else ""
+
+    # resize (卡片大小滑块)
+    @staticmethod
+    def _preview_height_for(height: int) -> int:
+        # 缩小卡片时仍为两种名称保留空间。
+        """在预留双行文字区域后，根据卡片高度计算至少一像素的预览高度。"""
+        text_height = 2 * (int(theme.font("size_secondary")) + 8)
+        return max(1, min(int(height * 0.62), height - text_height - 14))
+
+    def resize_card(self, w: int, h: int) -> None:
+        """更新卡片及预览区尺寸，重新省略名称并复用原图生成适合新尺寸的预览。"""
+        if (w, h) == (self._card_width, self._card_height):
+            return
+        self._card_width, self._card_height = w, h
+        self._preview_height = self._preview_height_for(h)
+        self.setFixedSize(w, h)
+        self._preview_container.setFixedHeight(self._preview_height)
+        self._preview_label.setFixedHeight(self._preview_height)
+        self._active_badge.move(w - 48, 6)
+        if self._game:
+            self._elide(self._name_label, self._game.name or tr("未命名"), w - 24)
+            self._elide(self._en_label, self._game.name_en or "", w - 12)
+            if self._cached_pixmap and not self._cached_pixmap.isNull():
+                # 滑块高频调用：smooth=False 走快速缩放省 CPU
+                self._preview_label.setPixmap(
+                    fill_blur_rounded(
+                        self._cached_pixmap, w - 8, self._preview_height, radius=theme.radius("card"), smooth=False
+                    )
+                )
+
+    # 悬停拖动柄。
+    def enterEvent(self, e) -> None:
+        """鼠标进入时显示排序抓手并刷新悬停样式。"""
+        self._grip.show()
+        self._grip.raise_()
+        self._hover = True
+        self._update_status()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        """鼠标离开时隐藏排序抓手并恢复非悬停样式。"""
+        self._grip.hide()
+        self._hover = False
+        self._update_status()
+        super().leaveEvent(e)
+
+    # mouse: 单击 / 双击 / 长按拖拽
+    def mousePressEvent(self, e: QMouseEvent) -> None:
+        """左键按下有效游戏卡片时记录位置并启动长按判定，准备区分点击和排序拖动。"""
+        if e.button() == Qt.MouseButton.LeftButton and self._game:
+            self._press_pos = e.pos()
+            self._maybe_click = True
+            self._dragging = False
+            self._press_timer.start(self._LONG_PRESS_MS)
+            e.accept()
+            return
+        super().mousePressEvent(e)
+
+    def _on_long_press(self) -> None:
+        # 草稿没有持久编号，不参与拖动排序。
+        """在仍保持按下且非草稿时取消单击候选并启动游戏排序拖动。"""
+        if self._maybe_click and self._game and not self._dragging and not self._draft:
+            self._maybe_click = False
+            self._start_drag()
+
+    def _start_drag(self) -> None:
+        """创建携带游戏标识和卡片快照的移动拖放，在内部拖动期间暂时调整管理员拖放处理。"""
+        if not self._game:
+            return
+        self._dragging = True
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setText(self._game.id)
+        mime.setData(GAME_ID_MIME, self._game.id.encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.setPixmap(self.grab())
+        drag.setHotSpot(self._press_pos)
+        # 提权进程的内部拖动需临时恢复 Qt OLE 目标，结束后再恢复文件拖放通道。
+        with win_dnd_admin.suspend_for_internal_drag(self):
+            drag.exec(Qt.DropAction.MoveAction)
+        self._dragging = False
+
+    def mouseReleaseEvent(self, e: QMouseEvent) -> None:
+        """停止长按计时，在有效单击候选释放时发出游戏点击信号并清空按下状态。"""
+        self._press_timer.stop()
+        if e.button() == Qt.MouseButton.LeftButton and self._maybe_click and not self._dragging and self._game:
+            self._maybe_click = False
+            self.clicked.emit(self._game.id)
+            e.accept()
+            return
+        self._maybe_click = False
+        super().mouseReleaseEvent(e)
+
+    def mouseDoubleClickEvent(self, e: QMouseEvent) -> None:
+        """取消长按和单击候选，在有效游戏上双击左键时发出游戏双击信号。"""
+        self._press_timer.stop()
+        self._maybe_click = False
+        if e.button() == Qt.MouseButton.LeftButton and self._game:
+            self.double_clicked.emit(self._game.id)
+            e.accept()
+            return
+        super().mouseDoubleClickEvent(e)
