@@ -1120,3 +1120,143 @@ class GamePage(QWidget):
             if c.game_id == gid:
                 c.set_game(g)
                 break
+
+    def _on_card_image_dropped(self, game_id: str, path: str) -> None:
+        """外部图片拖到游戏卡片 → 持久化为该游戏预览图并就地刷新。
+
+        与详情栏的「更换预览图」共用同一套持久化（_persist_preview）；无需先选中该卡片，
+        直接对落点游戏生效，快速换图。
+        """
+        g = self._svc.get_game(game_id)
+        if not g:
+            return
+        stored = self._persist_preview(game_id, path)
+        if not stored:
+            return
+        g.preview = stored
+        try:
+            self._svc.save_game(g, migrate_resources=False)
+        except OSError as exc:
+            if game_id == self._selected_id:
+                self._detail.sync_preview_path(stored, persisted=False)
+            QMessageBox.warning(self, tr("保存游戏设置失败"), str(exc))
+            return
+        # 若该游戏正被详情栏选中，回填暂存路径，避免「取消选中再选回」走空分支（同 _on_preview_changed）
+        if game_id == self._selected_id:
+            self._detail.sync_preview_path(stored)
+        for c in self._cards:
+            if c.game_id == game_id:
+                c.set_game(g)
+                break
+
+    def _on_delete(self, game_id: str) -> None:
+        """确认删除后清理游戏关联数据与配置，通知宿主更新激活状态，并报告未完成的文件清理。"""
+        if game_id == self._selected_id and self.has_unsaved_changes():
+            if not self.confirm_pending_changes():
+                return
+        g = self._svc.get_game(game_id)
+        if not g:
+            return
+        if not self._confirm_delete(g):
+            return
+        was_active = game_id == self._svc.current_game_id
+        from src.core.mod_manager import ModManager
+
+        stats = ModManager().purge_game_data(game_id, self._svc.get_resource_dir(game_id))
+        errors = stats.get("errors") or []
+        self._svc.delete_game(game_id)
+        self._selected_id = ""
+        self.reload()
+        self.games_changed.emit()
+        if was_active:
+            self.game_changed.emit("")  # 当前游戏失效 → 主窗重算门禁
+        if errors:
+            from src.ui.dialogs.game_delete import GameDeleteReportDialog
+
+            GameDeleteReportDialog(g.name, stats, self).exec()
+
+    def _confirm_delete(self, g: GameConfig) -> bool:
+        """统一确认游戏删除范围，明确展示配置与数据的处理后果后再执行。"""
+        from functools import partial
+
+        from src.core.mod_manager import ModManager
+        from src.ui.dialogs.game_delete import GameDeleteDialog, format_data_size
+
+        manager = ModManager()
+        dialog = GameDeleteDialog(
+            g.name, None, self, scan=partial(manager.describe_game_data, g.id, self._svc.get_resource_dir(g.id))
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        info = dialog.info
+        lib = info.get("library_dir") or ""
+        has_data = bool(lib) or info.get("mods", 0) or info.get("deployed", 0)
+        if not has_data:
+            return True  # 空游戏没什么可丢的，不必再拦一道
+        return (
+            QMessageBox.question(
+                self,
+                tr("再次确认"),
+                tr(
+                    "确定永久删除「{name}」及其数据？资源目录占用 {size}。此操作无法撤销。",
+                    name=g.name,
+                    size=format_data_size(info.get("library_size", 0)),
+                ),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+
+    # 右键菜单。
+    def _on_grid_context_menu(self, global_pos, card) -> None:
+        """卡片视图右键：落在游戏卡上 → 启用（未激活时）/删除；落在空白 → 添加/切换视图。
+
+        参数顺序须与 _CardGrid.contextMenuEvent 的回调约定一致：(global_pos, card)。
+        """
+        if card is not None and card.game_id:
+            self._show_game_context_menu(card.game_id, global_pos)
+        else:
+            self._show_blank_context_menu(global_pos)
+
+    def _on_table_context_menu(self, pos) -> None:
+        """列表视图右键：落在游戏行 → 启用/删除；落在空行 → 添加/切换视图。"""
+        item = self._table.itemAt(pos)
+        global_pos = self._table.viewport().mapToGlobal(pos)
+        gid = ""
+        if item is not None:
+            id_item = self._table.item(item.row(), 0)
+            gid = id_item.data(Qt.ItemDataRole.UserRole) if id_item else ""
+        if gid:
+            self._show_game_context_menu(gid, global_pos)
+        else:
+            self._show_blank_context_menu(global_pos)
+
+    def _show_game_context_menu(self, game_id: str, global_pos) -> None:
+        """游戏卡/行右键菜单：启用此游戏（未激活时）+ 删除。"""
+        g = self._svc.get_game(game_id)
+        if not g:
+            return
+        menu = QMenu(self)
+        is_active = self._svc.has_active_game() and game_id == self._svc.current_game_id
+        if not is_active:
+            act_enable = menu.addAction(icons.get_icon("status/enabled"), tr("启用此游戏"))
+            act_enable.triggered.connect(lambda: self._on_activate(game_id))
+            menu.addSeparator()
+        act_del = menu.addAction(icons.get_icon("actions/remove", "danger"), tr("删除"))
+        act_del.triggered.connect(lambda: self._on_delete(game_id))
+        menu.exec(global_pos)
+
+    def _show_blank_context_menu(self, global_pos) -> None:
+        """空白处右键菜单：添加游戏 + 卡片/列表视图切换。"""
+        menu = QMenu(self)
+        act_add = menu.addAction(icons.get_icon("actions/add"), tr("添加游戏"))
+        act_add.triggered.connect(self._on_add)
+        menu.addSeparator()
+        if self._view_mode == "grid":
+            act_view = menu.addAction(icons.get_icon("actions/list-view"), tr("切换到列表视图"))
+            act_view.triggered.connect(lambda: self._set_view("list"))
+        else:
+            act_view = menu.addAction(icons.get_icon("actions/card-view"), tr("切换到卡片视图"))
+            act_view.triggered.connect(lambda: self._set_view("grid"))
+        menu.exec(global_pos)
