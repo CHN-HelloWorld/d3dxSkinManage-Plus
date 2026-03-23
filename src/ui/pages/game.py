@@ -387,3 +387,73 @@ class GamePage(QWidget):
         self._splitter.setSizes([720, _dw])
         self._splitter.splitterMoved.connect(self._on_splitter_moved)
         root.addWidget(self._splitter, 1)
+
+    # 数据与渲染。
+    def _on_splitter_moved(self, _pos: int, _index: int) -> None:
+        """保存详情栏宽度，供下次启动恢复。"""
+        sizes = self._splitter.sizes()
+        if len(sizes) >= 2 and sizes[1] > 0:
+            Config.instance().set("ui.game_detail_width", int(sizes[1]))
+
+    def _apply_table_style(self) -> None:
+        """列表视图表格内联底色（随主题）。抽出以便换肤时重新着色。"""
+        self._table.setStyleSheet(
+            f"QTableWidget {{ background-color: {theme.surface_color('bg.card', 'list')};"
+            f" alternate-background-color: {theme.surface_color('bg.subtle', 'list')}; }}"
+        )
+
+    def _apply_empty_state_style(self) -> None:
+        """刷新空库提示文字颜色，并请求重绘主题相关的装饰图。"""
+        self._empty_tip.setStyleSheet(f"color: {theme.color('text.primary')}; font-size: 18px; font-weight: 600;")
+        self._empty_art.update()
+
+    def retheme(self) -> None:
+        """主题变化时刷新表格及卡片的内联颜色。
+
+        这些颜色不随全局样式自动变化，须显式更新或重新创建相关控件。
+        """
+        try:
+            self._apply_table_style()
+            self._apply_empty_state_style()
+            self.reload()
+        except Exception:
+            pass
+
+    def reload(self) -> None:
+        """重建游戏卡片和列表，恢复仍存在的选择或未保存草稿，并同步空库视图。"""
+        games = self._svc.games
+        self._display_ids = [g.id for g in games]
+        self._render_cards(games)
+        self._render_table(games)
+        self._sync_view_page()
+        if self._selected_id and self._selected_id in self._display_ids:
+            self._select(self._selected_id)
+        elif not self._new_pending:
+            self._selected_id = ""
+            self._detail.set_game(None)
+
+    _EMPTY_PAGE_INDEX = 2
+
+    def _sync_view_page(self) -> None:
+        """无游戏且没有新建草稿时显示引导页，否则显示当前视图。"""
+        empty = not self._svc.games and not self._new_pending
+        if empty:
+            self._views.setCurrentIndex(self._EMPTY_PAGE_INDEX)
+        else:
+            self._views.setCurrentIndex(0 if self._view_mode == "grid" else 1)
+        self._detail.setVisible(not empty)
+        for control in (self._search, self._view_combo, self._add_btn):
+            control.setVisible(not empty)
+        for control in (self._size_slider, self._size_label):
+            control.setVisible(not empty and self._view_mode == "grid")
+        self._page_title.setStyleSheet(
+            "font-size: 24px; font-weight: 600;" if empty else "font-size: 18px; font-weight: bold;"
+        )
+        margins = (30, 26, 30, 23) if empty else (14, 10, 14, 10)
+        self._toolbar.setContentsMargins(*margins)
+
+    def _calc_cols(self) -> int:
+        """根据视口宽度与卡片缩放计算网格列数，视口尚未就绪时使用初始列数。"""
+        vpw = self._scroll.viewport().width()
+        cell = int(self.GRID_BASE_W * self._scale) + 12
+        return max(1, vpw // cell) if vpw > 40 else 4
