@@ -608,3 +608,94 @@ class GamePage(QWidget):
         game = self._svc.get_game(self._selected_id)
         is_active = self._selected_id == self._svc.current_game_id and self._svc.has_active_game()
         self._detail.set_game(game, is_active=is_active)
+
+    # 选择状态。
+    def _select(self, game_id: str) -> None:
+        """确认当前未保存修改后切换所选游戏，退出草稿并同步详情和卡片选中状态。"""
+        # 点击详情栏之外的游戏卡/列表行会离开当前编辑对象：有修改时先询问保存。
+        if self.has_unsaved_changes() and not self.confirm_pending_changes():
+            return
+        if self._new_pending:
+            self._exit_draft(silent=True)
+        self._selected_id = game_id
+        g = self._svc.get_game(game_id)
+        is_active = game_id == self._svc.current_game_id and self._svc.has_active_game()
+        self._detail.set_game(g, is_active=is_active)
+        for c in self._cards:
+            c.set_selected(c.game_id == game_id)
+
+    def _on_row_clicked(self, row: int, _col: int) -> None:
+        """将列表行选择映射到游戏标识，点击当前草稿行时继续保留草稿编辑。"""
+        item = self._table.item(row, 0)
+        if item:
+            gid = item.data(Qt.ItemDataRole.UserRole)
+            if self._new_pending and not gid:
+                return  # 点击草稿自身时保持编辑状态。
+            self._select(gid)
+
+    def _on_row_double(self, row: int, _col: int) -> None:
+        """将有效列表行的双击交给对应游戏的激活切换流程。"""
+        item = self._table.item(row, 0)
+        if item:
+            self._on_activate(item.data(Qt.ItemDataRole.UserRole))
+
+    def _deselect(self) -> None:
+        """点击空白区域 → 预览/详情栏回到未选中空状态。"""
+        if self.has_unsaved_changes() and not self.confirm_pending_changes():
+            return
+        if self._new_pending:
+            self._exit_draft(silent=True)
+            return
+        if not self._selected_id:
+            return
+        self._selected_id = ""
+        self._detail.set_game(None)
+        for c in self._cards:
+            c.set_selected(False)
+        self._table.clearSelection()
+
+    def eventFilter(self, obj, event):
+        """处理列表空白点击和卡片视口尺寸变化，延后重排以避免布局事件递归。"""
+        from PySide6.QtCore import QEvent
+
+        # 安装过滤器时控件可能尚未全部初始化，先检查引用以免虚函数回调访问不存在的属性。
+        tbl = getattr(self, "_table", None)
+        scr = getattr(self, "_scroll", None)
+        if tbl is not None and obj is tbl.viewport() and event.type() == QEvent.Type.MouseButtonPress:
+            if tbl.itemAt(event.pos()) is None:
+                self._deselect()
+        elif (
+            scr is not None
+            and obj is scr.viewport()
+            and event.type() == QEvent.Type.Resize
+            and self._view_mode == "grid"
+        ):
+            # 尺寸变化时延迟重排，避免同步重排再次触发尺寸事件。
+            self._reflow_timer.start()
+        return super().eventFilter(obj, event)
+
+    def _reflow_if_cols_changed(self) -> None:
+        """仅当列数因 viewport 宽度变化而改变时才重排（拖动详情栏分隔条等场景）。"""
+        if self._view_mode != "grid" or not self._cards:
+            return
+        new_cols = self._calc_cols()
+        if new_cols != self._cur_cols:
+            self._reflow(animated=True)
+
+    # 游戏增删改查与激活。
+    def _on_add(self, _checked: bool = False) -> None:
+        """处理现有未保存修改后建立新游戏草稿，显示占位卡片并在列表模式下滚动至草稿行。"""
+        if self.has_unsaved_changes() and not self.confirm_pending_changes():
+            return
+        # 先退出已有草稿，再显示新草稿及确认、退出操作；确认保存后才写入数据。
+        if self._new_pending:
+            # 创建新草稿前先处理已有草稿，未保存内容按退出流程确认。
+            if not self._exit_draft():
+                return
+        self._new_pending = True
+        self._selected_id = ""
+        self.reload()  # 渲染末尾虚线草稿卡
+        self._detail.set_game(GameConfig(), is_active=False, draft=True)
+        # 列表视图下滚动到草稿行（末行）并选中，卡片视图靠 reload 的草稿卡呈现
+        if self._view_mode == "list" and self._table.rowCount() > 0:
+            self._table.scrollToBottom()
