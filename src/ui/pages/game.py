@@ -1260,3 +1260,127 @@ class GamePage(QWidget):
             act_view = menu.addAction(icons.get_icon("actions/card-view"), tr("切换到卡片视图"))
             act_view.triggered.connect(lambda: self._set_view("grid"))
         menu.exec(global_pos)
+
+    def _on_activate(self, game_id: str) -> None:
+        """确认未保存修改后切换游戏激活状态；草稿需先保存，再次激活当前游戏则取消激活。"""
+        if self.has_unsaved_changes() and not self.confirm_pending_changes():
+            return
+        if not game_id:
+            # 未保存的新游戏：先存再激活
+            if not self._new_pending:
+                return
+            fields = self._detail.collect()
+            if not fields["name"]:
+                QMessageBox.information(self, tr("提示"), tr("请先填写游戏名称再启用。"))
+                return
+            self._on_save(fields)
+            game_id = self._selected_id
+        if not game_id:
+            return
+        # 再次激活当前游戏会取消激活，使依赖游戏上下文的页面恢复未激活状态。
+        if self._svc.has_active_game() and game_id == self._svc.current_game_id:
+            self._svc.current_game_id = ""
+            for c in self._cards:
+                c.set_active(False)
+            self._select(game_id)  # 仍选中、详情可见，但非激活态
+            self.game_changed.emit("")  # 通知主窗重算门禁（锁住总览/画廊/商店）
+            return
+        self._svc.current_game_id = game_id
+        self._select(game_id)
+        for c in self._cards:
+            c.set_active(c.game_id == game_id)
+        self.game_changed.emit(game_id)
+
+    # 视图、筛选与缩放。
+    def _set_view(self, mode: str) -> None:
+        """规范化并保存卡片或列表模式，同步选择控件，进入卡片模式时重排布局。"""
+        if mode not in ("grid", "list"):
+            mode = "grid"
+        self._view_mode = mode
+        self._sync_view_page()
+        # 保存视图模式。
+        try:
+            Config.instance().set("ui.game_view_mode", mode)
+        except Exception:
+            pass
+        # 恢复/程序改动时同步下拉框，且避免反复触发 _set_view。
+        idx = self._view_combo.findData(mode)
+        if idx >= 0 and self._view_combo.currentIndex() != idx:
+            self._view_combo.blockSignals(True)
+            self._view_combo.setCurrentIndex(idx)
+            self._view_combo.blockSignals(False)
+        if mode == "grid":
+            self._reflow()
+
+    # 保存和恢复列宽。
+    def _restore_col_widths(self) -> None:
+        """从配置恢复各列宽度，无保存值时采用默认比例。"""
+        widths = Config.instance().get("ui.game_list_col_widths", None)
+        if not isinstance(widths, list) or len(widths) != 3:
+            return
+        self._restoring_col_widths = True
+        try:
+            for i, w in enumerate(widths):
+                try:
+                    self._table.setColumnWidth(i, max(60, int(w)))
+                except (TypeError, ValueError):
+                    pass
+        finally:
+            self._restoring_col_widths = False
+
+    def _on_col_resized(self, _index: int, _old: int, _new: int) -> None:
+        """保存用户调整后的三列宽度，跳过程序恢复引发的尺寸事件。"""
+        if getattr(self, "_restoring_col_widths", False):
+            return
+        widths = [self._table.columnWidth(i) for i in range(3)]
+        if all(w > 0 for w in widths):
+            Config.instance().set("ui.game_list_col_widths", widths)
+
+    def _apply_filter(self) -> None:
+        """按游戏名称和英文名称过滤卡片，空查询显示全部卡片。"""
+        q = self._search.text().strip().lower()
+        for c in self._cards:
+            g = self._svc.get_game(c.game_id)
+            visible = (not q) or bool(g and (q in g.name.lower() or q in g.name_en.lower()))
+            c.setVisible(visible)
+
+    def _on_scale(self, val: int) -> None:
+        """立即应用卡片缩放并重排网格，延后持久化滑块值以减少连续写盘。"""
+        self._scale = val / 100.0
+        cw = int(self.GRID_BASE_W * self._scale)
+        ch = int(self.GRID_BASE_H * self._scale)
+        for c in self._cards:
+            c.resize_card(cw, ch)
+        self._reflow()
+        self._scale_persist.start()  # 防抖后持久化缩放值
+
+    def _persist_scale(self) -> None:
+        """防抖后持久化游戏卡片缩放百分比。"""
+        Config.instance().set("ui.game_card_scale", int(round(self._scale * 100)))
+
+    # 拖放排序。
+    def _reorder_drop(self, drag_id: str, pos) -> None:
+        """按拖放位置重排并保存游戏顺序，搜索过滤期间拒绝排序以避免位置歧义。"""
+        if self._search.text().strip():
+            return  # 搜索过滤时不排序，避免错位
+        if drag_id not in self._display_ids:
+            return
+        target = len(self._display_ids)
+        # 卡片周围半个网格间距也计入拖动目标，卡片间隙归属最近项；所有卡片之外视为末尾。
+        pad = self._grid_container.grid.spacing() // 2
+        for i, cid in enumerate(self._display_ids):
+            card = next((c for c in self._cards if c.game_id == cid), None)
+            if not card or not card.isVisible():
+                continue
+            if card.geometry().adjusted(-pad, -pad, pad, pad).contains(pos):
+                target = i
+                break
+        cur = self._display_ids.index(drag_id)
+        ids = list(self._display_ids)
+        ids.pop(cur)
+        if target > cur:
+            target -= 1
+        ids.insert(min(max(target, 0), len(ids)), drag_id)
+        self._svc.reorder_games(ids)
+        self.reload()
+        self.games_changed.emit()
