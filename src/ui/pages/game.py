@@ -457,3 +457,154 @@ class GamePage(QWidget):
         vpw = self._scroll.viewport().width()
         cell = int(self.GRID_BASE_W * self._scale) + 12
         return max(1, vpw // cell) if vpw > 40 else 4
+
+    def _render_cards(self, games) -> None:
+        """释放旧卡片并按当前顺序创建游戏卡片，恢复激活和选择状态，必要时在末尾添加草稿卡。"""
+        for c in self._cards:
+            c.setParent(None)
+            c.deleteLater()
+        self._cards = []
+        while self._grid_container.grid.count():
+            it = self._grid_container.grid.takeAt(0)
+            w = it.widget()
+            if w:
+                w.setParent(None)
+        cols = self._calc_cols()
+        self._cur_cols = cols
+        cw = int(self.GRID_BASE_W * self._scale)
+        ch = int(self.GRID_BASE_H * self._scale)
+        active = self._svc.current_game_id if self._svc.has_active_game() else ""
+        self._draft_card = None
+        for i, g in enumerate(games):
+            card = GameCard(g, card_width=cw, card_height=ch)
+            card.set_active(g.id == active)
+            card.set_selected(g.id == self._selected_id)
+            card.clicked.connect(self._select)
+            card.double_clicked.connect(self._on_activate)
+            self._cards.append(card)
+            self._grid_container.grid.addWidget(card, i // cols, i % cols)
+        # 在末尾追加选中的草稿卡片；草稿没有游戏编号，不允许拖动或启用。
+        if self._new_pending:
+            draft = GameCard(GameConfig(name=tr("新游戏")), card_width=cw, card_height=ch)
+            draft.set_draft(True)
+            draft.set_selected(True)
+            self._cards.append(draft)
+            self._draft_card = draft
+            n = len(games)
+            self._grid_container.grid.addWidget(draft, n // cols, n % cols)
+        self._apply_filter()
+
+    def _render_table(self, games) -> None:
+        """重建游戏名称、英文名和启动路径列表，未保存草稿使用无游戏标识的末行。"""
+        n = len(games)
+        # 列表末尾追加草稿占位行。
+        self._table.setRowCount(n + (1 if self._new_pending else 0))
+        for i, g in enumerate(games):
+            name_item = QTableWidgetItem(g.name)
+            name_item.setData(Qt.ItemDataRole.UserRole, g.id)
+            self._table.setItem(i, 0, name_item)
+            self._table.setItem(i, 1, QTableWidgetItem(g.name_en))
+            self._table.setItem(i, 2, QTableWidgetItem(g.exe_path))
+        if self._new_pending:
+            from PySide6.QtGui import QColor, QFont
+
+            accent = QColor(theme.color("accent"))
+            font = QFont()
+            font.setItalic(True)
+            labels = [tr("＋ 新游戏（未确认）"), "", ""]
+            for col, txt in enumerate(labels):
+                it = QTableWidgetItem(txt)
+                it.setData(Qt.ItemDataRole.UserRole, "")  # 空 id 标记草稿行
+                it.setForeground(accent)
+                it.setFont(font)
+                self._table.setItem(n, col, it)
+            self._table.selectRow(n)
+
+    def _reflow(self, animated: bool = False) -> None:
+        """按显示顺序和当前列数重新放置卡片，保留末尾草稿并可从原位置播放重排动画。"""
+        if not self._cards:
+            return
+        cols = self._calc_cols()
+        self._cur_cols = cols
+        old_pos = {c: c.pos() for c in self._cards} if animated else {}
+        for c in self._cards:
+            self._grid_container.grid.removeWidget(c)
+        ordered: list = []
+        for i, cid in enumerate(self._display_ids):
+            card = next((c for c in self._cards if c.game_id == cid), None)
+            if card:
+                self._grid_container.grid.addWidget(card, i // cols, i % cols)
+                ordered.append(card)
+        # 草稿未加入显示编号列表，单独放在末尾。
+        if self._draft_card is not None:
+            n = len(ordered)
+            self._grid_container.grid.addWidget(self._draft_card, n // cols, n % cols)
+            ordered.append(self._draft_card)
+        if animated and anim.is_enabled():
+            # 列数变化时先由布局计算卡片目标坐标，再从当前位置执行平滑位移动画。
+            self._grid_container.grid.activate()
+            for c in ordered:
+                old_p = old_pos.get(c)
+                new_p = c.pos()
+                if old_p is not None and old_p != new_p:
+                    c.move(old_p)
+                    anim.animate_move(c, new_p)
+
+    def resizeEvent(self, e) -> None:
+        """卡片模式下仅在列数变化时重排，普通宽度变化由布局系统处理。"""
+        super().resizeEvent(e)
+        if self._view_mode == "grid" and self._calc_cols() != self._cur_cols:
+            # 仅列数变化时重排；同列数的宽度变化由布局处理，避免逐像素移除和添加控件。
+            self._reflow(animated=True)
+
+    # 未保存配置守卫
+    def has_unsaved_changes(self) -> bool:
+        """详情栏当前是否有尚未保存的游戏配置。"""
+        return bool(self._detail.has_unsaved_changes())
+
+    def confirm_pending_changes(self) -> bool:
+        """离开当前游戏详情前询问保存。
+
+        返回 True 表示可以继续原操作；False 表示用户取消或保存失败，应留在当前界面。
+        """
+        if not self.has_unsaved_changes():
+            return True
+        if self._prompting_unsaved:
+            return False
+
+        fields = self._detail.collect()
+        game_name = fields.get("name") or tr("当前游戏")
+        self._prompting_unsaved = True
+        try:
+            answer = QMessageBox.question(
+                self,
+                tr("游戏配置未保存"),
+                tr("游戏「{game_name}」的配置尚未保存。\n是否现在保存？", game_name=game_name),
+                (
+                    QMessageBox.StandardButton.Save
+                    | QMessageBox.StandardButton.Discard
+                    | QMessageBox.StandardButton.Cancel
+                ),
+                QMessageBox.StandardButton.Save,
+            )
+        finally:
+            self._prompting_unsaved = False
+
+        if answer == QMessageBox.StandardButton.Save:
+            return self._on_save(fields)
+        if answer == QMessageBox.StandardButton.Discard:
+            self._discard_pending_changes()
+            return True
+        return False
+
+    def _discard_pending_changes(self) -> None:
+        """放弃详情栏修改并恢复最近一次已保存内容。"""
+        if self._new_pending:
+            self._exit_draft(silent=True)
+            return
+        if not self._selected_id:
+            self._detail.set_game(None)
+            return
+        game = self._svc.get_game(self._selected_id)
+        is_active = self._selected_id == self._svc.current_game_id and self._svc.has_active_game()
+        self._detail.set_game(game, is_active=is_active)
