@@ -699,3 +699,150 @@ class GamePage(QWidget):
         # 列表视图下滚动到草稿行（末行）并选中，卡片视图靠 reload 的草稿卡呈现
         if self._view_mode == "list" and self._table.rowCount() > 0:
             self._table.scrollToBottom()
+
+    def _on_draft_exit(self) -> None:
+        """尝试退出草稿，已有输入时先确认是否放弃。"""
+        self._exit_draft()
+
+    def _exit_draft(self, silent: bool = False) -> bool:
+        """退出并丢弃草稿，成功返回 True，取消退出返回 False。
+
+        已有输入时先确认；silent 用于保存成功后的草稿清理，直接退出。
+        """
+        if not self._new_pending:
+            return True
+        if not silent and self._detail.has_unsaved_input():
+            ok = QMessageBox.question(
+                self,
+                tr("放弃新游戏"),
+                tr("尚未确认添加，填写的信息将不会保存。\n确定退出吗？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ok != QMessageBox.StandardButton.Yes:
+                return False
+        self._new_pending = False
+        self._selected_id = ""
+        self.reload()  # 移除草稿卡/草稿行
+        self._detail.set_game(None)  # 详情栏回空状态
+        self._table.clearSelection()
+        return True
+
+    @staticmethod
+    def _effective_deploy_dir(game: GameConfig | None) -> Path | None:
+        """按主窗口规则读取用户显式配置的部署目录，不从加载器路径推导。"""
+        if game is None:
+            return None
+        if (game.mods_path or "").strip():
+            return Path(game.mods_path.strip())
+        return None
+
+    @staticmethod
+    def _path_key(path: Path) -> str:
+        """按绝对路径与平台大小写规则生成比较键，不解析符号链接。"""
+        return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+    def _confirm_migoto_path_cleared(
+        self,
+        old_game: GameConfig | None,
+        new_game: GameConfig,
+    ) -> bool:
+        """清空加载器路径前说明对变体记录的影响。
+
+        该路径用于定位用户 INI 和隐式命名空间。确认后停用相关记录，
+        取消时仅恢复此项配置，保留其他字段的编辑结果。
+        """
+        old_path = (old_game.migoto_path or "").strip() if old_game else ""
+        if not old_path or (new_game.migoto_path or "").strip():
+            return True
+        if not self._deploy_dir_has_data(new_game.id):
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            tr("清空 3DMigoto 路径"),
+            tr(
+                "当前部署目录内还存在需要记录变体的Mod，您确定要删除此项配置吗？\n\n"
+                "选择“是”后，程序将不再记录这些 Mod 在游戏内切换的变体状态。\n"
+                "选择“否”将取消对 3DMigoto 路径的本次更改，其余修改照常保存。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            new_game.migoto_path = old_path
+        return True
+
+    def _deploy_dir_has_data(self, game_id: str) -> bool:
+        """该游戏是否还有已启用（已部署）的 Mod。"""
+        try:
+            from src.core.mod_manager import ModManager
+
+            return ModManager().variants.has_deployed_mods(game_id)
+        except Exception:
+            return True
+
+    def _confirm_deploy_dir_migration(
+        self,
+        old_game: GameConfig | None,
+        new_game: GameConfig,
+        *,
+        moved_paths: list[tuple[Path, Path]] | None = None,
+    ) -> bool:
+        """部署目录变化时询问处置；返回是否可继续保存。
+
+        两种情况：清空「Mod 文件夹」→ 问是否同时清空原目录（见 `_confirm_deploy_dir_cleared`）；
+        改指另一个目录 → 问是否迁移旧目录内容。
+        """
+        old_dir = self._effective_deploy_dir(old_game)
+        new_dir = self._effective_deploy_dir(new_game)
+        if new_dir is None:
+            return self._confirm_deploy_dir_cleared(old_game, new_game, old_dir)
+        if old_dir is None:
+            return True
+        if self._path_key(old_dir) == self._path_key(new_dir):
+            return True
+        try:
+            has_old_data = old_dir.is_dir() and any(old_dir.iterdir())
+        except OSError:
+            has_old_data = False
+        if not has_old_data:
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            tr("迁移已有部署"),
+            tr(
+                (
+                    "检测到 Mod 部署目录已经更改：\n\n旧目录：{old_dir}\n"
+                    "新目录：{new_dir}\n\n是否将旧目录内的全部文件和子文件夹迁移到新目录？"
+                    "包括手动放入的文件。\n选择“否”将只保存新配置，旧目录内容保持不变。"
+                ),
+                old_dir=old_dir,
+                new_dir=new_dir,
+            ),
+            (QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No | QMessageBox.StandardButton.Cancel),
+            QMessageBox.StandardButton.Yes,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.No:
+            return True
+
+        ok, error = self._migrate_deploy_contents(old_dir, new_dir, moved_paths=moved_paths)
+        if not ok:
+            QMessageBox.critical(
+                self, tr("迁移部署失败"), tr("未能安全迁移部署数据，游戏配置尚未保存。\n\n{error}", error=error)
+            )
+            return False
+        # 物理内容已经在新目录了，库里记的 deployed_path 还指着旧目录 —— 必须立刻改写，
+        # 否则部署态对账会把它判成「被外删」而置为禁用，随后 set_deploy_dir 的重登记
+        # 因 is_enabled 为假整体跳过，ini 双向同步再也建不起来（改部署侧 ini 不回写）。
+        try:
+            from src.core.mod_manager import ModManager
+
+            ModManager().rebase_deployments(new_game.id, old_dir, new_dir)
+        except Exception as exc:
+            logger.error("迁移后改写部署路径失败: %s", exc)
+            raise OSError(tr("迁移后更新部署路径失败：{error}", error=exc)) from exc
+        return True
