@@ -846,3 +846,277 @@ class GamePage(QWidget):
             logger.error("迁移后改写部署路径失败: %s", exc)
             raise OSError(tr("迁移后更新部署路径失败：{error}", error=exc)) from exc
         return True
+
+    def _confirm_deploy_dir_cleared(
+        self,
+        old_game: GameConfig | None,
+        new_game: GameConfig,
+        old_dir: Path | None,
+    ) -> bool:
+        """用户清空了「Mod 文件夹」：原目录还有内容时问是否一并清空。
+
+        「是」→ 清空原目录（已启用的 Mod 同时置为禁用）后保存清空的配置；
+        「否」→ 本次不修改「Mod 文件夹」配置（其余字段照常保存），原目录保持不变。
+        """
+        if old_dir is None:
+            return True
+        try:
+            has_data = old_dir.is_dir() and any(old_dir.iterdir())
+        except OSError:
+            has_data = False
+        if not has_data:
+            return True
+
+        answer = QMessageBox.question(
+            self,
+            tr("清空部署目录"),
+            tr(
+                (
+                    "当前未填写 Mod 文件夹，原目录仍有内容：\n\n{old_dir}\n\n"
+                    "是否永久删除此目录内的全部文件和子文件夹？\n包括手动放入的文件，"
+                    "删除后无法恢复。\n选择“否”将保留原目录内容和原 Mod 文件夹设置。"
+                ),
+                old_dir=old_dir,
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            new_game.mods_path = old_game.mods_path if old_game else ""
+            return True
+
+        from src.core.mod_manager import ModManager
+
+        disabled, error = ModManager().clear_deploy_dir_contents(new_game.id, old_dir)
+        if error:
+            QMessageBox.critical(
+                self, tr("清空部署目录失败"), tr("未能清空原有部署目录，配置未保存：{error}", error=error)
+            )
+            return False
+        # 卡片/角色计数仍显示清空前的启用态，必须让主窗重建视图（games_changed 只下发
+        # 部署目录，不重建 Mod 视图）。
+        self.deploy_dir_cleared.emit(new_game.id)
+        QMessageBox.information(
+            self, tr("清空部署目录"), tr("已清空原有部署目录，{disabled} 个 Mod 已置为禁用。", disabled=disabled)
+        )
+        return True
+
+    def _migrate_deploy_contents(
+        self, old_dir: Path, new_dir: Path, *, moved_paths: list[tuple[Path, Path]] | None = None
+    ) -> tuple[bool, str]:
+        """把旧部署目录的直接子项安全移动到新目录；冲突时不开始迁移。"""
+        old_dir = Path(old_dir)
+        new_dir = Path(new_dir)
+        old_key = self._path_key(old_dir)
+        new_key = self._path_key(new_dir)
+        if old_key == new_key:
+            return True, ""
+        try:
+            common = os.path.commonpath([old_key, new_key])
+        except ValueError:  # 跨盘没有公共路径，允许 shutil.move 走复制+删除
+            common = ""
+        if common in (old_key, new_key):
+            return False, tr("新旧部署目录不能互相嵌套，请选择彼此独立的目录。")
+        if not old_dir.is_dir():
+            return True, ""
+        try:
+            entries = list(old_dir.iterdir())
+        except OSError as exc:
+            return False, tr("无法读取旧部署目录：{exc}", exc=exc)
+        if not entries:
+            return True, ""
+        if new_dir.exists() and not new_dir.is_dir():
+            return False, tr("新部署路径已经存在，但它不是文件夹。")
+
+        conflicts = [
+            entry.name for entry in entries if (new_dir / entry.name).exists() or (new_dir / entry.name).is_symlink()
+        ]
+        if conflicts:
+            shown = "、".join(conflicts[:8])
+            if len(conflicts) > 8:
+                shown += tr(" 等 {count} 项", count=len(conflicts))
+            return False, tr("新目录中存在同名内容，未执行任何移动：{shown}", shown=shown)
+
+        moved: list[tuple[Path, Path]] = []
+        try:
+            new_dir.mkdir(parents=True, exist_ok=True)
+            for source in entries:
+                target = new_dir / source.name
+                shutil.move(str(source), str(target))
+                moved.append((source, target))
+        except Exception as exc:
+            rollback_errors: list[str] = []
+            for source, target in reversed(moved):
+                try:
+                    if target.exists() and not source.exists():
+                        shutil.move(str(target), str(source))
+                except Exception as rollback_exc:
+                    rollback_errors.append(str(rollback_exc))
+            detail = tr("移动过程中出错：{exc}", exc=exc)
+            if rollback_errors:
+                detail += tr("；部分内容回滚失败：") + "；".join(rollback_errors)
+            return False, detail
+
+        # 迁移仅搬运部署内容，保留原目录本身。
+        if moved_paths is not None:
+            moved_paths.extend(moved)
+        logger.info("部署目录已迁移: %s -> %s（%d 项，旧目录保留）", old_dir, new_dir, len(moved))
+        return True, ""
+
+    def _rollback_deploy_contents(self, game_id: str, moved_paths: list[tuple[Path, Path]]) -> None:
+        """配置未提交时仅还原本次移动的部署内容，保留目标目录原有文件及外部新增内容。"""
+        if not moved_paths:
+            return
+        from src.core.mod_manager import ModManager, ResourceDirectoryMigrationError
+
+        errors = []
+        for source, target in reversed(moved_paths):
+            try:
+                if os.path.lexists(source):
+                    raise FileExistsError(str(source))
+                shutil.move(str(target), str(source))
+            except OSError as exc:
+                errors.append(str(exc))
+        if not errors:
+            try:
+                source, target = moved_paths[0]
+                ModManager().rebase_deployments(
+                    game_id, target.parent, source.parent, entry_names={target.name for _, target in moved_paths}
+                )
+            except Exception as exc:
+                errors.append(str(exc))
+        if errors:
+            resource_dir = self._svc.get_resource_dir(game_id)
+            raise ResourceDirectoryMigrationError(resource_dir, get_data_dir() / resource_dir, errors)
+
+    def _on_save(self, fields: dict) -> bool:
+        """校验游戏名称并确认路径变更，保存配置和预览后更新编辑基线，成功时通知宿主刷新。"""
+        # 保存前统一检查名称是否为空。
+        if not (fields.get("name") or "").strip():
+            QMessageBox.information(self, tr("提示"), tr("请先填写游戏名称。"))
+            return False
+        from src.core.mod_manager import ResourceDirectoryMigrationError
+
+        cfg = GameConfig(
+            id=fields["id"],
+            name=fields["name"],
+            name_en=fields["name_en"],
+            exe_path=fields["exe_path"],
+            migoto_path=fields["migoto_path"],
+            mods_path=fields["mods_path"],
+            preview=fields.get("preview", ""),
+        )
+        old_game = self._svc.get_game(cfg.id) if cfg.id else None
+        migration_errors: list[str] = []
+        try:
+            with self._save_context(old_game, cfg) if self._save_context is not None else nullcontext():
+                moved_paths: list[tuple[Path, Path]] = []
+                try:
+                    if not self._confirm_migoto_path_cleared(old_game, cfg):
+                        return False
+                    if not self._confirm_deploy_dir_migration(old_game, cfg, moved_paths=moved_paths):
+                        return False
+                    gid = self._svc.save_game(cfg, on_migration_error=migration_errors.append)
+                except ResourceDirectoryMigrationError:
+                    raise
+                except (OSError, RuntimeError):
+                    self._rollback_deploy_contents(cfg.id, moved_paths)
+                    raise
+                saved = self._svc.get_game(gid)
+                src = saved.preview if saved else ""
+                if src:
+                    stored = self._persist_preview(gid, src)
+                    if stored and stored != src:
+                        saved.preview = stored
+                        self._svc.save_game(saved, migrate_resources=False)
+        except (OSError, RuntimeError) as exc:
+            logger.error("保存游戏设置失败: %s", exc)
+            message = str(exc)
+            if isinstance(exc, ResourceDirectoryMigrationError):
+                self._detail.set_game(self._svc.get_game(cfg.id), is_active=False)
+                self.reload()
+                message = tr(
+                    "资源目录迁移和恢复未能完成，已停止此游戏的自动同步。\n\n资源位置：{path}\n\n{error}",
+                    path=exc.actual_path,
+                    error=exc,
+                )
+            QMessageBox.warning(self, tr("保存游戏设置失败"), message)
+            return False
+        self._new_pending = False
+        self._selected_id = gid
+        # reload 会重新调用 _select；先把详情栏更新为已保存基线，避免它把刚完成的保存
+        # 再次识别成“未保存”并重复弹窗。
+        saved_game = self._svc.get_game(gid)
+        is_active = gid == self._svc.current_game_id and self._svc.has_active_game()
+        self._detail.set_game(saved_game, is_active=is_active)
+        self.reload()
+        if fields.get("_mods_path_selected"):
+            self.deployment_directory_selected.emit(gid)
+        self.games_changed.emit()
+        for error in migration_errors:
+            QMessageBox.warning(self, tr("资源目录未迁移"), error)
+        return True
+
+    def _persist_preview(self, gid: str, src: str) -> str:
+        """把用户选定的预览图复制进游戏资源目录，返回存储后的路径。失败回退原路径。"""
+        try:
+            if not (src and is_image(src) and Path(src).exists()):
+                return ""
+            dst_dir = get_data_dir() / self._svc.get_resource_dir(gid)
+            dst_dir.mkdir(parents=True, exist_ok=True)
+            ext = Path(src).suffix.lower() or ".png"
+            dst = dst_dir / f"_game_preview{ext}"
+            if Path(src).resolve() == dst.resolve():
+                return str(dst)
+            for old in dst_dir.glob("_game_preview.*"):
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+            shutil.copy2(src, dst)
+            # 剪贴板预览复制到游戏资源目录后删除其缓存副本，仅清理 cache/clipboard 内的暂存文件。
+            _cleanup_clipboard_temp(src)
+            return str(dst)
+        except OSError as exc:
+            logger.error("保存游戏预览图失败 %s: %s", gid, exc)
+            return src
+
+    def _clear_preview_file(self, gid: str) -> None:
+        """删除游戏资源目录里的 _game_preview.*（移除/删除预览图时调用）。"""
+        try:
+            dst_dir = get_data_dir() / self._svc.get_resource_dir(gid)
+            for old in dst_dir.glob("_game_preview.*"):
+                old.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _on_preview_changed(self, path: str) -> None:
+        """预览图变更后立即更新已保存的游戏配置和对应卡片。
+
+        尚未保存的新游戏仅保留暂存路径，提交表单时一起写入。
+        """
+        gid = self._selected_id
+        if not gid or self._new_pending:
+            return
+        g = self._svc.get_game(gid)
+        if not g:
+            return
+        if path:
+            stored = self._persist_preview(gid, path)
+        else:
+            self._clear_preview_file(gid)
+            stored = ""
+        g.preview = stored
+        try:
+            self._svc.save_game(g, migrate_resources=False)
+        except OSError as exc:
+            self._detail.sync_preview_path(stored, persisted=False)
+            QMessageBox.warning(self, tr("保存游戏设置失败"), str(exc))
+            return
+        # 同步详情中的预览路径，供取消选择后再次选中时恢复。
+        self._detail.sync_preview_path(stored)
+        # 就地刷新对应游戏卡片的预览，无需整页 reload（避免闪烁）
+        for c in self._cards:
+            if c.game_id == gid:
+                c.set_game(g)
+                break
