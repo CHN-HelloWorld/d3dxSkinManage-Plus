@@ -500,3 +500,148 @@ class ModIndex:
         """按 Mod 编号读取部署记录，无记录时返回 None。"""
         row = self._db().execute("SELECT * FROM deployment_records WHERE mod_id=?", (mod_id,)).fetchone()
         return self._row_to_deployment(row) if row else None
+
+    def get_deployments(self, game_id=""):
+        """读取指定或当前游戏的部署记录，未指定游戏时可返回全部记录。"""
+        gid = game_id or self.game_id
+        sql = "SELECT d.* FROM deployment_records d JOIN mods m ON m.mod_id=d.mod_id"
+        rows = self._db().execute(sql + (" WHERE m.game_id=?" if gid else ""), (gid,) if gid else ())
+        return [self._row_to_deployment(row) for row in rows]
+
+    @staticmethod
+    def _row_to_deployment(row):
+        """将部署数据库行转换为含状态枚举的部署记录对象。"""
+        return DeploymentRecord(
+            mod_id=row["mod_id"], state=DeploymentState(row["state"]), actual_path=row["actual_path"]
+        )
+
+    def get_mod_count(self, character_id=None):
+        """统计当前游戏的 Mod 数量，可限定为直接属于某分类的成员。"""
+        sql = "SELECT count(*) FROM mods WHERE game_id=?"
+        return (
+            self._db()
+            .execute(
+                sql + (" AND node_id=?" if character_id else ""),
+                (self.game_id, character_id) if character_id else (self.game_id,),
+            )
+            .fetchone()[0]
+        )
+
+    def clear_mods_for_game(self, game_id, *, commit=True):
+        """删除游戏全部部署及 Mod 记录，返回移除成员数并按参数提交。"""
+        conn = self._db()
+        conn.execute(
+            "DELETE FROM deployment_records WHERE mod_id IN (SELECT mod_id FROM mods WHERE game_id=?)", (game_id,)
+        )
+        count = conn.execute("DELETE FROM mods WHERE game_id=?", (game_id,)).rowcount
+        if commit:
+            conn.commit()
+        return count
+
+    def purge_game(self, game_id):
+        """在单次事务内清除游戏关联的部署、成员、标签、分类和预设状态，并返回各表数量。"""
+        with self.transaction() as conn:
+            counts = {
+                "deployment_records": conn.execute(
+                    "DELETE FROM deployment_records WHERE mod_id IN (SELECT mod_id FROM mods WHERE game_id=?)",
+                    (game_id,),
+                ).rowcount
+            }
+            for table in ("mods", "tag_definitions", "nodes", "preset_apply_journal", "game_deployment_state"):
+                counts[table] = conn.execute(f"DELETE FROM {table} WHERE game_id=?", (game_id,)).rowcount
+        return counts
+
+    def health_check(self):
+        """检查数据库连接及主要表是否可查询，连接或查询失败时返回 False。"""
+        if self._conn is None:
+            return False
+        try:
+            for table in ("mods", "nodes", "deployment_records"):
+                self._db().execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            return True
+        except sqlite3.Error:
+            return False
+
+    def save_journal(self, journal: PresetApplyJournal, *, commit: bool = True) -> None:
+        """新增预设应用日志或更新已有操作的阶段、计划和运行时补丁，可延迟提交。"""
+        self._db().execute(
+            """INSERT INTO preset_apply_journal
+               (operation_id,game_id,from_preset_id,to_preset_id,phase,plan_json,
+                completed_steps_json,created_at,updated_at,runtime_patch_json)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(operation_id) DO UPDATE SET phase=excluded.phase,
+                 plan_json=excluded.plan_json,
+                 completed_steps_json=excluded.completed_steps_json,
+                 runtime_patch_json=excluded.runtime_patch_json,
+                 updated_at=excluded.updated_at""",
+            (
+                journal.operation_id,
+                journal.game_id,
+                journal.from_preset_id,
+                journal.to_preset_id,
+                journal.phase,
+                journal.plan_json,
+                journal.completed_steps_json,
+                journal.created_at,
+                journal.updated_at,
+                journal.runtime_patch_json,
+            ),
+        )
+        if commit:
+            self._db().commit()
+
+    def update_journal(self, operation_id: str, *, phase: str, completed_steps_json: str, commit: bool = True) -> None:
+        """更新预设操作阶段、已完成步骤和时间戳，并按参数提交。"""
+        self._db().execute(
+            """UPDATE preset_apply_journal SET phase=?, completed_steps_json=?, updated_at=?
+               WHERE operation_id=?""",
+            (phase, completed_steps_json, datetime.now().isoformat(), operation_id),
+        )
+        if commit:
+            self._db().commit()
+
+    def update_journal_runtime_patch(
+        self,
+        operation_id: str,
+        runtime_patch_json: str,
+        *,
+        commit: bool = True,
+    ) -> None:
+        """单独落运行时补丁账本（与 phase/steps 解耦，写回 d3dx_user.ini 前后各写一次）。"""
+        self._db().execute(
+            """UPDATE preset_apply_journal SET runtime_patch_json=?, updated_at=?
+               WHERE operation_id=?""",
+            (runtime_patch_json, datetime.now().isoformat(), operation_id),
+        )
+        if commit:
+            self._db().commit()
+
+    def get_journals(self, game_id: str = "") -> list[PresetApplyJournal]:
+        """按创建时间读取指定游戏或全部游戏的预设应用恢复日志。"""
+        if game_id:
+            rows = (
+                self._db()
+                .execute("SELECT * FROM preset_apply_journal WHERE game_id=? ORDER BY created_at", (game_id,))
+                .fetchall()
+            )
+        else:
+            rows = self._db().execute("SELECT * FROM preset_apply_journal ORDER BY created_at").fetchall()
+        return [PresetApplyJournal(**dict(row)) for row in rows]
+
+    def delete_journal(self, operation_id: str, *, commit: bool = True) -> None:
+        """按操作编号删除预设恢复日志，并按参数决定是否提交。"""
+        self._db().execute("DELETE FROM preset_apply_journal WHERE operation_id=?", (operation_id,))
+        if commit:
+            self._db().commit()
+
+    def get_current_preset_id(self, game_id: str) -> str:
+        """查询游戏部署状态中的当前预设编号，无记录时返回空字符串。"""
+        row = (
+            self._db()
+            .execute(
+                "SELECT current_preset_id FROM game_deployment_state WHERE game_id=?",
+                (game_id,),
+            )
+            .fetchone()
+        )
+        return row[0] if row else ""
