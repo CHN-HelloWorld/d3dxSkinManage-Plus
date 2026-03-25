@@ -325,3 +325,178 @@ class ModIndex:
                 yield self._row_to_mod(row, cache)
         finally:
             cursor.close()
+
+    def get_mods_by_character(self, node_id):
+        """查询当前游戏中直接归属指定分类的 Mod。"""
+        return self._mods("WHERE m.node_id=? AND m.game_id=?", (node_id, self.game_id))
+
+    def get_character_conflict_mods(self, game_id, character_ids, *, deploying_ids=(), excluding_mod_id=""):
+        """查询所选分类中已启用或正在部署的其他 Mod，并按分类输入顺序排列。"""
+        ids, pending = tuple(character_ids), tuple(deploying_ids)
+        if not ids:
+            return []
+        where = (
+            "WHERE m.game_id=? AND m.node_id IN ("
+            + ",".join("?" for _ in ids)
+            + ") AND m.mod_id<>? AND (d.state='active'"
+        )
+        params = [game_id, *ids, excluding_mod_id]
+        if pending:
+            where += " OR m.mod_id IN (" + ",".join("?" for _ in pending) + ")"
+            params.extend(pending)
+        order = {node_id: position for position, node_id in enumerate(ids)}
+        return sorted(self._mods(where + ")", params), key=lambda mod: order[mod.node_id])
+
+    def search_mods(self, query, game_id=None):
+        """在指定游戏的显示名、目录名及元数据 JSON 中执行模糊查询。"""
+        pattern = "%" + query + "%"
+        return self._mods(
+            "WHERE m.game_id=? AND (m.name LIKE ? OR m.folder_name LIKE ? OR m.info_json LIKE ?)",
+            (game_id or self.game_id, pattern, pattern, pattern),
+        )
+
+    def get_enabled_mods(self, game_id=None):
+        """返回指定或当前游戏中部署状态为活动的 Mod。"""
+        return self._mods("WHERE m.game_id=? AND d.state='active'", (game_id or self.game_id,))
+
+    def find_by_content_hash(self, content_hash, game_id=None):
+        """按游戏和非空内容摘要返回首个匹配 Mod，没有匹配时返回 None。"""
+        if not content_hash:
+            return None
+        rows = self._mods(
+            "WHERE m.game_id=? AND m.content_hash=? LIMIT 1", (game_id or self.game_id, content_hash), order=False
+        )
+        return rows[0] if rows else None
+
+    def get_library_rows(self, game_id):
+        """耗尽分步记录生成器并返回其最终不可变资料库行集合。"""
+        iterator = self.iter_library_rows(game_id)
+        while True:
+            try:
+                next(iterator)
+            except StopIteration as finished:
+                return finished.value
+
+    def iter_library_rows(self, game_id, *, batch_size=64):
+        """在所有者线程分批构造投影，批次间让出执行并返回不可变记录。"""
+        batch_size = max(1, min(128, int(batch_size)))
+        from src.core.library_snapshot import LibraryRow
+
+        conn = self._db()
+
+        def version():
+            """组合索引修改标记、路径服务及游戏根映射，检查行缓存是否仍有效。"""
+            return (
+                self.change_stamp,
+                id(self.paths),
+                game_id,
+                tuple(self.paths.roots.items()),
+                tuple(self.paths.preview_roots.items()),
+            )
+
+        stamp = version()
+        previous = self._library_rows_cache
+        if not conn.in_transaction and previous and previous[0] == stamp:
+            return previous[1]
+        old_rows = previous[2] if previous and previous[0][1:] == stamp[1:] else {}
+        rows, fingerprints, parents = [], {}, {}
+        query = (
+            "SELECT m.mod_id,m.game_id,m.node_id,m.folder_name,m.path,m.preview_images_json,"
+            "d.state,d.actual_path FROM mods m LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+            "WHERE m.game_id=? ORDER BY m.name,m.mod_id"
+        )
+        cursor = conn.execute(query, (game_id,))
+        try:
+            for number, raw in enumerate(cursor, 1):
+                container = self._container(raw, parents)
+                fingerprint = (*tuple(raw), str(container))
+                old = old_rows.get(raw["mod_id"])
+                if old and old[0] == fingerprint:
+                    row = old[1]
+                else:
+                    roots = {
+                        "container": container,
+                        "node": container.parent,
+                        "preview_cache": Path(self.paths.preview_roots[game_id]) / raw["mod_id"],
+                    }
+                    images = []
+                    for ref in json.loads(raw["preview_images_json"]):
+                        if not valid_relative(ref["path"]):
+                            raise ValueError(tr("图片引用越界"))
+                        images.append(str(roots[ref["scope"]] / ref["path"]))
+                    row = LibraryRow(
+                        mod_id=raw["mod_id"],
+                        path=str(container / raw["path"]),
+                        deployed_path=raw["actual_path"] or "",
+                        enabled=raw["state"] == "active",
+                        preview_images=tuple(images),
+                    )
+                rows.append(row)
+                fingerprints[raw["mod_id"]] = (fingerprint, row)
+                if number % batch_size == 0:
+                    yield None
+                    if version() != stamp:
+                        raise RuntimeError("Library changed during row snapshot capture")
+        finally:
+            cursor.close()
+        if version() != stamp:
+            raise RuntimeError("Library changed during row snapshot capture")
+        result = tuple(rows)
+        if not conn.in_transaction:
+            self._library_rows_cache = (stamp, result, fingerprints)
+        return result
+
+    def get_deployment_rows(self, game_id):
+        """查询指定游戏的轻量部署投影，跳过预览图片解析以减少读取成本。"""
+        from src.core.library_snapshot import LibraryRow
+
+        cache = {}
+        return tuple(
+            LibraryRow(
+                mod_id=r["mod_id"],
+                path=str(self._container(r, cache) / r["path"]),
+                deployed_path=r["actual_path"] or "",
+                enabled=r["deployment_state"] == "active",
+                preview_images=(),
+            )
+            for r in self._db().execute(_SELECT + "WHERE m.game_id=?", (game_id,))
+        )
+
+    @contextmanager
+    def transaction(self):
+        """开启立即事务，正常退出时提交，主体抛出异常时回滚并继续传播。"""
+        conn = self._db()
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            yield conn
+        except Exception:
+            conn.rollback()
+            raise
+        else:
+            conn.commit()
+
+    def delete_mod(self, mod_id):
+        """在同一事务中删除部署及 Mod 记录，数据库错误时记录日志并返回 False。"""
+        try:
+            with self.transaction() as conn:
+                conn.execute("DELETE FROM deployment_records WHERE mod_id=?", (mod_id,))
+                conn.execute("DELETE FROM mods WHERE mod_id=?", (mod_id,))
+            return True
+        except sqlite3.Error as error:
+            logger.error("删除 Mod 失败: %s", error)
+            return False
+
+    def upsert_deployment(self, record, *, commit=True):
+        """新增或覆盖 Mod 部署状态与实际路径，按参数决定是否立即提交。"""
+        self._db().execute(
+            """INSERT INTO deployment_records(mod_id,state,actual_path) VALUES(?,?,?)
+            ON CONFLICT(mod_id) DO UPDATE SET state=excluded.state,actual_path=excluded.actual_path""",
+            (record.mod_id, record.state.value, record.actual_path),
+        )
+        if commit:
+            self._db().commit()
+
+    def get_deployment(self, mod_id):
+        """按 Mod 编号读取部署记录，无记录时返回 None。"""
+        row = self._db().execute("SELECT * FROM deployment_records WHERE mod_id=?", (mod_id,)).fetchone()
+        return self._row_to_deployment(row) if row else None
