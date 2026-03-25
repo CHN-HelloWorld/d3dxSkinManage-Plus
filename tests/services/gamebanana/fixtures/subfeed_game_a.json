@@ -1,0 +1,45 @@
+{
+  "_aRecords": [
+    {
+      "_idRow": 200001,
+      "_sModelName": "Mod",
+      "_sName": "Subfeed Mod A",
+      "_sProfileUrl": "https://gamebanana.com/mods/200001",
+      "_aSubmitter": {
+        "_idRow": 7001,
+        "_sName": "AuthorA",
+        "_sAvatarUrl": "https://images.gamebanana.com/avatars/7001.png",
+        "_sProfileUrl": "https://gamebanana.com/members/7001"
+      },
+      "_aPreviewMedia": {},
+      "_nViewCount": 500,
+      "_nLikeCount": 25,
+      "_nDownloadCount": 120,
+      "_nPostCount": 4,
+      "_bIsNsfw": false,
+      "_tsDateUpdated": 1700001000,
+      "_aCategory": {"_idRow": 5000, "_sName": "Skins"}
+    },
+    {
+      "_idRow": 200002,
+      "_sModelName": "Mod",
+      "_sName": "Subfeed Mod B",
+      "_sProfileUrl": "https://gamebanana.com/mods/200002",
+      "_aSubmitter": {
+        "_idRow": 7002,
+        "_sName": "AuthorB",
+        "_sAvatarUrl": "https://images.gamebanana.com/avatars/7002.png",
+        "_sProfileUrl": "https://gamebanana.com/members/7002"
+      },
+      "_aPreviewMedia": {},
+      "_nViewCount": 800,
+      "_nLikeCount": 33,
+      "_nDownloadCount": 150,
+      "_nPostCount": 7,
+      "_bIsNsfw": false,
+      "_tsDateUpdated": 1700002000,
+      "_aCategory": {"_idRow": 5001, "_sName": "Effects"}
+    }
+  ],
+  "_aMetadata": {"_bIsComplete": false, "_nRecordCount": 30, "_nPerpage": 15, "_nPage": 1}
+}
