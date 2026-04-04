@@ -962,6 +962,262 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "30-新建类别入口.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Category Overview",
+          "box": [
+            195,
+            12,
+            192,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  Default (Default)  ",
+          "box": [
+            668,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add multiple",
+          "box": [
+            836,
+            12,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Card view",
+          "box": [
+            976,
+            12,
+            123,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "Show NSFW",
+          "box": [
+            1107,
+            12,
+            142,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Check for updates",
+          "box": [
+            1257,
+            12,
+            167,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All",
+          "box": [
+            204,
+            55,
+            29,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All",
+          "box": [
+            204,
+            55,
+            29,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All",
+          "box": [
+            204,
+            55,
+            29,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "Tags",
+          "box": [
+            771,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "All types",
+          "box": [
+            859,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Disable All",
+          "box": [
+            987,
+            94,
+            117,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Name: A to Z",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "Select an item to view details",
+          "box": [
+            1049,
+            473,
+            360,
+            207
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Select an item to view preview images",
+          "box": [
+            1046,
+            148,
+            366,
+            295
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "No categories yet\nClick \"+ New Category\" below to add one, or import a category preset",
+          "box": [
+            377,
+            486,
+            468,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "+ New Category",
+          "box": [
+            411,
+            536,
+            156,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Start with a category preset",
+          "box": [
+            585,
+            536,
+            225,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ready",
+          "box": [
+            195,
+            928,
+            1229,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": [
+        "+ 新建类别"
+      ]
     }
   ]
 }
