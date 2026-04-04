@@ -289,6 +289,293 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "01-添加游戏.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Games",
+          "box": [
+            193,
+            10,
+            61,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Card view",
+          "box": [
+            1046,
+            10,
+            123,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add game",
+          "box": [
+            1309,
+            10,
+            117,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "New game",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Drop or click to add one game preview image",
+          "box": [
+            1037,
+            93,
+            391,
+            250
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add preview image",
+          "box": [
+            1147,
+            355,
+            171,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Game name",
+          "box": [
+            1037,
+            405,
+            74,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "第二个示例游戏",
+          "box": [
+            1124,
+            405,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "English name",
+          "box": [
+            1037,
+            441,
+            81,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game 2",
+          "box": [
+            1124,
+            441,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Executable",
+          "box": [
+            1037,
+            477,
+            66,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "D:/ModLoader",
+          "box": [
+            1124,
+            519,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod folder",
+          "box": [
+            1037,
+            557,
+            69,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "D:/ModLoader/Mods",
+          "box": [
+            1124,
+            559,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Confirm",
+          "box": [
+            1037,
+            599,
+            193,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Exit",
+          "box": [
+            1236,
+            599,
+            192,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current",
+          "box": [
+            329,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            209,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            199,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ne",
+          "box": [
+            389,
+            72,
+            168,
+            130
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "New game",
+          "box": [
+            401,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
