@@ -576,6 +576,392 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "03-类别总览.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Category Overview",
+          "box": [
+            195,
+            12,
+            192,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  Default (Default)  ",
+          "box": [
+            668,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add multiple",
+          "box": [
+            836,
+            12,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Card view",
+          "box": [
+            976,
+            12,
+            123,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "Show NSFW",
+          "box": [
+            1107,
+            12,
+            142,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Check for updates",
+          "box": [
+            1257,
+            12,
+            167,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All",
+          "box": [
+            204,
+            55,
+            29,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All",
+          "box": [
+            204,
+            55,
+            29,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "Tags",
+          "box": [
+            771,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "All types",
+          "box": [
+            859,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Disable All",
+          "box": [
+            987,
+            94,
+            117,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Name: A to Z",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "Select an item to view details",
+          "box": [
+            1049,
+            473,
+            360,
+            207
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Select an item to view preview images",
+          "box": [
+            1046,
+            148,
+            366,
+            295
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "外观",
+          "box": [
+            722,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category",
+          "box": [
+            751,
+            156,
+            56,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "外观",
+          "box": [
+            722,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1/4 enabled",
+          "box": [
+            722,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "示例角色",
+          "box": [
+            550,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Character",
+          "box": [
+            579,
+            156,
+            58,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例角色",
+          "box": [
+            550,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 enabled",
+          "box": [
+            550,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "界面",
+          "box": [
+            378,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category",
+          "box": [
+            407,
+            156,
+            56,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面",
+          "box": [
+            378,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 enabled",
+          "box": [
+            378,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "待整理",
+          "box": [
+            206,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category",
+          "box": [
+            235,
+            156,
+            56,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "待整理",
+          "box": [
+            206,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/0 enabled",
+          "box": [
+            206,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3 categories, 1 characters/objects",
+          "box": [
+            195,
+            928,
+            1229,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
