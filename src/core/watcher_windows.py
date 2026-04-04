@@ -135,3 +135,74 @@ class _NativeAPI:
         if not self.k.GetFileInformationByHandle(handle, c.byref(info)):
             raise c.WinError(c.get_last_error())
         return info.volume, (info.index_high << 32) | info.index_low
+
+
+@lru_cache(maxsize=2)
+def _metadata_api(api_type):
+    """创建指定原生接口类型的实例，供缓存复用元数据读取接口。"""
+    return api_type()
+
+
+def read_marker_text(path):
+    """短期读取标记，不阻止删除或祖先改名。"""
+    api = _metadata_api(_NativeAPI)
+    info = os.stat(fs.native_path(path))
+    try:
+        return api.read_marker_by_id(path, info)
+    except OSError as error:
+        # 不支持按标识打开的文件系统可使用路径读取，访问、共享和并发变化错误仍须向上传播。
+        if getattr(error, "winerror", None) not in (1, 50, 87, 120):
+            raise
+        return fs.read_text(path, encoding="utf-8")
+
+
+def open_marker(path):
+    """返回以文件标识打开的二进制流，不锁定目录名称。"""
+    import msvcrt
+
+    api = _metadata_api(_NativeAPI)
+    info = os.stat(fs.native_path(path))
+    try:
+        handle = api.open_by_id(path, info.st_ino, access=0x80000000)
+    except OSError as error:
+        if getattr(error, "winerror", None) not in (1, 50, 87, 120):
+            raise
+        return open(fs.native_path(path), "rb")
+    try:
+        if api.identity(handle) != (info.st_dev, info.st_ino):
+            raise OSError("marker identity changed before opening")
+        fd = msvcrt.open_osfhandle(handle, os.O_RDONLY | os.O_BINARY)
+    except BaseException:
+        api.k.CloseHandle(handle)
+        raise
+    try:
+        return os.fdopen(fd, "rb")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+class NativeContainerHandles:
+    """后台保留目录句柄基线，允许改名和删除。"""
+
+    def __init__(self, volume_hint=None):
+        """初始化原生接口、卷提示、容器句柄表和受锁保护的路径树。"""
+        self.api = _NativeAPI()
+        self.volume_hint = volume_hint
+        self._lock = threading.RLock()
+        self._handles = {}
+        self._paths = {}
+        self.closed = False
+
+    def _node(self, path, create=False):
+        """按规范绝对路径逐级查找路径树节点，可按需创建缺失节点。"""
+        node = self._paths
+        for part in Path(os.path.abspath(fs.normal_path(path))).parts:
+            key = os.path.normcase(part)
+            children = node.setdefault("children", {}) if create else node.get("children", {})
+            if key not in children:
+                if not create:
+                    return None
+                children[key] = {}
+            node = children[key]
+        return node
