@@ -206,3 +206,146 @@ class NativeContainerHandles:
                 children[key] = {}
             node = children[key]
         return node
+
+    def relocate_prefix(self, source, destination):
+        """移动路径树分支，后代继续使用原句柄记录。"""
+        source, destination = Path(source), Path(destination)
+        with self._lock:
+            parent = self._node(source.parent)
+            branch = parent.get("children", {}).pop(os.path.normcase(source.name), None) if parent else None
+            if branch is None:
+                return
+            target = self._node(destination.parent, True).setdefault("children", {})
+            displaced = target.get(os.path.normcase(destination.name))
+            if displaced is not None and displaced is not branch:
+                pending = [displaced]
+                while pending:
+                    node = pending.pop()
+                    record = node.get("record")
+                    if record:
+                        self._handles.pop(record[0], None)
+                        self.api.k.CloseHandle(record[0])
+                    pending.extend(node.get("children", {}).values())
+            target[os.path.normcase(destination.name)] = branch
+
+    def containing_mod(self, path):
+        """查询已登记的 Mod 祖先，不访问磁盘或遍历同级句柄。"""
+        parts = Path(os.path.abspath(fs.normal_path(path))).parts
+        with self._lock:
+            node = self._paths
+            for offset, part in enumerate(parts):
+                node = node.get("children", {}).get(os.path.normcase(part))
+                if node is None:
+                    return None
+                if node.get("kind") == "mod_id" and node.get("record"):
+                    return str(Path(*parts[: offset + 1]))
+        return None
+
+    def track(self, path):
+        """按文件编号打开容器并核对目录及标记版本，稳定后登记持久身份句柄。
+
+        已登记或已关闭时跳过；读取失败或版本变化不产生身份凭据，并释放未采用的句柄。"""
+        path = fs.normal_path(path)
+        with self._lock:
+            node = self._node(path)
+            if self.closed or (node and node.get("record")):
+                return
+        handle = None
+        try:
+            before = os.stat(fs.native_path(path))
+            identity_before = (before.st_dev, before.st_ino)
+            handle = self.api.open_by_id(path, before.st_ino, self.volume_hint)
+            if self.api.identity(handle) != identity_before:
+                return
+            marker_path = Path(path) / ".d3dxmod"
+            identity_key = "mod_id"
+            if not fs.is_file(marker_path):
+                marker_path = Path(path) / ".d3dxcategory"
+                identity_key = "id"
+            marker_before = os.stat(fs.native_path(marker_path))
+            marker = json.loads(self.api.read_marker_by_id(marker_path, marker_before, self.volume_hint))
+            after = os.stat(fs.native_path(path))
+            marker_after = os.stat(fs.native_path(marker_path))
+
+            def version(info):
+                """提取标记文件编号、大小与时间，核对标记读取期间是否变化。"""
+                return (info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
+
+            if (after.st_dev, after.st_ino) != identity_before or version(marker_before) != version(marker_after):
+                return
+            identity = marker.get(identity_key)
+            if not identity:
+                return
+            with self._lock:
+                node = self._node(path, True)
+                if not self.closed and not node.get("record"):
+                    record = (handle, identity)
+                    self._handles[handle] = record
+                    node["record"] = record
+                    node["kind"] = identity_key
+                    handle = None
+        except (OSError, ValueError, AttributeError):
+            return
+        finally:
+            if handle is not None:
+                self.api.k.CloseHandle(handle)
+
+    def seed(self, root, stop):
+        """遍历分类树建立容器句柄基线，跳过受管正文内部并响应停止事件。"""
+        pending = [Path(root)]
+        while pending and not stop.is_set():
+            directory = pending.pop()
+            if fs.is_file(directory / ".d3dxmod"):
+                self.track(directory)
+                continue  # 不枚举受管 Mod 本体内部内容。
+            if fs.is_file(directory / ".d3dxcategory"):
+                self.track(directory)
+            try:
+                with os.scandir(fs.native_path(directory)) as entries:
+                    for entry in entries:
+                        if stop.is_set():
+                            return
+                        if not entry.name.startswith(".") and entry.is_dir(follow_symlinks=False):
+                            pending.append(directory / entry.name)
+            except OSError:
+                continue  # 未登记目标不能产生确定身份的证据。
+
+    def inspect(self, path):
+        """仅报告明确的待删除状态或实际移动位置，不推断缺失。"""
+        api = self.api
+        c, w = api.c, api.w
+
+        class Standard(c.Structure):
+            """映射文件标准信息，用于从句柄判断对象是否待删除及是否为目录。"""
+
+            _fields_ = [
+                ("allocation", c.c_longlong),
+                ("end", c.c_longlong),
+                ("links", w.DWORD),
+                ("delete_pending", c.c_ubyte),
+                ("directory", c.c_ubyte),
+            ]
+
+        with self._lock:
+            node = self._node(path)
+            record = node.get("record") if node else None
+            if record is None:
+                return "", "", ""
+            handle, identity = record
+            info = Standard()
+            if not api.k.GetFileInformationByHandleEx(handle, 1, c.byref(info), c.sizeof(info)):
+                return "", "", ""
+            if info.delete_pending:
+                del self._handles[handle]
+                node.pop("record", None)
+                api.k.CloseHandle(handle)  # 清理前释放最后的本地引用。
+                return "delete_pending", "", identity
+            buffer = c.create_unicode_buffer(32768)
+            length = api.k.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)
+            if not length or length >= len(buffer):
+                return "", "", ""
+            target = fs.normal_path(buffer.value)
+            if os.path.normcase(target) != os.path.normcase(fs.normal_path(path)):
+                self.relocate_prefix(path, target)
+                return "relocated", target, identity
+            return "", "", identity
