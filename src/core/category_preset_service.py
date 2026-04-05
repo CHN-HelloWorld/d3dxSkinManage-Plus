@@ -132,3 +132,49 @@ class ImportResult:
     fill_count: int
     new_image_count: int
     recovery_paths: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ExportResult:
+    """记录分类预设导出的最终文件位置及节点和图片数量。"""
+
+    game_id: str
+    path: Path
+    node_count: int
+    image_count: int
+
+
+def category_preset_filename(name: str) -> str:
+    """校验预设名称及 Windows 文件名限制，统一补齐一个分类预设扩展名。"""
+    if not isinstance(name, str) or not name or name != name.strip():
+        raise CategoryPresetError(tr("请输入有效的预设名称，不能以空格结尾"))
+    while name.lower().endswith(".d3dxcp"):
+        name = name[:-7]
+    if not name or "/" in name or "\\" in name:
+        raise CategoryPresetError(tr("预设名称必须是单个文件名"))
+    _validate_path(name)
+    if len((name + ".d3dxcp").encode("utf-16-le")) // 2 > 255:
+        raise CategoryPresetError(tr("预设文件名超过 Windows 长度限制"))
+    return name + ".d3dxcp"
+
+
+def _cancel(cancelled):
+    """检查调用方取消请求，收到请求时抛出分类预设取消异常。"""
+    if cancelled and cancelled():
+        raise CategoryPresetCancelled(tr("分类预设操作已取消"))
+
+
+def _notify(progress, phase, percent):
+    """在调用方提供进度回调时发送当前阶段和完成百分比。"""
+    if progress:
+        progress(phase, percent)
+
+
+def _signature(path):
+    """读取安全路径的身份、大小和修改时间；对象缺失时返回 None。"""
+    safe_path(path)
+    try:
+        info = Path(path).stat()
+        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
