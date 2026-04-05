@@ -349,3 +349,105 @@ class NativeContainerHandles:
                 self.relocate_prefix(path, target)
                 return "relocated", target, identity
             return "", "", identity
+
+    def close(self):
+        """在锁内标记关闭、释放全部容器句柄并清空路径索引。"""
+        with self._lock:
+            self.closed = True
+            for handle, _ in self._handles.values():
+                self.api.k.CloseHandle(handle)
+            self._handles.clear()
+            self._paths.clear()
+
+
+class _ParentWatchEvents:
+    """监控直接父目录，并将事件转换回逻辑根路径。
+
+    目录通知不能使用按标识打开的句柄；父目录路径句柄允许该父目录移动，
+    更高祖先仍受 Windows 命名空间规则限制。
+    """
+
+    def __init__(self, path, *, recursive=True):
+        """将监听定位到目标父目录，并记录子目录前缀和递归过滤策略。"""
+        root = Path(os.path.abspath(fs.normal_path(path)))
+        self.path = str(root.parent if root.name else root)
+        self._prefix = root.name
+        self._recursive = recursive
+        self._old = None
+
+    def _relative(self, path):
+        """把父目录事件路径裁剪为目标内相对路径，范围外或超出递归策略时返回 None。"""
+        if not self._prefix:
+            relative = path
+        elif os.path.normcase(path) == os.path.normcase(self._prefix):
+            relative = ""
+        elif os.path.normcase(path).startswith(os.path.normcase(self._prefix) + os.sep):
+            relative = path[len(self._prefix) + 1 :]
+        else:
+            return None
+        return relative if self._recursive or os.sep not in relative else None
+
+    def filter(self, events):
+        """过滤父目录事件并配对重命名两端，跨边界移动转为创建或删除事件。"""
+        from watchdog.observers import winapi
+
+        result = []
+
+        def emit(action, path):
+            """追加有效范围内的原生事件，将目标根删除转换为自身删除事件。"""
+            if path is None:
+                return
+            if not path and action == winapi.FILE_ACTION_REMOVED:
+                action = winapi.FILE_ACTION_DELETED_SELF
+            result.append(winapi.WinAPINativeEvent(action, path))
+
+        for event in events:
+            if event.is_removed_self:
+                self._old = None
+                emit(winapi.FILE_ACTION_DELETED_SELF, "")
+                continue
+            relative = self._relative(event.src_path)
+            if event.is_renamed_new and self._old is not None:
+                old = self._relative(self._old)
+                self._old = None
+                if old is not None and relative is not None:
+                    emit(winapi.FILE_ACTION_RENAMED_OLD_NAME, old)
+                    emit(winapi.FILE_ACTION_RENAMED_NEW_NAME, relative)
+                else:
+                    emit(winapi.FILE_ACTION_REMOVED, old)
+                    emit(winapi.FILE_ACTION_CREATED, relative)
+                continue
+            if self._old is not None:
+                emit(winapi.FILE_ACTION_REMOVED, self._relative(self._old))
+                self._old = None
+            if event.is_renamed_old:
+                self._old = event.src_path
+            elif event.is_renamed_new:
+                emit(winapi.FILE_ACTION_CREATED, relative)
+            else:
+                emit(event.action, relative)
+        return result
+
+
+def create_file_observer():
+    """保留完整文件事件，同时允许逻辑根的父目录移动。"""
+    from watchdog.observers import winapi
+    from watchdog.observers.api import BaseObserver
+    from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+    class ParentDirectoryEmitter(WindowsApiEmitter):
+        """从目标父目录接收事件并按目标范围过滤，避免监听句柄固定目标路径。"""
+
+        def on_thread_start(self):
+            """创建父目录事件过滤器并打开实际监听目录句柄。"""
+            self._parent_events = _ParentWatchEvents(self.watch.path, recursive=self.watch.is_recursive)
+            self._whandle = winapi.get_directory_handle(fs.native_path(self._parent_events.path))
+
+        def _read_events(self):
+            """递归读取父目录原生事件，再筛选目标目录范围；句柄缺失时返回空列表。"""
+            if not self._whandle:
+                return []
+            events = winapi.read_events(self._whandle, self._parent_events.path, recursive=True)
+            return self._parent_events.filter(events)
+
+    return BaseObserver(ParentDirectoryEmitter)
