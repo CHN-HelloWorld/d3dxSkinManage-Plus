@@ -451,3 +451,299 @@ def create_file_observer():
             return self._parent_events.filter(events)
 
     return BaseObserver(ParentDirectoryEmitter)
+
+
+class _ArmedDirectoryRead:
+    """基线读取前启动原生通知，不写入探测标记。"""
+
+    def __init__(self, root, recursive, flags):
+        """建立重叠读取结构、事件句柄和目录缓冲区，并立即提交首次读取请求。"""
+        self.api = _NativeAPI()
+        c, w = self.api.c, self.api.w
+
+        class Overlapped(c.Structure):
+            """映射 Windows 重叠读写状态及完成事件句柄。"""
+
+            _fields_ = [
+                ("internal", c.c_size_t),
+                ("high", c.c_size_t),
+                ("offset", w.DWORD),
+                ("offset_high", w.DWORD),
+                ("event", w.HANDLE),
+            ]
+
+        self.overlapped = Overlapped()
+        self.handle = None
+        self.closed = False
+        self.overlapped.event = self.api.k.CreateEventW(None, True, False, None)
+        try:
+            if not self.overlapped.event:
+                raise c.WinError(c.get_last_error())
+            self.handle = self.api.open(root, observe=True)
+            self.buffer = c.create_string_buffer(65536)
+            self.recursive, self.flags = recursive, flags
+            self.arm()
+        except Exception:
+            self.close()
+            raise
+
+    def arm(self):
+        """提交异步目录变化读取，接受已挂起状态，其余原生失败继续抛出。"""
+        api = self.api
+        if not api.k.ReadDirectoryChangesW(
+            self.handle,
+            self.buffer,
+            len(self.buffer),
+            self.recursive,
+            self.flags,
+            None,
+            api.c.byref(self.overlapped),
+            None,
+        ):
+            error = api.c.get_last_error()
+            if error != 997:
+                raise api.c.WinError(error)
+
+    def read(self):
+        """等待本次读取完成，复制缓冲区后立即重新挂起监听，并返回数据及有效长度。"""
+        api, size = self.api, self.api.w.DWORD()
+        if not api.k.GetOverlappedResult(self.handle, api.c.byref(self.overlapped), api.c.byref(size), True):
+            raise api.c.WinError(api.c.get_last_error())
+        data = self.buffer.raw
+        if not self.closed:
+            self.arm()
+        return data, size.value
+
+    def close(self):
+        """标记读取器关闭，取消在途读写并释放目录和完成事件句柄。"""
+        if not self.closed:
+            self.closed = True
+            if self.handle is not None:
+                self.api.k.CancelIoEx(self.handle, None)
+                self.api.k.CloseHandle(self.handle)
+            if self.overlapped.event:
+                self.api.k.CloseHandle(self.overlapped.event)
+
+
+def create_observer(health_callback, *, native_callback=None, track_containers=True):
+    """创建具有根身份核验、批次边界和监听健康通知的 Windows 文件观察器。"""
+    from watchdog.events import (
+        DirCreatedEvent,
+        DirModifiedEvent,
+        DirMovedEvent,
+        FileCreatedEvent,
+        FileDeletedEvent,
+        FileModifiedEvent,
+        FileMovedEvent,
+    )
+    from watchdog.observers import winapi
+    from watchdog.observers.api import BaseObserver
+    from watchdog.observers.read_directory_changes import WindowsApiEmitter
+
+    class HealthyEmitter(WindowsApiEmitter):
+        """将原生目录事件转换为带身份依据的变化通知，并报告监听失效状态。"""
+
+        def _detail(self, kind, path, destination="", directory=False, evidence="", identity=""):
+            """过滤无关变化，将正文内部事件合并为容器修改，并附加批次与根身份通知。"""
+            if native_callback is not None:
+                controls = {"overflow", "zero_bytes", "root_replaced", "watch_failed", "root_offline", "batch_end"}
+                if kind not in controls:
+                    from src.core.watcher import _is_relevant_path
+
+                    handles = getattr(self, "_container_handles", None)
+                    container = handles.containing_mod(path) if handles else None
+                    target_container = handles.containing_mod(destination) if handles and destination else None
+                    if (
+                        target_container
+                        and os.path.normcase(target_container) != os.path.normcase(destination)
+                        and target_container != container
+                    ):
+                        self._detail("modified", os.path.join(target_container, ".d3dxmod"))
+                    if container and os.path.normcase(container) != os.path.normcase(path):
+                        if kind == "rename_unpaired":
+                            return
+                        # 每个通知缓冲内按所属 Mod 合并本体变化，不将原始子路径或子项改名交给界面。
+                        path = os.path.join(container, ".d3dxmod")
+                        kind, destination, directory, evidence, identity = "modified", "", False, "", ""
+                        seen = getattr(self, "_body_changes", None)
+                        if seen is None:
+                            seen = self._body_changes = set()
+                        key = os.path.normcase(container)
+                        if key in seen:
+                            return
+                        seen.add(key)
+                    elif Path(path).name not in {".d3dxmod", ".d3dxcategory"}:
+                        if kind == "modified":
+                            return
+                        if kind != "rename_unpaired" and not any(
+                            _is_relevant_path(
+                                value, is_directory=directory, path_may_have_disappeared=kind in {"deleted", "moved"}
+                            )
+                            for value in (path, destination)
+                            if value
+                        ):
+                            return
+                native_callback(
+                    kind,
+                    path,
+                    destination,
+                    directory,
+                    evidence,
+                    identity,
+                    getattr(self, "_batch", 0),
+                    getattr(self, "_root_identity", ()),
+                )
+
+        def queue_event(self, event):
+            # 原生回调负责投递，不向无操作处理器的第二队列重复发送事件。
+            """未提供原生回调时投递 watchdog 事件，避免两套通知重复发送。"""
+            if native_callback is None:
+                super().queue_event(event)
+
+        def _health(self, kind):
+            """清除待配对重命名并发送根目录健康事件，按回调模式转发通知。"""
+            self._old = ""
+            self._detail(kind, self.watch.path)
+            if native_callback is None:
+                health_callback(kind, self.watch.path)
+
+        def on_thread_start(self):
+            """记录根身份并挂起目录读取，按选项启动容器身份基线线程；失败时清理资源。"""
+            try:
+                info = os.stat(fs.native_path(self.watch.path))
+                self._root_identity = (info.st_dev, info.st_ino)
+                self._batch, self._old = 0, ""
+                actual_path = self.watch.path
+                if not track_containers:
+                    self._parent_events = _ParentWatchEvents(self.watch.path, recursive=self.watch.is_recursive)
+                    actual_path = self._parent_events.path
+                self._reader = _ArmedDirectoryRead(
+                    actual_path, self.watch.is_recursive, winapi.WATCHDOG_FILE_NOTIFY_FLAGS
+                )
+                if track_containers:
+                    self._seed_stop = threading.Event()
+                    self._container_handles = NativeContainerHandles(self._reader.handle)
+                    self._seed_thread = threading.Thread(
+                        target=self._container_handles.seed,
+                        args=(self.watch.path, self._seed_stop),
+                        daemon=True,
+                        name="source-handle-baseline",
+                    )
+                    self._seed_thread.start()
+            except Exception:
+                self._health("watch_failed")
+                self.on_thread_stop()
+                raise
+
+        def on_thread_stop(self):
+            """停止基线扫描，关闭读取器和容器句柄，并限时等待扫描线程退出。"""
+            if hasattr(self, "_seed_stop"):
+                self._seed_stop.set()
+            if hasattr(self, "_reader"):
+                self._reader.close()
+            if hasattr(self, "_container_handles"):
+                self._container_handles.close()
+            thread = getattr(self, "_seed_thread", None)
+            if thread is not None and thread.ident is not None and thread is not threading.current_thread():
+                thread.join(timeout=5)
+
+        def queue_events(self, timeout):
+            """读取并校验一个原生事件批次，配对移动并利用容器句柄判断删除依据。
+
+            根替换、离线或读取失败会报告健康异常并停止监听，正常批次最终发送完成边界。"""
+            try:
+                reader = getattr(self, "_reader", None)
+                buf, size = (
+                    reader.read()
+                    if reader is not None
+                    else winapi.read_directory_changes(
+                        self._whandle, self.watch.path, recursive=self.watch.is_recursive
+                    )
+                )
+                if not self.should_keep_running():
+                    return
+                expected = getattr(self, "_root_identity", None)
+                if expected is not None:
+                    info = os.stat(fs.native_path(self.watch.path))
+                    if expected != (info.st_dev, info.st_ino):
+                        self._health("root_replaced")
+                        self.stop()
+                        return
+                if not size:
+                    self._health("zero_bytes")
+                    return
+                events = [
+                    winapi.WinAPINativeEvent(action, relative)
+                    for action, relative in winapi._parse_event_buffer(buf, size)
+                ]
+                parent_events = getattr(self, "_parent_events", None)
+                if parent_events is not None:
+                    events = parent_events.filter(events)
+                    if not events:
+                        return
+                self._batch = getattr(self, "_batch", 0) + 1
+                self._body_changes = set()
+                old = getattr(self, "_old", "")
+                handles = getattr(self, "_container_handles", None)
+                for event in events:
+                    relative = event.src_path
+                    path = os.path.join(self.watch.path, relative)
+                    if event.is_renamed_old:
+                        if old:
+                            self._detail("rename_unpaired", old)
+                        old = path
+                    elif event.is_renamed_new:
+                        isdir = fs.is_dir(path)
+                        # 目录创建事件可能早于标记发布，在原子发布标记后登记已提交名称。
+                        if handles and handles.containing_mod(path) is None:
+                            handles.track(path if isdir else Path(path).parent)
+                        if old:
+                            if handles:
+                                handles.inspect(old)
+                                handles.relocate_prefix(old, path)
+                            self._detail("moved", old, path, isdir)
+                            self.queue_event((DirMovedEvent if isdir else FileMovedEvent)(old, path))
+                            old = ""
+                        else:
+                            self._detail("created", path, directory=isdir)
+                            self.queue_event((DirCreatedEvent if isdir else FileCreatedEvent)(path))
+                    elif event.is_added:
+                        if handles and handles.containing_mod(path) is None:
+                            handles.track(path if fs.is_dir(path) else Path(path).parent)
+                        self._detail("created", path, directory=fs.is_dir(path))
+                        self.queue_event((DirCreatedEvent if fs.is_dir(path) else FileCreatedEvent)(path))
+                    elif event.is_modified:
+                        if (
+                            handles
+                            and handles.containing_mod(path) is None
+                            and Path(path).name in {".d3dxmod", ".d3dxcategory"}
+                        ):
+                            handles.track(Path(path).parent)
+                        self._detail("modified", path, directory=fs.is_dir(path))
+                        self.queue_event((DirModifiedEvent if fs.is_dir(path) else FileModifiedEvent)(path))
+                    elif event.is_removed:
+                        evidence, destination, identity = handles.inspect(path) if handles else ("", "", "")
+                        if evidence == "relocated":
+                            prefix = os.path.normcase(self.watch.path).rstrip("\\") + "\\"
+                            if os.path.normcase(destination).startswith(prefix):
+                                self._detail("moved", path, destination, True, evidence, identity)
+                                self.queue_event(DirMovedEvent(path, destination))
+                            else:
+                                self._detail("deleted", path, evidence="outside_root", identity=identity)
+                                self.queue_event(FileDeletedEvent(path))
+                        else:
+                            self._detail("deleted", path, evidence=evidence, identity=identity)
+                            self.queue_event(FileDeletedEvent(path))
+                    elif event.is_removed_self:
+                        self._health("root_offline")
+                        self.stop()
+                self._old = old
+                if old:
+                    self._detail("rename_unpaired", old)
+                self._detail("batch_end", self.watch.path)
+            except OSError:
+                if self.should_keep_running():
+                    self._health("watch_failed")
+                    self.stop()
+
+    return BaseObserver(HealthyEmitter)
