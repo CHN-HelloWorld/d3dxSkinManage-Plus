@@ -179,3 +179,220 @@ class ArchiveService:
                 return None
             tops.add(first)
         return tops.pop() if len(tops) == 1 else None
+
+    def _extract_zip(
+        self,
+        archive: Path,
+        dest: Path,
+        progress_cb=None,
+        checkpoint=None,
+        should_cancel=None,
+    ) -> Path | None:
+        """解压 ZIP（逐数据块上报/暂停，避免大文件在暂停后继续写盘）。"""
+        extract_folder = dest / archive.stem
+        if extract_folder.exists():
+            extract_folder = self._get_unique_path(extract_folder)
+
+        with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+            infos = zf.infolist()
+            top = self._single_top_directory((info.filename, info.is_dir()) for info in infos)
+            target = dest if top else extract_folder
+            if not top:
+                fs.ensure_dir(extract_folder)
+
+            total_bytes = max(1, sum(max(0, info.file_size) for info in infos))
+            done_bytes = 0
+            target_root = os.path.abspath(str(target))
+            self._emit_progress(progress_cb, 0.02)
+            for info in infos:
+                self._check_extract_continue(checkpoint, should_cancel)
+                rel = info.filename.replace("\\", "/")
+                outp = target / rel
+                try:
+                    if os.path.commonpath([target_root, os.path.abspath(str(outp))]) != target_root:
+                        logger.warning("跳过越界 ZIP 条目: %s", info.filename)
+                        continue
+                except ValueError:
+                    continue
+                if info.is_dir():
+                    fs.ensure_dir(outp)
+                    continue
+                fs.ensure_dir(outp.parent)
+                with zf.open(info, "r") as src_fh, open(fs.native_path(outp), "wb") as dst_fh:
+                    while True:
+                        self._check_extract_continue(checkpoint, should_cancel)
+                        chunk = src_fh.read(4 * 1024 * 1024)
+                        if not chunk:
+                            break
+                        dst_fh.write(chunk)
+                        done_bytes += len(chunk)
+                        self._emit_progress(progress_cb, done_bytes / total_bytes)
+            return (dest / top) if top else extract_folder
+
+    def _extract_7z(
+        self,
+        archive: Path,
+        dest: Path,
+        progress_cb=None,
+        checkpoint=None,
+        should_cancel=None,
+    ) -> Path | None:
+        """解压 7z。
+
+        通过 ExtractCallback 累计文件写出字节数，并映射为 0.05 至 0.95 的进度。
+        """
+        if not PY7ZR_AVAILABLE:
+            logger.error("py7zr 未安装，无法解压 .7z 文件")
+            return None
+
+        extract_folder = dest / archive.stem
+        if extract_folder.exists():
+            extract_folder = self._get_unique_path(extract_folder)
+
+        with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+            top = self._single_top_directory((info.filename, info.is_directory) for info in sz.list())
+            target = dest if top else extract_folder
+            if not top:
+                fs.ensure_dir(extract_folder)
+
+            self._check_extract_continue(checkpoint, should_cancel)
+            self._emit_progress(progress_cb, 0.05)
+            cb = self._make_7z_extract_callback(sz, progress_cb, checkpoint, should_cancel)
+            if cb is not None:
+                sz.extractall(path=fs.native_path(target), callback=cb)
+            else:
+                sz.extractall(path=fs.native_path(target))
+            self._check_extract_continue(checkpoint, should_cancel)
+            self._emit_progress(progress_cb, 0.95)
+            return (dest / top) if top else extract_folder
+
+    def _make_7z_extract_callback(
+        self,
+        sz,
+        progress_cb,
+        checkpoint=None,
+        should_cancel=None,
+    ):
+        """构造按写入字节数报告解压进度的 py7zr 回调。
+
+        不需要进度或取消检查时返回 None；无法确定总大小时只检查取消。
+        逐文件累加写入长度，并隔离进度通知异常。
+        """
+        if progress_cb is None and checkpoint is None and should_cancel is None:
+            return None
+        from py7zr.callbacks import ExtractCallback
+
+        try:
+            total = 0
+            for info in sz.list():
+                if not getattr(info, "is_directory", False):
+                    total += int(getattr(info, "uncompressed", 0) or 0)
+        except Exception:
+            total = 0
+        emit = self._emit_progress
+        check = self._check_extract_continue
+
+        class _Cb(ExtractCallback):
+            """适配 7z 解压回调，将成员边界上的取消检查和累计进度转发给调用方。"""
+
+            def __init__(self):
+                """将已完成成员的累计写入字节数初始化为零。"""
+                self._done = 0
+
+            def report_start_preparation(self):
+                """在归档准备阶段检查调用方是否允许继续解压。"""
+                check(checkpoint, should_cancel)
+
+            def report_start(self, processing_file_path, processing_bytes):
+                """开始处理归档成员前检查取消和调用方检查点。"""
+                check(checkpoint, should_cancel)
+
+            def report_update(self, decompressed_bytes):
+                """处理成员内部进度回调时检查取消，不把未完成成员计入累计进度。"""
+                check(checkpoint, should_cancel)
+
+            def report_end(self, processing_file_path, wrote_bytes):
+                """累计已完成成员的写入字节数，将解压进度映射至 5%～95%；取消异常继续向上传播。"""
+                try:
+                    check(checkpoint, should_cancel)
+                    self._done += int(wrote_bytes)
+                    if total > 0:
+                        frac = 0.05 + 0.90 * min(1.0, self._done / total)
+                        emit(progress_cb, frac)
+                except _ExtractCancelled:
+                    raise
+                except Exception:
+                    pass
+
+            def report_postprocess(self):
+                """满足解压回调协议，后处理阶段无需额外操作。"""
+                pass
+
+            def report_warning(self, message):
+                """接收归档库警告回调，不单独转发警告消息。"""
+                pass
+
+        return _Cb()
+
+    def _extract_rar(
+        self,
+        archive: Path,
+        dest: Path,
+        progress_cb=None,
+        checkpoint=None,
+        should_cancel=None,
+    ) -> Path | None:
+        """解压 RAR
+
+        首选 unrar2-cffi（自带解压引擎，无需外部工具），缺失时回退 rarfile。
+        """
+        if not RAR_AVAILABLE:
+            logger.error(
+                "无可用 RAR 解压后端（请安装 unrar2-cffi，或在系统中安装 WinRAR/7-Zip/unrar），无法解压 .rar 文件"
+            )
+            return None
+
+        extract_folder = dest / archive.stem
+        if extract_folder.exists():
+            extract_folder = self._get_unique_path(extract_folder)
+
+        rf, kind = self._rar_open(archive)
+        if rf is None:
+            return None
+
+        # cffi 目录项不带尾斜杠，必须按 infolist 的目录标记区分根文件。
+        top = self._single_top_directory((info.filename, self._rar_is_dir(info, kind)) for info in rf.infolist())
+
+        # 粗粒度进度：rar 两后端 extractall 均不逐条回调 → 只报起止（0.05→0.95）。
+        self._emit_progress(progress_cb, 0.05)
+        if top:
+            self._rar_extract_all(rf, kind, dest, progress_cb, checkpoint, should_cancel)
+            self._emit_progress(progress_cb, 0.95)
+            return dest / top
+        fs.ensure_dir(extract_folder)
+        self._rar_extract_all(rf, kind, extract_folder, progress_cb, checkpoint, should_cancel)
+        self._emit_progress(progress_cb, 0.95)
+        return extract_folder
+
+    # RAR 后端适配（统一 unrar.cffi / rarfile 的 API 差异）
+
+    @staticmethod
+    def _rar_open(archive: Path):
+        """打开 RAR，返回 ``(rf, kind)``。
+
+        kind: ``'cffi'``（unrar2-cffi，首选）/ ``'rarfile'``（系统工具）。两者皆缺
+        返回 ``(None, '')``。
+        """
+        if UNRAR_CFFI_AVAILABLE:
+            return _unrar_cffi.RarFile(fs.native_path(archive)), "cffi"
+        if RARFILE_AVAILABLE:
+            # WinRAR 的安装器通常不修改 PATH；rarfile 默认只找 PATH 中的 unrar。
+            # 复用创建 RAR 时的安装探测，同时保留调用方配置的可用工具路径。
+            if not shutil.which(rarfile.UNRAR_TOOL):
+                rar_exe = find_winrar_rar_exe()
+                if rar_exe:
+                    unrar_exe = Path(rar_exe).with_name("UnRAR.exe")
+                    if unrar_exe.is_file():
+                        rarfile.UNRAR_TOOL = str(unrar_exe)
+            return rarfile.RarFile(fs.native_path(archive), "r"), "rarfile"
+        return None, ""
