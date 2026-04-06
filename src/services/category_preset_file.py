@@ -243,3 +243,277 @@ def _decode_image(stream: BinaryIO, offset: int, length: int, cancelled: Cancell
         raise
     except (OSError, ValueError, SyntaxError, struct.error, IndexError, Image.DecompressionBombError) as exc:
         raise CategoryPresetError(tr("目录图片损坏或无法解码：{exc}", exc=exc)) from exc
+
+
+def _hash_bytes(stream, length, *, cancelled=None, output=None, progress=None, phase="校验文件"):
+    """分块读取指定长度并计算 SHA-256，可同步复制到输出流；持续检查取消并报告进度。"""
+    digest = hashlib.sha256()
+    completed = 0
+    while completed < length:
+        _check_cancelled(cancelled)
+        data = stream.read(min(_CHUNK_SIZE, length - completed))
+        if not data:
+            raise CategoryPresetError(tr("文件损坏或不完整，请重新获取或重新导出"))
+        digest.update(data)
+        if output is not None:
+            output.write(data)
+        completed += len(data)
+        _progress(progress, phase, completed, length)
+    _check_cancelled(cancelled)
+    return digest.hexdigest()
+
+
+def _parse_manifest(raw: bytes):
+    """按 UTF-8 解析 JSON 清单，拒绝重复键、非有限数字和过深嵌套。"""
+
+    def unique_object(pairs):
+        """构建清单对象时拒绝重复字段，避免同一键出现歧义。"""
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise CategoryPresetError(tr("清单存在重复 JSON 键：{key}", key=key))
+            value[key] = item
+        return value
+
+    def invalid_constant(value):
+        """拒绝 JSON 解析器默认接受的非有限数值常量。"""
+        raise CategoryPresetError(tr("清单不能包含非有限数字：{value}", value=value))
+
+    # 在 JSON 递归解析前检查嵌套深度，未知字段同样受限。
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif byte == 92:
+                escaped = True
+            elif byte == 34:
+                in_string = False
+        elif byte == 34:
+            in_string = True
+        elif byte in (91, 123):
+            depth += 1
+            if depth > MAX_JSON_DEPTH:
+                raise CategoryPresetError(tr("清单 JSON 嵌套超过 16 层"))
+        elif byte in (93, 125):
+            depth -= 1
+    try:
+        return json.loads(raw.decode("utf-8"), object_pairs_hook=unique_object, parse_constant=invalid_constant)
+    except (UnicodeError, ValueError, RecursionError) as exc:
+        if isinstance(exc, CategoryPresetError):
+            raise
+        raise CategoryPresetError(tr("清单不是有效 UTF-8 JSON：{exc}", exc=exc)) from exc
+
+
+def _read_header(stream: BinaryIO, actual_length: int):
+    """验证预设文件标识、总长及分区长度，返回清单长度、图片区长度和摘要。"""
+    if not HEADER_SIZE < actual_length <= MAX_FILE_BYTES:
+        raise CategoryPresetError(tr("文件损坏、不完整或超过 1 GiB"))
+    header = stream.read(HEADER_SIZE)
+    if len(header) != HEADER_SIZE:
+        raise CategoryPresetError(tr("文件头不完整"))
+    magic, manifest_length, images_length, digest = _HEADER.unpack(header)
+    if magic != MAGIC:
+        raise CategoryPresetError(tr("请选择程序导出的分类预设文件（.d3dxcp）"))
+    if not 0 < manifest_length <= MAX_MANIFEST_BYTES:
+        raise CategoryPresetError(tr("清单长度无效或超过 16 MiB"))
+    if HEADER_SIZE + manifest_length + images_length != actual_length:
+        raise CategoryPresetError(tr("文件长度不一致，存在截断、尾部数据或超限长度"))
+    return manifest_length, images_length, digest.hex()
+
+
+def read_category_preset(path, *, cancelled=None, progress=None) -> CategoryPresetDocument:
+    """校验完整文件，不在内存中保留图片二进制数据。"""
+    path = Path(path)
+    _check_cancelled(cancelled)
+    if path.suffix.lower() != CATEGORY_PRESET_EXTENSION:
+        raise CategoryPresetError(tr("请选择程序导出的分类预设文件（.d3dxcp）"))
+    try:
+        with _open_source(path) as stream:
+            original = os.fstat(stream.fileno())
+            try:
+                manifest_length, images_length, digest = _read_header(stream, original.st_size)
+                actual_digest = _hash_bytes(
+                    stream,
+                    manifest_length + images_length,
+                    cancelled=cancelled,
+                    progress=progress,
+                )
+                if actual_digest != digest or stream.read(1):
+                    raise CategoryPresetError(tr("文件摘要不一致，请重新获取或重新导出"))
+                stream.seek(HEADER_SIZE)
+                raw_manifest = stream.read(manifest_length)
+                if len(raw_manifest) != manifest_length:
+                    raise CategoryPresetError(tr("文件清单不完整"))
+                _check_cancelled(cancelled)
+                document = validate_manifest(
+                    _parse_manifest(raw_manifest),
+                    fallback_name=path.stem,
+                    images_length=images_length,
+                )
+                del raw_manifest
+                for index, entry in enumerate(document.images):
+                    offset = HEADER_SIZE + manifest_length + entry.offset
+                    stream.seek(offset)
+                    image_digest = _hash_bytes(stream, entry.length, cancelled=cancelled)
+                    if image_digest != entry.image_id:
+                        raise CategoryPresetError(tr("目录图片摘要不一致：{image_id}", image_id=entry.image_id))
+                    if _decode_image(stream, offset, entry.length, cancelled) != entry.media_type:
+                        raise CategoryPresetError(
+                            tr("目录图片声明类型与实际类型不一致：{image_id}", image_id=entry.image_id)
+                        )
+                    _progress(progress, "校验图片", index + 1, len(document.images))
+            except CategoryPresetError as exc:
+                raise CategoryPresetFormatError(str(exc)) from exc
+            _check_cancelled(cancelled)
+            _unchanged(stream, path, original)
+        result = replace(document, source_path=path.resolve(), manifest_length=manifest_length, payload_sha256=digest)
+        _progress(progress, "读取完成", 1, 1)
+        return result
+    except OSError as exc:
+        raise CategoryPresetFileAccessError(tr("无法读取分类预设文件：{exc}", exc=exc)) from exc
+
+
+def validate_category_image(path, *, cancelled=None) -> tuple[str, str, int]:
+    """返回内容 SHA-256、解码后的媒体类型与字节数。"""
+    path = Path(path)
+    _check_cancelled(cancelled)
+    try:
+        with _open_source(path) as stream:
+            original = os.fstat(stream.fileno())
+            if not 0 < original.st_size <= MAX_IMAGE_BYTES:
+                raise CategoryPresetError(tr("单张目录图片必须为 1 字节至 20 MiB"))
+            digest = _hash_bytes(stream, original.st_size, cancelled=cancelled)
+            media_type = _decode_image(stream, 0, original.st_size, cancelled)
+            _unchanged(stream, path, original)
+            return digest, media_type, original.st_size
+    except OSError as exc:
+        raise CategoryPresetError(tr("无法读取目录图片：{exc}", exc=exc)) from exc
+
+
+def _manifest_for_document(document, images):
+    """将分类文档及图片位置索引转换为写入预设文件的清单结构。"""
+    return {
+        "kind": MANIFEST_KIND,
+        "scope": "game",
+        "name": document.name,
+        "suggested_game": {"name": document.suggested_game_name, "name_en": document.suggested_game_name_en},
+        "nodes": [asdict(node) for node in document.nodes],
+        "images": [
+            {"id": entry.image_id, "offset": entry.offset, "length": entry.length, "media_type": entry.media_type}
+            for entry in images
+        ],
+    }
+
+
+def write_category_preset(path, document, images: Mapping[str, Path], *, cancelled=None, progress=None):
+    """独占创建临时预设文件，返回读回校验的结果。"""
+    path = Path(path)
+    _check_cancelled(cancelled)
+    if path.suffix.lower() != CATEGORY_PRESET_EXTENSION:
+        raise CategoryPresetError(tr("临时分类预设文件必须使用 .d3dxcp 扩展名"))
+    if not isinstance(document, CategoryPresetDocument):
+        raise CategoryPresetError(tr("必须提供完整分类预设文档"))
+    referenced = {node.image_id for node in document.nodes if node.image_id}
+    if set(images) != referenced:
+        raise CategoryPresetError(tr("只能提供节点引用的全部目录图片"))
+    # 图片读取前使用暂定长度校验路径和引用。
+    ids = sorted(referenced)
+    provisional = [CategoryPresetImage(image_id, index, 1, "image/png") for index, image_id in enumerate(ids)]
+    validate_manifest(_manifest_for_document(document, provisional), fallback_name=path.stem, images_length=len(ids))
+    entries = []
+    total = 0
+    for index, image_id in enumerate(ids):
+        digest, media_type, length = validate_category_image(images[image_id], cancelled=cancelled)
+        if digest != image_id:
+            raise CategoryPresetError(tr("导出图片内容与引用 ID 不一致"))
+        entries.append(CategoryPresetImage(image_id, total, length, media_type))
+        total += length
+        if total + HEADER_SIZE > MAX_FILE_BYTES:
+            raise CategoryPresetError(tr("分类预设文件超过 1 GiB"))
+        _progress(progress, "准备图片", index + 1, len(ids))
+    manifest = _manifest_for_document(document, entries)
+    validate_manifest(manifest, fallback_name=path.stem, images_length=total)
+    raw_manifest = json.dumps(manifest, ensure_ascii=False, separators=(",", ":"), allow_nan=False).encode("utf-8")
+    if len(raw_manifest) > MAX_MANIFEST_BYTES or HEADER_SIZE + len(raw_manifest) + total > MAX_FILE_BYTES:
+        raise CategoryPresetError(tr("清单超过 16 MiB 或分类预设文件超过 1 GiB"))
+    identity = None
+    try:
+        _check_cancelled(cancelled)
+        with path.open("xb") as output:
+            created = os.fstat(output.fileno())
+            identity = created.st_dev, created.st_ino
+            output.write(_HEADER.pack(MAGIC, len(raw_manifest), total, bytes(32)))
+            output.write(raw_manifest)
+            payload_digest = hashlib.sha256(raw_manifest)
+            written = 0
+            for entry in entries:
+                _check_cancelled(cancelled)
+                with _open_source(Path(images[entry.image_id])) as source:
+                    image_digest = hashlib.sha256()
+                    remaining = entry.length
+                    while remaining:
+                        _check_cancelled(cancelled)
+                        chunk = source.read(min(_CHUNK_SIZE, remaining))
+                        if not chunk:
+                            raise CategoryPresetError(tr("导出图片在准备后发生变化"))
+                        image_digest.update(chunk)
+                        payload_digest.update(chunk)
+                        output.write(chunk)
+                        remaining -= len(chunk)
+                        written += len(chunk)
+                        _progress(progress, "写入文件", written, total)
+                    if source.read(1) or image_digest.hexdigest() != entry.image_id:
+                        raise CategoryPresetError(tr("导出图片在准备后发生变化"))
+            output.seek(0)
+            output.write(_HEADER.pack(MAGIC, len(raw_manifest), total, payload_digest.digest()))
+            output.flush()
+            os.fsync(output.fileno())
+        _check_cancelled(cancelled)
+        verified = read_category_preset(path, cancelled=cancelled, progress=progress)
+        _check_cancelled(cancelled)
+        _progress(progress, "写入完成", 1, 1)
+        return verified
+    except BaseException:
+        _remove_owned(path, identity)
+        raise
+
+
+def copy_category_preset_image(document, image_id, destination, *, cancelled=None):
+    """将已校验的图片复制到调用方明确指定的目标。
+
+    图片标识仅作为查询键，不覆盖已有文件；失败或取消时只删除本次创建的文件。"""
+    _check_cancelled(cancelled)
+    entry = next((item for item in document.images if item.image_id == image_id), None)
+    if entry is None or document.source_path is None or not document.payload_sha256:
+        raise CategoryPresetError(tr("图片不属于已校验的分类预设"))
+    destination = Path(destination)
+    source_path = Path(document.source_path)
+    identity = None
+    try:
+        with _open_source(source_path) as source:
+            original = os.fstat(source.fileno())
+            manifest_length, images_length, digest = _read_header(source, original.st_size)
+            if (
+                manifest_length != document.manifest_length
+                or images_length != document.images_length
+                or digest != document.payload_sha256
+            ):
+                raise CategoryPresetError(tr("已校验的分类预设来源发生变化"))
+            if entry.offset < 0 or entry.length <= 0 or entry.offset + entry.length > images_length:
+                raise CategoryPresetError(tr("图片索引区间无效"))
+            source.seek(HEADER_SIZE + manifest_length + entry.offset)
+            with destination.open("xb") as output:
+                created = os.fstat(output.fileno())
+                identity = created.st_dev, created.st_ino
+                actual_digest = _hash_bytes(source, entry.length, cancelled=cancelled, output=output)
+                if actual_digest != entry.image_id:
+                    raise CategoryPresetError(tr("已校验的目录图片发生变化"))
+                output.flush()
+            _check_cancelled(cancelled)
+            _unchanged(source, source_path, original)
+    except BaseException:
+        _remove_owned(destination, identity)
+        raise
