@@ -396,3 +396,143 @@ class ArchiveService:
                         rarfile.UNRAR_TOOL = str(unrar_exe)
             return rarfile.RarFile(fs.native_path(archive), "r"), "rarfile"
         return None, ""
+
+    @staticmethod
+    def _rar_is_dir(info, kind: str) -> bool:
+        """目录项判定：两后端都用方法，但名字不同（cffi: ``is_dir`` / rarfile: ``isdir``）。"""
+        return info.is_dir() if kind == "cffi" else info.isdir()
+
+    @staticmethod
+    def _rar_file_names(rf, kind: str) -> list[str]:
+        """RAR 内文件清单（排除目录项）。cffi 的目录项不带尾斜杠，故统一走 infolist 过滤。"""
+        return [it.filename for it in rf.infolist() if not ArchiveService._rar_is_dir(it, kind)]
+
+    def _rar_extract_all(
+        self,
+        rf,
+        kind: str,
+        target: Path,
+        progress_cb=None,
+        checkpoint=None,
+        should_cancel=None,
+    ) -> None:
+        """将 RAR 内容解压到目标目录。
+
+        rarfile 使用整体解压接口，unrar.cffi 逐成员读取并写入；成员路径须通过目录范围校验。
+        """
+        target_root = target.resolve()
+        infos = list(rf.infolist())
+        files = [it for it in infos if not self._rar_is_dir(it, kind)]
+        total = max(1, len(files))
+        done = 0
+        for it in infos:
+            self._check_extract_continue(checkpoint, should_cancel)
+            rel = it.filename.replace("\\", "/")
+            outp = target / rel
+            # 防目录穿越：解析后必须仍落在 target 内
+            try:
+                outp.resolve().relative_to(target_root)
+            except ValueError:
+                logger.warning("跳过越界 RAR 条目: %s", it.filename)
+                continue
+            if self._rar_is_dir(it, kind):
+                fs.ensure_dir(outp)
+                continue
+            fs.ensure_dir(outp.parent)
+            with open(fs.native_path(outp), "wb") as out_fh:
+                if kind == "rarfile":
+                    with rf.open(it) as src_fh:
+                        while True:
+                            self._check_extract_continue(checkpoint, should_cancel)
+                            chunk = src_fh.read(4 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            out_fh.write(chunk)
+                else:
+                    # unrar.cffi 当前只提供整成员 read；至少在成员边界严格暂停。
+                    out_fh.write(rf.read(it.filename))
+            done += 1
+            self._emit_progress(progress_cb, 0.05 + 0.90 * done / total)
+
+    @staticmethod
+    def _iter_files_with_sizes(source: Path, checkpoint=None, should_cancel=None):
+        """收集 source 下所有文件 + 各自大小 + 总字节。返回 (files, sizes, total)。"""
+        files: list[Path] = []
+        sizes: list[int] = []
+        total = 0
+        for fp in sorted(fs.iter_files(source)):
+            if should_cancel is not None and should_cancel():
+                raise _CompressCancelled()
+            if checkpoint is not None and not checkpoint():
+                raise _CompressCancelled()
+            if fs.is_file(fp):
+                try:
+                    sz = os.path.getsize(fs.native_path(fp))
+                except OSError:
+                    sz = 0
+                files.append(fp)
+                sizes.append(sz)
+                total += sz
+        return files, sizes, total
+
+    def compress_to_zip(
+        self, source_dir: str | Path, output_path: str | Path, progress_cb=None, should_cancel=None, checkpoint=None
+    ) -> bool:
+        """压缩为包含同名顶层目录的 ZIP。
+
+        顶层目录避免手动解压时将成员散落到目标目录；内容指纹会剥离单一顶层，
+        不影响不同存储形式的内容比较。progress_cb 按已写入字节比例报告进度；
+        每个文件写入前检查 should_cancel，取消时删除未完成归档。
+        """
+        source = Path(source_dir)
+        output = Path(output_path)
+
+        if not fs.is_dir(source):
+            logger.error("源文件夹不存在: %s", source)
+            return False
+
+        try:
+            fs.ensure_dir(output.parent)
+            files, sizes, total = self._iter_files_with_sizes(source, checkpoint, should_cancel)
+            done = 0
+            with zipfile.ZipFile(fs.native_path(output), "w", zipfile.ZIP_DEFLATED) as zf:
+                for file_path, fsize in zip(files, sizes):
+                    if should_cancel and should_cancel():
+                        logger.info("压缩被取消(zip): %s", source.name)
+                        raise _CompressCancelled()
+                    if checkpoint is not None and not checkpoint():
+                        raise _CompressCancelled()
+                    arcname = file_path.relative_to(source.parent).as_posix()
+                    info = zipfile.ZipInfo.from_file(fs.native_path(file_path), arcname)
+                    info.compress_type = zipfile.ZIP_DEFLATED
+                    with (
+                        open(fs.native_path(file_path), "rb") as src_fh,
+                        zf.open(info, "w", force_zip64=True) as dst_fh,
+                    ):
+                        while True:
+                            if should_cancel and should_cancel():
+                                raise _CompressCancelled()
+                            if checkpoint is not None and not checkpoint():
+                                raise _CompressCancelled()
+                            chunk = src_fh.read(4 * 1024 * 1024)
+                            if not chunk:
+                                break
+                            dst_fh.write(chunk)
+                            done += len(chunk)
+                            if progress_cb and total > 0:
+                                try:
+                                    progress_cb(done / total)
+                                except Exception:
+                                    pass
+
+            logger.info("压缩完成: %s -> %s", source.name, output.name)
+            return True
+        except _CompressCancelled:
+            try:
+                fs.unlink(output, missing_ok=True)
+            except OSError:
+                pass
+            return False
+        except Exception as e:
+            logger.error("压缩失败: %s", e)
+            return False
