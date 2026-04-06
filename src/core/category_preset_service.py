@@ -714,3 +714,307 @@ class CategoryPresetService:
         conn.commit()
         self.manager._library_protection.release(operation_id)
         return []
+
+    def recover_pending(self):
+        """按创建顺序恢复未完成导入，汇总错误并保护凭据损坏的游戏根目录。"""
+        errors = []
+        with self._connection() as conn, self._mutation():
+            journals = list(conn.execute("SELECT * FROM category_import_journal ORDER BY created_at"))
+            for journal in journals:
+                try:
+                    errors.extend(self._recover_one(conn, journal))
+                except (OSError, ValueError, sqlite3.Error) as error:
+                    errors.append(f"{journal['staging_path']}：{error}")
+                    # 恢复凭据损坏时仍禁止自动纳管。
+                    self.manager._library_protection.protect(
+                        journal["operation_id"], paths=(self._target(journal["game_id"]).root,)
+                    )
+        return tuple(errors)
+
+    def execute_import(self, plan, *, cancelled=None, progress=None):
+        """复核计划和输入，登记恢复日志后发布文件并提交分类记录。
+
+        提交前失败或取消会按凭据回滚；数据库已提交后仅完成清理，清理错误通过结果中的恢复路径返回。"""
+        self._assert_target(plan.target)
+        self._verify_input(plan, cancelled, progress)
+        if plan.conflict_count:
+            raise CategoryPresetError(tr("目标存在路径冲突，请处理后重新比较"))
+        result = ImportResult(
+            plan.target.game_id, plan.new_count, plan.existing_count, plan.fill_count, plan.new_image_count
+        )
+        if not plan.can_import:
+            return result
+        operation_id = uuid.uuid4().hex
+        registered = False
+        publication = None
+        with self._connection() as conn, self._mutation():
+            try:
+                if self._snapshot(conn, plan.target, (n.path for n in plan.document.nodes))[2] != plan.fingerprint:
+                    raise CategoryPresetError(tr("目标分类状态发生变化，请重新比较"))
+                anchors = directory_anchors(plan.target.root / row.path for row in plan.rows)
+                publication = StagingOwnership(Path(tempfile.mkdtemp(prefix="publication-", dir=plan.staging)))
+                actions, inserts, updates = self._prepare(plan, conn, cancelled, publication, progress)
+                protected = [
+                    str(plan.target.root / row.path) for row in plan.rows if row.status == "new" or row.fill_image
+                ]
+                active_paths, _ = self.manager._library_protection.snapshot()
+                if any(
+                    directory_key(path) == p
+                    or directory_key(path).startswith(p.rstrip("\\") + "\\")
+                    or p.startswith(directory_key(path).rstrip("\\") + "\\")
+                    for path in protected
+                    for p in active_paths
+                ):
+                    raise CategoryPresetError(tr("目标目录有未完成操作，请稍后重试"))
+                self.manager._library_protection.protect(operation_id, paths=protected)
+                data = {
+                    "target_root": str(plan.target.root),
+                    "source_digest": plan.document.payload_sha256,
+                    "source_path": str(plan.document.source_path),
+                    "actions": actions,
+                    "inserts": inserts,
+                    "updates": updates,
+                    "protected_paths": protected,
+                    "stage_entries": {
+                        **plan.stage_entries,
+                        **{
+                            publication.root.name + ("" if key == "." else "/" + key): value
+                            for key, value in publication.entries.items()
+                        },
+                    },
+                    "directory_anchors": anchors,
+                }
+                now = datetime.now().isoformat()
+                conn.execute(
+                    "INSERT INTO category_import_journal VALUES(?,?,?,?,?,?,?)",
+                    (
+                        operation_id,
+                        plan.target.game_id,
+                        "prepared",
+                        json.dumps(data, ensure_ascii=False),
+                        str(plan.staging),
+                        now,
+                        now,
+                    ),
+                )
+                conn.commit()
+                registered = True
+                conn.execute("BEGIN IMMEDIATE")
+                self._assert_target(plan.target)
+                self._verify_input(plan, cancelled, progress)
+                if self._snapshot(conn, plan.target, (n.path for n in plan.document.nodes))[2] != plan.fingerprint:
+                    raise CategoryPresetError(tr("目标分类状态发生变化，请重新比较"))
+                for index, action in enumerate(actions):
+                    _cancel(cancelled)
+                    self._assert_target(plan.target)
+                    changed = anchor_errors(anchors, action["target"])
+                    if index:
+                        changed.extend(published_errors((actions[index - 1],)))
+                    if changed:
+                        raise CategoryPresetError(tr("目标目录或已发布内容发生变化：") + "、".join(changed))
+                    self._publish(action)
+                    _notify(progress, N_("导入分类"), (index + 1) * 100 // max(1, len(actions)))
+                _cancel(cancelled)
+                self._assert_target(plan.target)
+                changed = anchor_errors(anchors) + published_errors(actions)
+                if changed:
+                    raise CategoryPresetError(tr("目标目录或已发布内容发生变化：") + "、".join(changed))
+                _cancel(cancelled)
+                self._commit_import(conn, operation_id, inserts, updates)
+            except Exception:
+                conn.rollback()
+                if registered:
+                    journal = conn.execute(
+                        "SELECT * FROM category_import_journal WHERE operation_id=?", (operation_id,)
+                    ).fetchone()
+                    if journal and journal["phase"] == "committed":
+                        # 数据库提交成功后，回调或驱动仍可能抛出异常。
+                        return self._finish_commit(conn, operation_id, plan, result, progress)
+                    errors = self._recover_one(conn, journal, preserve_preview=plan.stage_entries) if journal else []
+                    if errors:
+                        raise CategoryPresetError(
+                            tr("导入未完成，以下路径待恢复并继续受保护：") + "、".join(errors)
+                        ) from None
+                else:
+                    self.manager._library_protection.release(operation_id)
+                    if publication is not None:
+                        self._cleanup_owned(publication)
+                raise
+            # 数据库已经提交，取消请求或界面错误不能撤销该结果。
+            return self._finish_commit(conn, operation_id, plan, result, progress)
+
+    def _finish_commit(self, conn, operation_id, plan, result, progress):
+        """通知导入提交结果并尝试清理恢复日志，将清理问题附加到成功结果中。"""
+        try:
+            _notify(progress, "已提交", 100)
+        except Exception:
+            logger.exception("分类预设已提交后的进度通知失败")
+        try:
+            journal = conn.execute(
+                "SELECT * FROM category_import_journal WHERE operation_id=?", (operation_id,)
+            ).fetchone()
+            errors = self._recover_one(conn, journal, preserve_preview=plan.stage_entries)
+        except Exception as error:
+            errors = [f"{plan.staging}：{error}"]
+            logger.exception("分类预设已提交，清理将在启动时重试")
+        return replace(result, recovery_paths=tuple(errors))
+
+    def preview_export(self, game_id, *, include_images=True, omitted_images=(), cancelled=None, progress=None):
+        """采集分类快照并准备去重图片副本，保留图片问题供调用方决定是否省略。"""
+        target = self._target(game_id)
+        stage = self._new_stage()
+        owner = StagingOwnership(stage)
+        try:
+            with self._connection() as conn:
+                nodes, _, fingerprint = self._snapshot(conn, target)
+                if not nodes:
+                    raise CategoryPresetError(tr("该游戏没有可导出的分类目录"))
+                paths = LibraryPaths(conn, {game_id: target.root})
+                rows, document_nodes, images, issues, sources = [], [], {}, {}, []
+                image_bytes = 0
+                for row in sorted(nodes.values(), key=lambda r: (r["path"].count("/"), r["sort_order"], r["path"])):
+                    _cancel(cancelled)
+                    image_path, image_id = "", ""
+                    if include_images and row["thumbnail"] and row["path"] not in omitted_images:
+                        try:
+                            image_path = self._image_path(paths, row)
+                            signature = _signature(image_path)
+                            image_id, _, size = validate_category_image(image_path, cancelled=cancelled)
+                            if image_id not in images:
+                                fixed = stage / (image_id + Path(image_path).suffix)
+                                _copy(image_path, fixed, cancelled, owner=owner)
+                                if validate_category_image(fixed, cancelled=cancelled)[0] != image_id:
+                                    raise CategoryPresetError(tr("图片在准备时发生变化"))
+                                images[image_id] = fixed
+                                image_bytes += size
+                            if _signature(image_path) != signature:
+                                raise CategoryPresetError(tr("图片在准备时发生变化"))
+                            sources.append((image_path, signature, image_id))
+                        except (OSError, ValueError) as error:
+                            image_id = ""
+                            issues[row["path"]] = str(error)
+                    rows.append(
+                        CategoryPresetRow(
+                            row["path"],
+                            row["name"],
+                            row["name_en"],
+                            row["node_type"],
+                            "existing",
+                            image_path,
+                            bool(image_id),
+                            False,
+                            issues.get(row["path"], ""),
+                            row["name"],
+                            row["node_type"],
+                            image_path,
+                        )
+                    )
+                    document_nodes.append(
+                        CategoryPresetNode(
+                            row["path"], row["name"], row["node_type"], row["name_en"], row["sort_order"], image_id
+                        )
+                    )
+                self._assert_target(target)
+                if self._snapshot(conn, target)[2] != fingerprint:
+                    raise CategoryPresetError(tr("源分类发生变化，请重新预览"))
+            document = CategoryPresetDocument(target.name, tuple(document_nodes), target.name, target.name_en)
+            owner.verify()
+            _notify(progress, "准备完成", 100)
+            return ExportPlan(
+                target,
+                tuple(rows),
+                include_images,
+                tuple(omitted_images),
+                len(images),
+                image_bytes,
+                MappingProxyType(issues),
+                document,
+                stage,
+                fingerprint,
+                MappingProxyType(images),
+                tuple(sources),
+                dict(owner.entries),
+            )
+        except BaseException:
+            self._cleanup_owned(owner)
+            raise
+
+    def execute_export(self, plan, destination, name, *, cancelled=None, progress=None):
+        """复核分类和图片来源后生成预设文件，再以排他重命名发布到可用文件名。
+
+        发布前检查取消，成功后清理暂存计划；仅删除凭据仍匹配的未发布临时文件。"""
+        filename = category_preset_filename(name)
+        directory = self._outside(destination)
+        if not directory.is_dir():
+            raise CategoryPresetError(tr("请选择存在的保存目录"))
+        if plan.image_issues:
+            raise CategoryPresetError(tr("请先明确取消缺失或损坏的目录图片，再重新预览"))
+        self._assert_target(plan.target)
+        self._outside(plan.staging)
+        temporary = directory / (".category-preset-" + uuid.uuid4().hex + ".d3dxcp")
+        owned = None
+        try:
+            with self._connection() as conn:
+                if self._snapshot(conn, plan.target)[2] != plan.fingerprint:
+                    raise CategoryPresetError(tr("源分类发生变化，请重新预览"))
+                for path, signature, sha in plan.image_sources:
+                    _cancel(cancelled)
+                    if _signature(path) != signature or digest(path) != sha:
+                        raise CategoryPresetError(tr("源图片发生变化，请重新预览：{path}", path=path))
+                written = write_category_preset(
+                    temporary,
+                    replace(plan.document, name=filename[:-7]),
+                    plan.images,
+                    cancelled=cancelled,
+                    progress=progress,
+                )
+                owned = receipt(temporary)
+                # 最终发布前重新读取暂存文件的实际内容。
+                if read_category_preset(temporary, cancelled=cancelled, progress=progress) != written:
+                    raise CategoryPresetError(tr("导出临时文件发生变化"))
+                self._assert_target(plan.target)
+                if self._snapshot(conn, plan.target)[2] != plan.fingerprint:
+                    raise CategoryPresetError(tr("源分类发生变化，请重新预览"))
+                for path, signature, sha in plan.image_sources:
+                    if _signature(path) != signature or digest(path) != sha:
+                        raise CategoryPresetError(tr("源图片发生变化，请重新预览：{path}", path=path))
+                _cancel(cancelled)
+                for number in range(10000):
+                    suffix = "" if number == 0 else f" ({number})"
+                    stem = filename[:-7]
+                    while len((stem + suffix + ".d3dxcp").encode("utf-16-le")) // 2 > 255:
+                        stem = stem[:-1]
+                    target = directory / (stem + suffix + ".d3dxcp")
+                    try:
+                        rename_exclusive(temporary, target)
+                        break
+                    except FileExistsError:
+                        continue
+                else:
+                    raise CategoryPresetError(tr("同名文件过多，请使用其他名称"))
+            try:
+                _notify(progress, "已提交", 100)
+            except Exception:
+                logger.exception("分类预设导出发布后的进度通知失败")
+            try:
+                self.discard(plan)
+            except Exception:
+                logger.exception("分类预设已导出，暂存清理失败：%s", plan.staging)
+            return ExportResult(plan.target.game_id, target, len(plan.rows), len(written.images))
+        finally:
+            if owned and matches(temporary, owned):
+                temporary.unlink()
+
+    def discard(self, plan):
+        """无待恢复导入日志时清理计划暂存内容，无法安全清理的路径保留并报告。"""
+        if plan is None:
+            return
+        with self._connection() as conn:
+            pending = conn.execute(
+                "SELECT 1 FROM category_import_journal WHERE staging_path=?", (str(plan.staging),)
+            ).fetchone()
+        if pending:
+            return
+        errors = self._cleanup_owned(StagingOwnership(plan.staging, plan.stage_entries))
+        if errors:
+            raise CategoryPresetError(tr("暂存清理未完成，已保留以下路径：") + "、".join(errors))
