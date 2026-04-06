@@ -238,3 +238,77 @@ class CategoryPresetService:
             raise CategoryPresetError(tr("目标游戏已被删除，请重新选择"))
         root = safe_path(get_data_dir() / game["resource_dir"] / "mods")
         return CategoryPresetTarget(game_id, game["name"], game["name_en"], root)
+
+    def _outside(self, path):
+        """校验路径未穿过链接且位于全部资料库和部署目录之外，违规时抛出错误。"""
+        path = safe_path(path)
+        resolved = directory_key(str(path.resolve()))
+        roots = []
+        for game in self._games():
+            roots.append(get_data_dir() / game["resource_dir"] / "mods")
+            if game.get("mods_path"):
+                roots.append(Path(resolve_stored_path(game["mods_path"])))
+        runtime_deployment = self.manager._storage.get_deploy_dir()
+        if runtime_deployment:
+            roots.append(Path(runtime_deployment))
+        for root in roots:
+            root_key = directory_key(str(root.resolve())).rstrip("\\")
+            if resolved == root_key or resolved.startswith(root_key + "\\"):
+                raise CategoryPresetError(tr("预设文件和暂存位置必须在所有分类库及部署目录之外：{path}", path=path))
+        return path
+
+    def _new_stage(self):
+        """在数据库所在的安全目录中创建本次预设操作的独立暂存目录。"""
+        base = self._outside(self.db_path.parent)
+        return Path(tempfile.mkdtemp(prefix=".category-preset-", dir=base))
+
+    def _cleanup_owned(self, owner):
+        """清理仍与所有权凭据匹配的暂存对象，记录并返回保留路径。"""
+        errors = owner.cleanup()
+        if errors:
+            logger.error("暂存清理保留未知或已改变的路径：%s", "、".join(errors))
+        return errors
+
+    def _snapshot(self, conn, target, extra=()):
+        """采集分类记录、Mod 占用路径和文件状态指纹，供预览与执行比较一致性。"""
+        paths = LibraryPaths(conn, {target.game_id: target.root})
+        records = [
+            dict(row)
+            for row in conn.execute("SELECT * FROM nodes WHERE game_id=? ORDER BY sort_order,id", (target.game_id,))
+        ]
+        nodes = {}
+        for row in records:
+            location = safe_path(paths.node_path(row["id"]))
+            relative = location.relative_to(target.root).as_posix()
+            row["path"] = relative
+            row["absolute"] = str(location)
+            nodes[directory_key(relative)] = row
+        mod_rows = [
+            tuple(row) for row in conn.execute("SELECT * FROM mods WHERE game_id=? ORDER BY mod_id", (target.game_id,))
+        ]
+        mod_paths = {
+            directory_key(paths.container_path(row[0]).relative_to(target.root).as_posix()) for row in mod_rows
+        }
+        fs_paths = {target.root}
+        for row in nodes.values():
+            location = Path(row["absolute"])
+            fs_paths.update((location, location / CATEGORY_MARKER_FILE))
+        fs_paths.update(target.root / path for path in extra)
+        states = tuple(
+            (str(path), _signature(path), digest(path) if path.name == CATEGORY_MARKER_FILE and path.is_file() else "")
+            for path in sorted(fs_paths, key=str)
+        )
+        fingerprint = (tuple(tuple(row.items()) for row in records), tuple(mod_rows), states)
+        return nodes, mod_paths, fingerprint
+
+    def _assert_target(self, target):
+        """重新读取目标游戏配置，名称或根目录与计划不符时拒绝继续。"""
+        current = self._target(target.game_id)
+        if current != target:
+            raise CategoryPresetError(tr("目标游戏或分类根目录发生变化，请重新比较"))
+
+    def _image_path(self, paths, row):
+        """解析节点缩略图引用并检查路径安全；无图片引用时返回空字符串。"""
+        if not row["thumbnail"]:
+            return ""
+        return str(safe_path(paths.resolve_image(row["id"], json.loads(row["thumbnail"]))))
