@@ -178,3 +178,63 @@ def _signature(path):
         return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns)
     except (FileNotFoundError, NotADirectoryError):
         return None
+
+
+def _copy(source, target, cancelled=None, *, owner=None):
+    """分块排他复制文件，并按需同步暂存所有权和内容摘要。
+
+    复制中检查取消及容量上限，写入后刷新磁盘并核对来源签名；源变化或读取失败时抛出异常。"""
+    source, target = safe_path(source), safe_path(target)
+    before = _signature(source)
+    total = 0
+    copied_digest = hashlib.sha256()
+    with source.open("rb") as incoming, target.open("xb") as outgoing:
+        if owner:
+            owner.opened_file(target, outgoing)
+        for chunk in iter(lambda: incoming.read(1024 * 1024), b""):
+            _cancel(cancelled)
+            total += len(chunk)
+            if total > MAX_FILE_BYTES:
+                raise CategoryPresetError(tr("文件超过 1 GiB 上限"))
+            outgoing.write(chunk)
+            copied_digest.update(chunk)
+            if owner:
+                owner.file_digest(target, copied_digest.hexdigest())
+        outgoing.flush()
+        os.fsync(outgoing.fileno())
+    if before != _signature(source):
+        raise CategoryPresetError(tr("来源发生变化，请重新比较：{source}", source=source))
+
+
+class CategoryPresetService:
+    """组织分类预设的预览、事务发布、导出和按持久凭据恢复。"""
+
+    def __init__(self, manager):
+        """绑定资料库管理器并保存数据库路径，供每次操作建立独立连接。"""
+        self.manager = manager
+        self.db_path = Path(manager._index._db_path)
+
+    @contextmanager
+    def _connection(self):
+        """提供注册过目录排序规则的独立 SQLite 连接，并在上下文结束时关闭。"""
+        conn = sqlite3.connect(str(self.db_path), timeout=30)
+        conn.row_factory = sqlite3.Row
+        register_connection(conn)
+        conn.execute("PRAGMA synchronous=FULL")
+        try:
+            yield conn
+        finally:
+            conn.close()
+
+    def _games(self):
+        # 直接读取配置，不使用绑定界面数据库连接的 LibraryPaths。
+        """直接读取游戏配置条目，避免使用绑定所有者线程数据库的路径服务。"""
+        return self.manager._game_service._store.get_games()
+
+    def _target(self, game_id):
+        """根据游戏编号解析并检查分类根目录，游戏已删除时拒绝操作。"""
+        game = next((g for g in self._games() if g["id"] == game_id), None)
+        if game is None:
+            raise CategoryPresetError(tr("目标游戏已被删除，请重新选择"))
+        root = safe_path(get_data_dir() / game["resource_dir"] / "mods")
+        return CategoryPresetTarget(game_id, game["name"], game["name_en"], root)
