@@ -415,3 +415,319 @@ def stage_import_metadata(
     except Exception as e:
         logger.error("压缩前暂存导入元数据失败 (%s): %s", source, e)
         return False
+
+
+def materialize_staged_previews(
+    prepared: PreparedImportSource,
+    body_path: str | Path,
+    *,
+    cache_dir: str | Path | None = None,
+    content_hash: str = "",
+    checkpoint=None,
+    should_cancel=None,
+) -> list[Path]:
+    """完整预览复制完成后一次性发布，失败或取消不留下可复用的部分缓存。"""
+    body = Path(fs.normal_path(body_path))
+    if not prepared.staged_previews_complete or not prepared.staged_body_previews:
+        return []
+    results: list[Path] = []
+    if fs.is_dir(body):
+        for rel, _staged in prepared.staged_body_previews:
+            candidate = body / Path(rel)
+            if fs.is_file(candidate):
+                results.append(candidate)
+        return results
+    if cache_dir is None:
+        return []
+    cache = Path(fs.normal_path(cache_dir))
+    with preview_cache_staging(cache) as stage:
+        for rel, staged in prepared.staged_body_previews:
+            _check_continue(checkpoint, should_cancel)
+            target = stage / Path(rel)
+            fs.copy_path(
+                staged,
+                target,
+                checkpoint=checkpoint,
+                should_cancel=should_cancel,
+            )
+            results.append(target)
+        _check_continue(checkpoint, should_cancel)
+        return publish_preview_cache(stage, cache, results, content_hash=content_hash)
+
+
+def install_staged_ini_overrides(
+    prepared: PreparedImportSource,
+    body_path: str | Path,
+    *,
+    checkpoint=None,
+    should_cancel=None,
+) -> bool:
+    """把已暂存的 ini 镜像装入容器；只复制小文件，不读取最终归档。"""
+    stage = prepared.staged_ini_overrides
+    if stage is None:
+        return False
+    target = resolve_ini_overrides_dir(fs.normal_path(body_path))
+    if target is None:
+        return False
+    marker = stage / INI_OVERRIDES_SEEDED_MARKER
+    try:
+        # seeded 最后写入磁盘：取消/失败时不会把半份 override 误标成完整。
+        for source in sorted(fs.iter_files(stage), key=lambda p: str(p).casefold()):
+            if source.name == INI_OVERRIDES_SEEDED_MARKER:
+                continue
+            _check_continue(checkpoint, should_cancel)
+            rel = source.relative_to(stage)
+            fs.copy_path(
+                source,
+                target / rel,
+                checkpoint=checkpoint,
+                should_cancel=should_cancel,
+            )
+        _check_continue(checkpoint, should_cancel)
+        fs.ensure_dir(target)
+        if fs.is_file(marker):
+            fs.copy_path(marker, target / marker.name)
+        else:
+            fs.write_text(
+                target / INI_OVERRIDES_SEEDED_MARKER,
+                "1",
+                encoding="utf-8",
+            )
+        return True
+    except InterruptedError:
+        return False
+    except Exception as e:
+        logger.warning("安装压缩前暂存的 ini override 失败: %s", e)
+        return False
+
+
+def _take_envelope_or_degrade(
+    candidate_dirs,
+    stage: Path,
+    notices: list[str],
+) -> tuple[dict | None, list[Path]]:
+    """读取分享元数据，无效时记录说明并忽略该元数据。
+
+    分享数据不决定资源内容有效性；调用方随后仍须移除其保留目录。
+    """
+    try:
+        return take_envelope(candidate_dirs, stage)
+    except InvalidVariantPackageError:
+        raise
+    except InvalidManagedMetadataError as e:
+        logger.warning("分享信封损坏，按无元数据导入: %s", e)
+        _add_notice(notices, DEGRADED_METADATA_NOTICE)
+        return None, []
+
+
+def _exclude_staged_previews(root: Path, names: tuple[str, ...], *, checkpoint=None, should_cancel=None) -> None:
+    """仅在本次导入拥有的工作副本中删除明确选定的成员。"""
+    if not names:
+        return
+    from src.core.library_schema import valid_relative
+
+    owned_root = Path(fs.native_path(root)).resolve()
+    selected = []
+    for name in dict.fromkeys(names):
+        _check_continue(checkpoint, should_cancel)
+        if (
+            not valid_relative(name)
+            or Path(name).suffix.lower() not in IMAGE_EXTENSIONS
+            or Path(name).suffix.lower() == ".dds"
+        ):
+            raise ValueError(f"Invalid excluded preview: {name!r}")
+        candidate = root / name.replace("\\", "/")
+        if not Path(fs.native_path(candidate)).resolve().is_relative_to(owned_root):
+            raise ValueError(f"Excluded preview is outside the import working copy: {name!r}")
+        selected.append(candidate)
+    for candidate in selected:
+        _check_continue(checkpoint, should_cancel)
+        fs.unlink(candidate, missing_ok=True)
+
+
+def prepare_import_source(
+    source_path: str | Path,
+    archive_service,
+    target_format: str,
+    strict_format: bool,
+    temp_parent: str | Path,
+    *,
+    excluded_previews: tuple[str, ...] = (),
+    extract_progress_cb=None,
+    checkpoint=None,
+    should_cancel=None,
+) -> PreparedImportSource | None:
+    """准备用于内容校验的导入源；可直接保存的归档不解压。
+
+    调用方先根据 clean_path 计算哈希并检查重复，再生成最终本体。
+    """
+    src = Path(source_path)
+    src_fmt = source_format(src)
+    if not src_fmt:
+        logger.error("不支持的导入源: %s", src)
+        return None
+
+    target = normalize_import_format(target_format)
+    final_fmt = final_import_format(src_fmt, target, strict_format)
+    is_archive = src_fmt in ARCHIVE_IMPORT_FORMATS
+    reserved = archive_has_reserved_payload(src, archive_service) if is_archive else _folder_has_reserved_payload(src)
+
+    # 最常见的 GameBanana/普通压缩包快路径：保留原档，零解压零重压。
+    if is_archive and final_fmt == src_fmt and not reserved and not excluded_previews:
+        return PreparedImportSource(
+            clean_path=src,
+            source_format=src_fmt,
+            final_format=final_fmt,
+            passthrough_archive=True,
+        )
+
+    needs_work_root = is_archive or reserved or excluded_previews or final_fmt in ARCHIVE_IMPORT_FORMATS
+    work_root = None
+    if needs_work_root:
+        work_root = Path(temp_parent) / f"import_{uuid.uuid4().hex}"
+        fs.ensure_dir(work_root, exist_ok=False)
+
+    manifest = None
+    variants: tuple[ModVariant, ...] = ()
+    staged_previews: list[Path] = []
+    notices: list[str] = []
+    passthrough = False
+    try:
+        if is_archive:
+            archive_variants = validate_archive_variant_members(src, archive_service) if reserved else False
+            extract_root = work_root / "extracted"
+            extracted = archive_service.extract(
+                str(src),
+                str(extract_root),
+                progress_cb=extract_progress_cb,
+                checkpoint=checkpoint,
+                should_cancel=should_cancel,
+            )
+            if extracted is None:
+                logger.error("解压失败: %s", src)
+                if work_root is not None:
+                    fs.rmtree(work_root, ignore_errors=True)
+                return None
+            clean_path = Path(extracted)
+            _exclude_staged_previews(
+                extract_root, excluded_previews, checkpoint=checkpoint, should_cancel=should_cancel
+            )
+            body = _probe_current_container(extract_root, clean_path, notices=notices)
+            stage = work_root / "share_previews"
+            variants = read_package_variants(extract_root, clean_path)
+            if archive_variants and not variants:
+                raise InvalidVariantPackageError(tr("归档内的变体文件无法与同包 Mod 资源对应"))
+            manifest, staged_previews = _take_envelope_or_degrade((extract_root, clean_path), stage, notices)
+            # take_envelope 在没有 info.json 时不会清 marker；这里无条件清一次保留结构。
+            strip_envelope(extract_root, clean_path)
+        else:
+            clean_path = src
+            body = None
+            validate_folder_variant_roots(src)
+            if reserved or excluded_previews:
+                _probe_current_container(src, notices=notices)
+                source_variants = read_package_variants(src)
+                staged = work_root / "folder" / src.name
+                fs.ensure_dir(staged.parent)
+                fs.copy_path(
+                    src,
+                    staged,
+                    checkpoint=checkpoint,
+                    should_cancel=should_cancel,
+                )
+                clean_path = staged
+                _exclude_staged_previews(
+                    clean_path, excluded_previews, checkpoint=checkpoint, should_cancel=should_cancel
+                )
+                body = _probe_current_container(clean_path, notices=notices)
+                stage = work_root / "share_previews"
+                variants = read_package_variants(clean_path)
+                if variants != source_variants:
+                    raise InvalidManagedMetadataError(tr("复制过程中变体文件发生变化，已取消导入"))
+                manifest, staged_previews = _take_envelope_or_degrade((clean_path,), stage, notices)
+                strip_envelope(clean_path)
+
+        # 完整容器输入须先读取分享元数据，再移除管理结构并解析内部本体。
+        if body is not None:
+            unwrapped = _unwrap_container_body(
+                body,
+                work_root,
+                target,
+                strict_format,
+                archive_service,
+                variants=variants,
+                checkpoint=checkpoint,
+                should_cancel=should_cancel,
+            )
+            if unwrapped is None:
+                if work_root is not None:
+                    fs.rmtree(work_root, ignore_errors=True)
+                return None
+            clean_path, src_fmt, final_fmt, passthrough = unwrapped
+
+        validate_package_variants(clean_path, variants)
+        return PreparedImportSource(
+            clean_path=clean_path,
+            source_format=src_fmt,
+            final_format=final_fmt,
+            passthrough_archive=passthrough,
+            work_root=work_root,
+            share_manifest=manifest,
+            share_previews=staged_previews,
+            share_variants=variants,
+            metadata_notice="\n".join(notices),
+        )
+    except InvalidManagedMetadataError as e:
+        # 元数据校验失败时按统一契约返回 None，同时保存具体拒绝原因供上层显示。
+        logger.error("拒绝导入受管容器 (%s): %s", src, e)
+        _record_reject_reason(str(e))
+        if work_root is not None:
+            fs.rmtree(work_root, ignore_errors=True)
+        return None
+    except Exception as e:
+        logger.error("准备导入源失败 (%s): %s", src, e)
+        if work_root is not None:
+            fs.rmtree(work_root, ignore_errors=True)
+        return None
+
+
+def materialize_import_body(
+    prepared: PreparedImportSource,
+    archive_service,
+    *,
+    progress_cb=None,
+    should_cancel=None,
+    checkpoint=None,
+) -> Path | None:
+    """在查重后把准备源物化成最终库内形态（恒为压缩档）。"""
+    if prepared.passthrough_archive:
+        return prepared.clean_path
+    if not fs.is_dir(prepared.clean_path):
+        logger.error("待压缩导入源不是文件夹: %s", prepared.clean_path)
+        return None
+
+    work_root = prepared.work_root
+    if work_root is None:
+        logger.error("压缩导入缺少临时工作目录: %s", prepared.clean_path)
+        return None
+    out_dir = work_root / "materialized"
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    # ArchiveService 使用 Path.with_suffix；以无点占位名压缩，再改为真实 Mod 基名，
+    # 避免 ``Skin.v1`` 被误截成 ``Skin.zip``。
+    raw = archive_service.compress(
+        str(prepared.clean_path),
+        str(out_dir / "payload"),
+        prepared.final_format,
+        progress_cb=progress_cb,
+        should_cancel=should_cancel,
+        checkpoint=checkpoint,
+    )
+    if raw is None:
+        return None
+    raw = Path(raw)
+    desired = out_dir / f"{prepared.clean_path.name}{raw.suffix.lower()}"
+    if raw != desired:
+        desired.unlink(missing_ok=True)
+        raw.replace(desired)
+    return desired
