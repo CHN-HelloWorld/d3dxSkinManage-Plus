@@ -350,3 +350,169 @@ class CategoryPresetDialog(QDialog):
                 button(tr("前往游戏页"), self._go_games, primary=True, name="categoryPresetGoGames"),
             )
         )
+
+    def _go_games(self):
+        """发出游戏页导航请求，再通过统一清理路径关闭窗口。"""
+        self.games_requested.emit()
+        self.reject()
+
+    def _pick_source(self):
+        """打开预设文件选择器，只有选定路径后才启动读取和比较。"""
+        path, _ = QFileDialog.getOpenFileName(self, tr("选择预设文件"), self._source, tr(FILE_FILTER))
+        if path:
+            self._load_source(path)
+
+    def _load_source(self, path):
+        """空闲且有目标游戏时替换导入来源，将旧计划移交清理队列并提交后台预览任务。"""
+        if self.busy or not self._game:
+            return
+        service = self._service
+        old = self._import_plan
+        self._import_plan = None
+        if old is not None:
+            self._pending_discards.append(old)
+        pending = self._pending_discards
+        self._source = str(path)
+
+        def read(**kwargs):
+            """先清理不再使用的计划，再以任务传入的取消和进度回调读取新来源。"""
+            _discard_plans(service, pending)
+            return service.preview_import(path, self.game_id, **kwargs)
+
+        self._run_task("read", read, self.show_import_plan)
+
+    def show_import_plan(self, plan):
+        """接管导入计划并展示整树比较、图片策略与冲突；已请求关闭时仅保存计划供清理。"""
+        self._import_plan = plan
+        if self._close_requested:
+            return
+        layout = self._new_page(tr("导入分类预设"), "preview", size=(1160, 780), step=1)
+        context = panel()
+        context_layout = QHBoxLayout(context)
+        context_layout.setContentsMargins(16, 12, 16, 12)
+        source = QVBoxLayout()
+        source.addWidget(label(tr("预设文件"), role="muted"))
+        file_row = QHBoxLayout()
+        filename = label(plan.source_name, role="strong", wrap=True)
+        file_row.addWidget(filename, 1)
+        file_row.addWidget(button(tr("更换"), self._pick_source, quiet=True))
+        source.addLayout(file_row)
+        if plan.suggested_game_name:
+            source.addWidget(
+                label(
+                    tr("建议游戏：{suggested_game_name}", suggested_game_name=plan.suggested_game_name),
+                    role="muted",
+                    wrap=True,
+                )
+            )
+        context_layout.addLayout(source, 1)
+        target = QVBoxLayout()
+        target.addWidget(label(tr("目标游戏 · 分类根目录"), role="muted"))
+        target.addWidget(label(plan.target.name, role="strong", wrap=True))
+        root = label(str(plan.target.root), role="muted", wrap=True)
+        root.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        target.addWidget(root)
+        context_layout.addLayout(target, 1)
+        layout.addWidget(context)
+        layout.addWidget(
+            stat_strip(
+                [
+                    (plan.new_count, tr("新增目录"), "success"),
+                    (plan.existing_count, tr("已存在"), ""),
+                    (plan.fill_count, tr("补充图片"), "accent"),
+                    (plan.conflict_count, tr("路径冲突"), "danger" if plan.conflict_count else ""),
+                ]
+            )
+        )
+        if plan.suggested_game_name and plan.suggested_game_name != plan.target.name:
+            layout.addWidget(
+                self._notice(
+                    tr(
+                        "预设建议游戏为“{suggested_game_name}”，当前为“{name}”。请确认目标游戏。",
+                        suggested_game_name=plan.suggested_game_name,
+                        name=plan.target.name,
+                    ),
+                    tone="warning",
+                )
+            )
+        self._tree = PresetTree()
+        if plan.conflict_count:
+            layout.addWidget(
+                self._notice(
+                    tr("{conflict_count} 处路径冲突，暂不能导入。", conflict_count=plan.conflict_count),
+                    tone="danger",
+                    action=button(tr("定位问题"), self._tree.next_issue, quiet=True),
+                )
+            )
+        elif not plan.new_count and not plan.fill_count:
+            layout.addWidget(self._notice(tr("全部目录已存在，无需导入。"), tone="success"))
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        self._inspector = PresetInspector()
+        inspector_scroll = QScrollArea()
+        inspector_scroll.setWidgetResizable(True)
+        inspector_scroll.setMinimumWidth(235)
+        inspector_scroll.setWidget(self._inspector)
+        splitter.addWidget(self._tree)
+        splitter.addWidget(inspector_scroll)
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 0)
+        splitter.setSizes([790, 270])
+        layout.addWidget(splitter, 1)
+        self._tree.node_selected.connect(self._inspector.set_row)
+        self._tree.set_rows(plan.rows)
+        start = button(tr("开始导入"), self._start_import, primary=True, name="categoryPresetStartImport")
+        start.setEnabled(plan.can_import)
+        copy = (
+            tr("处理冲突后点击“重新比较”。")
+            if plan.conflict_count
+            else (
+                tr(
+                    "本次新增 {new_count} 个目录，补充 {fill_count} 张图片。",
+                    new_count=plan.new_count,
+                    fill_count=plan.fill_count,
+                )
+                if plan.can_import
+                else tr("无需导入。")
+            )
+        )
+        self._footer(
+            copy,
+            (
+                button(tr("重新比较"), self._recompare, icon="actions/refresh", quiet=True),
+                button(tr("取消"), self.reject),
+                start,
+            ),
+        )
+
+    def _recompare(self):
+        """使用当前导入计划重新比较目标分类状态，并在完成后替换预览页面。"""
+        if self._import_plan is not None and not self.busy:
+            self._run_task("compare", partial(self._service.recompare, self._import_plan), self.show_import_plan)
+
+    def _start_import(self):
+        """仅在计划允许导入且窗口空闲时，将实际导入交给后台服务执行。"""
+        plan = self._import_plan
+        if plan is not None and plan.can_import and not self.busy:
+            self._run_task("import", partial(self._service.execute_import, plan), self._import_success)
+
+    def _prepare_export(self):
+        """保存图片选项快照并排队清理旧导出计划，然后后台准备完整分类树。"""
+        if self.busy:
+            return
+        service = self._service
+        old = self._export_plan
+        self._export_plan = None
+        if old is not None:
+            self._pending_discards.append(old)
+        pending = self._pending_discards
+        include_images, omitted_images = self._include_images, tuple(self._omitted_images)
+
+        def prepare(**kwargs):
+            """清理待释放计划后，使用固定图片选项生成目标游戏的导出预览。"""
+            _discard_plans(service, pending)
+            return service.preview_export(
+                self.game_id, include_images=include_images, omitted_images=omitted_images, **kwargs
+            )
+
+        self._run_task("export_preview", prepare, self.show_export_plan)
