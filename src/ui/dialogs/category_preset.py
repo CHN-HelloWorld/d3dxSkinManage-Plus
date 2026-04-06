@@ -892,3 +892,78 @@ class CategoryPresetDialog(QDialog):
         """请求宿主导航到指定游戏分类，并通过统一清理路径关闭窗口。"""
         self.view_categories_requested.emit(game_id)
         self.reject()
+
+    def request_close(self):
+        """取消和清理完成前保留窗口与服务。"""
+        self._close_requested = True
+        if self.busy:
+            self._cancel_task()
+        else:
+            self._finish_close()
+
+    def _finish_close(self):
+        """将持有计划移交后台清理，清理成功后才拒绝对话框；无待清理资源时直接关闭。"""
+        plans = [plan for plan in (self._import_plan, self._export_plan) if plan is not None]
+        self._import_plan = self._export_plan = None
+        self._pending_discards.extend(plans)
+        pending = self._pending_discards
+        if pending and self._service_instance is not None:
+            service = self._service_instance
+
+            def cleanup(**kwargs):
+                """在后台逐项释放计划暂存资源，失败项留在共享队列供重试。"""
+                _discard_plans(service, pending)
+
+            self._close_requested = False
+            self._run_task("cleanup", cleanup, lambda result: super(CategoryPresetDialog, self).reject(), silent=True)
+        else:
+            pending.clear()
+            super().reject()
+
+    def _keep_files_and_close(self):
+        """记录用户选择保留的暂存路径，释放窗口对清理队列的引用并关闭，不删除文件。"""
+        logger.warning(
+            "分类预设暂存清理未完成，用户选择保留文件：%s",
+            "、".join(str(plan.staging) for plan in self._pending_discards),
+        )
+        self._pending_discards.clear()
+        super().reject()
+
+    def reject(self):
+        """将取消按钮和 Esc 的关闭统一转入取消任务、等待清理的流程。"""
+        self.request_close()
+
+    def closeEvent(self, event):
+        """存在后台任务或待释放计划时暂缓系统关闭，并启动统一关闭流程。"""
+        if self.busy or self._import_plan is not None or self._export_plan is not None or self._pending_discards:
+            event.ignore()
+            self.request_close()
+        else:
+            super().closeEvent(event)
+
+    def dragEnterEvent(self, event):
+        """仅在可选择来源的空闲页面接受全部为本地路径的拖放进入事件。"""
+        if self._mode in {"source", "preview", "file_error"} and not self.busy and event.mimeData().hasUrls():
+            if all(url.isLocalFile() for url in event.mimeData().urls()):
+                event.acceptProposedAction()
+
+    def dropEvent(self, event):
+        """在来源页面读取单个本地文件，多文件拖放显示可恢复的来源错误。"""
+        if self.busy or self._mode not in {"source", "preview", "file_error"}:
+            return
+        urls = event.mimeData().urls()
+        if len(urls) != 1:
+            self._show_error(tr("请一次选择一个分类预设文件（.d3dxcp）。"), file_error=True)
+        elif urls[0].isLocalFile():
+            self._load_source(urls[0].toLocalFile())
+        event.acceptProposedAction()
+
+    def changeEvent(self, event):
+        """主题实际变化时重建局部样式并刷新图标，避免重复响应调色板事件。"""
+        if event.type() == QEvent.Type.PaletteChange and hasattr(self, "_theme"):
+            current = theme.current_theme()
+            if current != self._theme:
+                self._theme = current
+                self.setStyleSheet(stylesheet())
+                icons.retheme_icons(self)
+        super().changeEvent(event)
