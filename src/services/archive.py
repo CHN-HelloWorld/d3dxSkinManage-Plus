@@ -536,3 +536,289 @@ class ArchiveService:
         except Exception as e:
             logger.error("压缩失败: %s", e)
             return False
+
+    def compress_to_7z(
+        self, source_dir: str | Path, output_path: str | Path, progress_cb=None, should_cancel=None, checkpoint=None
+    ) -> bool:
+        """使用 py7zr 压缩为含同名顶层目录的 7z。
+
+        每个文件写入后按累计字节比例报告进度；单个大文件写入期间无法继续细分。
+        """
+        if not PY7ZR_AVAILABLE:
+            logger.error("py7zr 未安装，无法创建 .7z")
+            return False
+        source = Path(source_dir)
+        output = Path(output_path)
+        if not fs.is_dir(source):
+            logger.error("源文件夹不存在: %s", source)
+            return False
+        try:
+            fs.ensure_dir(output.parent)
+            # 使用较低的 LZMA2 压缩等级，减少已压缩贴图和缓冲数据的重复压缩开销。
+            filters = None
+            try:
+                filters = [{"id": py7zr.FILTER_LZMA2, "preset": 1}]
+            except AttributeError:
+                filters = None
+            files, sizes, total = self._iter_files_with_sizes(source, checkpoint, should_cancel)
+            done = 0
+            with py7zr.SevenZipFile(fs.native_path(output), "w", filters=filters) as sz:
+                for file_path, fsize in zip(files, sizes):
+                    if should_cancel and should_cancel():
+                        logger.info("压缩被取消(7z): %s", source.name)
+                        raise _CompressCancelled()
+                    if checkpoint is not None and not checkpoint():
+                        raise _CompressCancelled()
+                    arcname = file_path.relative_to(source.parent)
+                    sz.write(fs.native_path(file_path), str(arcname).replace("\\", "/"))
+                    done += fsize
+                    if progress_cb and total > 0:
+                        try:
+                            progress_cb(done / total)
+                        except Exception:
+                            pass
+            logger.info("压缩完成(7z): %s -> %s", source.name, output.name)
+            return True
+        except _CompressCancelled:
+            try:
+                fs.unlink(output, missing_ok=True)
+            except OSError:
+                pass
+            return False
+        except Exception as e:
+            logger.error("7z 压缩失败: %s", e)
+            # 半成品清理，避免残留损坏包被后续误认成 mod
+            try:
+                fs.unlink(output, missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def compress_to_rar(
+        self, source_dir: str | Path, output_path: str | Path, progress_cb=None, should_cancel=None, checkpoint=None
+    ) -> bool:
+        """调用 WinRAR 的 rar.exe 压缩为含顶层目录的 RAR，不可用时返回 False。
+
+        通过 -idn 隐藏文件名并保留百分比，从标准输出解析实时进度；
+        进度解析失败不影响压缩结果。
+        """
+        rar_exe = find_winrar_rar_exe()
+        if not rar_exe:
+            logger.error("未检测到 WinRAR（rar.exe），无法创建 .rar")
+            return False
+        source = Path(source_dir)
+        output = Path(output_path)
+        if not source.exists() or not source.is_dir():
+            logger.error("源文件夹不存在: %s", source)
+            return False
+        try:
+            import re
+            import subprocess
+
+            output.parent.mkdir(parents=True, exist_ok=True)
+            output.unlink(missing_ok=True)  # 压缩前移除同名归档，以满足 RAR 工具的写入要求。
+            creationflags = 0
+            if hasattr(subprocess, "CREATE_NO_WINDOW"):
+                creationflags = subprocess.CREATE_NO_WINDOW  # 不弹黑框
+            # 使用 -idn 隐藏文件名并保留进度。按二进制读取输出，
+            # 以回车或换行分块解析百分比，避免系统编码横幅造成解码失败。
+            proc = subprocess.Popen(
+                [rar_exe, "a", "-ep1", "-r", "-o+", "-idn", str(output), source.name],
+                cwd=str(source.parent),
+                creationflags=creationflags,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+            )
+            pct_re = re.compile(rb"(\d{1,3})%")
+            last = -1
+            try:
+                # 后台读取标准输出，主循环以队列超时轮询取消状态，
+                # 避免压缩器长时间无输出时阻塞取消请求。
+                import os as _os
+                import queue as _queue
+                import threading as _threading
+
+                _CANCEL_POLL_S = 0.05
+                chunks: _queue.Queue = _queue.Queue(maxsize=64)
+                fd = proc.stdout.fileno() if proc.stdout else None
+
+                def _pump() -> None:
+                    """从 RAR 子进程输出管道读取进度并投递到有界队列，结束时发送空块哨兵。"""
+                    try:
+                        while True:
+                            try:
+                                block = _os.read(fd, 4096)
+                            except OSError:
+                                block = b""
+                            if not block:
+                                break
+                            try:
+                                chunks.put(block, timeout=1.0)
+                            except _queue.Full:
+                                pass  # 队列已满时跳过本次进度数据，继续排空子进程输出。
+                    finally:
+                        chunks.put(b"")  # 结束哨兵
+
+                pump = None
+                if fd is not None:
+                    pump = _threading.Thread(target=_pump, name="rar-progress-pump", daemon=True)
+                    pump.start()
+
+                while fd is not None:
+                    # 取消时终止 RAR 子进程。
+                    if should_cancel and should_cancel():
+                        logger.info("压缩被取消(rar)，终止 rar.exe: %s", source.name)
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        try:
+                            output.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+                        return False
+                    if checkpoint is not None and not checkpoint():
+                        try:
+                            proc.kill()
+                        except Exception:
+                            pass
+                        return False
+                    try:
+                        chunk = chunks.get(timeout=_CANCEL_POLL_S)
+                    except _queue.Empty:
+                        # 无输出时继续轮询仍在执行的进程，进程结束后处理结果。
+                        if proc.poll() is not None and chunks.empty():
+                            break
+                        continue
+                    if not chunk:
+                        break
+                    for m in pct_re.finditer(chunk):
+                        pct = min(100, int(m.group(1)))
+                        if pct > last and progress_cb:  # 单调推进，忽略回跳/重复
+                            last = pct
+                            try:
+                                progress_cb(pct / 100.0)
+                            except Exception:
+                                pass
+            except Exception:
+                pass
+            proc.wait(timeout=600)
+            if proc.returncode != 0 or not output.exists():
+                logger.error("RAR 压缩失败 (rc=%s)", proc.returncode)
+                try:
+                    output.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                return False
+            logger.info("压缩完成(rar): %s -> %s", source.name, output.name)
+            return True
+        except Exception as e:
+            logger.error("RAR 压缩异常: %s", e)
+            try:
+                output.unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+
+    def compress(
+        self,
+        source_dir: str | Path,
+        output_base: str | Path,
+        fmt: str = "zip",
+        progress_cb=None,
+        should_cancel=None,
+        checkpoint=None,
+    ) -> Path | None:
+        """按指定格式压缩文件夹，返回实际产物路径，失败返回 None。
+
+        output_base 不含扩展名，方法按 zip、7z 或 rar 添加后缀。RAR 工具不可用时改用 ZIP。
+        所有格式均包含同名顶层目录，progress_cb 和 should_cancel 透传至压缩器。
+        取消时中止压缩并清理未完成文件。
+        """
+        fmt = (fmt or "zip").lower()
+        base = Path(output_base)
+        if fmt == "7z" and PY7ZR_AVAILABLE:
+            out = base.with_suffix(".7z")
+            return out if self.compress_to_7z(source_dir, out, progress_cb, should_cancel, checkpoint) else None
+        if fmt == "rar" and rar_compress_available():
+            out = base.with_suffix(".rar")
+            if self.compress_to_rar(source_dir, out, progress_cb, should_cancel, checkpoint):
+                return out
+            # 取消时不回退 zip（否则又跑一遍压缩，白等）
+            if should_cancel and should_cancel():
+                return None
+            # rar 失败 → 回退 zip
+            logger.warning("RAR 压缩失败，回退 ZIP: %s", base.name)
+        elif fmt == "rar":
+            logger.warning("未安装 WinRAR，RAR 存储回退 ZIP: %s", base.name)
+        elif fmt == "7z":
+            logger.warning("py7zr 不可用，7z 存储回退 ZIP: %s", base.name)
+        # 默认 / 回退：zip
+        out = base.with_suffix(".zip")
+        return out if self.compress_to_zip(source_dir, out, progress_cb, should_cancel, checkpoint) else None
+
+    # 向归档追加 .d3dxmeta 元数据成员。
+
+    def inject_member_7z(
+        self, archive_path: str | Path, arcname: str, data: bytes, allow_rewrite: bool = False
+    ) -> bool:
+        """向 7z 追加成员，已有同名成员时按 allow_rewrite 决定是否重写。
+
+        新增成员作为独立块追加，无需重新压缩原有数据；同名覆盖会重建归档。
+        默认禁止重写并返回 False，调用方须明确处理该结果。
+        """
+        if not PY7ZR_AVAILABLE:
+            return False
+        archive = Path(archive_path)
+        arcname = arcname.replace("\\", "/")
+        try:
+            # 探测是否已存在同名成员，决定走「追加快路径」还是回退外置 sidecar
+            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+                existing = set(sz.getnames())
+            if arcname in existing:
+                if not allow_rewrite:
+                    # 不在主线程做多秒级整包重压；返回 False → 上层写外置 sidecar 回退处理。
+                    return False
+                return self._rewrite_7z_with_member(archive, arcname, data)
+            # 快路径：追加模式，仅写新块，不重压既有 99MB 内容
+            with py7zr.SevenZipFile(str(archive), mode="a") as sz:
+                sz.writestr(data, arcname)
+            return True
+        except Exception as e:
+            # 追加失败也不做慢速重压（除非显式允许）——回退外置 sidecar。
+            logger.warning("7z 追加成员失败: %s", e)
+            if allow_rewrite:
+                return self._rewrite_7z_with_member(archive, arcname, data)
+            return False
+
+    def _rewrite_7z_with_member(self, archive: Path, arcname: str, data: bytes) -> bool:
+        """慢路径：解全包→写/覆盖成员→整包重压。仅用于覆盖已存在成员（追加会重复）。"""
+        if not PY7ZR_AVAILABLE:
+            return False
+        import tempfile
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="7z_inject_"))
+        try:
+            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+                sz.extractall(path=str(tmpdir))
+            target = tmpdir / arcname
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(data)
+            tmp_out = archive.with_name(archive.stem + "_inject_tmp.7z")
+            tmp_out.unlink(missing_ok=True)
+            with py7zr.SevenZipFile(str(tmp_out), mode="w") as sz:
+                for fp in sorted(tmpdir.rglob("*")):
+                    if fp.is_file():
+                        sz.write(str(fp), str(fp.relative_to(tmpdir)).replace("\\", "/"))
+            archive.unlink(missing_ok=True)
+            tmp_out.replace(archive)
+            return True
+        except Exception as e:
+            logger.error("7z 注入成员失败 (%s): %s", arcname, e)
+            try:
+                (archive.with_name(archive.stem + "_inject_tmp.7z")).unlink(missing_ok=True)
+            except OSError:
+                pass
+            return False
+        finally:
+            shutil.rmtree(str(tmpdir), ignore_errors=True)
