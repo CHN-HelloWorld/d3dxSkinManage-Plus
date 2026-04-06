@@ -227,3 +227,191 @@ def _unwrap_container_body(
         logger.error("解压容器内本体失败: %s", body)
         return None
     return Path(extracted), body_fmt, final_fmt, False
+
+
+@dataclass
+class PreparedImportSource:
+    """已清洗、可计算内容哈希的导入源；压缩物化在查重后单独执行。"""
+
+    clean_path: Path
+    source_format: str
+    final_format: str
+    passthrough_archive: bool = False
+    work_root: Path | None = None
+    share_manifest: dict | None = None
+    share_previews: list[Path] = field(default_factory=list)
+    share_variants: tuple[ModVariant, ...] = ()
+    staged_body_previews: list[tuple[str, Path]] = field(default_factory=list)
+    staged_previews_complete: bool = False
+    content_version: tuple | None = None
+    staged_ini_overrides: Path | None = None
+    metadata_staged: bool = False
+    #: 非空表示描述类元数据被整份丢弃（见 DEGRADED_METADATA_NOTICE）；内容仍完好。
+    metadata_notice: str = ""
+
+    def cleanup(self) -> None:
+        """清理本次导入的临时工作目录；未创建工作目录时不执行操作。"""
+        if self.work_root is not None:
+            fs.rmtree(self.work_root, ignore_errors=True)
+
+    def ensure_work_root(self, temp_parent: str | Path) -> Path:
+        """为压缩前元数据暂存按需创建工作目录。"""
+        if self.work_root is None:
+            self.work_root = Path(temp_parent) / f"import_{uuid.uuid4().hex}"
+            fs.ensure_dir(self.work_root, exist_ok=False)
+        return self.work_root
+
+
+def _check_continue(checkpoint=None, should_cancel=None) -> None:
+    """检查取消回调和工作检查点，任一要求停止时抛出中断异常。"""
+    if should_cancel is not None and should_cancel():
+        raise InterruptedError("import metadata staging cancelled")
+    if checkpoint is not None and not checkpoint():
+        raise InterruptedError("import metadata staging cancelled")
+
+
+def _safe_relative_name(value: str | Path) -> str:
+    """统一路径分隔符并移除空段、点号和父目录段，生成用于成员分组的相对名称。"""
+    raw = str(value).replace("\\", "/").strip("/")
+    parts = [part for part in raw.split("/") if part not in ("", ".", "..")]
+    return "/".join(parts)
+
+
+def _single_archive_top(names: list[str]) -> str:
+    """返回所有归一化压缩成员共同的顶层名称，顶层不唯一时返回空字符串。"""
+    tops = {normalized.split("/", 1)[0] for name in names if (normalized := _safe_relative_name(name))}
+    return next(iter(tops)) if len(tops) == 1 else ""
+
+
+def stage_import_metadata(
+    prepared: PreparedImportSource,
+    archive_service,
+    temp_parent: str | Path,
+    *,
+    include_previews: bool = True,
+    checkpoint=None,
+    should_cancel=None,
+) -> bool:
+    """压缩前暂存本体预览图和归档 INI 覆盖文件。
+
+    仅从 prepared.clean_path 读取，后续压缩完成后复用这些文件，避免再次打开归档。
+    """
+    if prepared.metadata_staged:
+        return True
+
+    source = Path(fs.normal_path(prepared.clean_path))
+    # 仅为受支持的归档输出格式准备 INI 覆盖数据。
+    want_ini_stage = prepared.final_format in ARCHIVE_IMPORT_FORMATS
+    try:
+        source_version = capture_source_version(source)
+        if prepared.content_version is not None and source_version != prepared.content_version:
+            raise OSError("Import source changed after fingerprinting")
+        work_root = prepared.ensure_work_root(temp_parent)
+        preview_root = work_root / "body_previews"
+        ini_root = work_root / "ini_overrides"
+        staged_previews: list[tuple[str, Path]] = []
+        previews_complete = include_previews
+        ini_complete = True
+
+        if fs.is_dir(source):
+            for path in sorted(fs.iter_files(source), key=lambda p: str(p).casefold()):
+                _check_continue(checkpoint, should_cancel)
+                try:
+                    rel = _safe_relative_name(path.relative_to(source).as_posix())
+                except ValueError:
+                    continue
+                if not rel or META_DIR in rel.split("/"):
+                    continue
+                suffix = path.suffix.lower()
+                if include_previews and len(staged_previews) < 5 and suffix in IMAGE_EXTENSIONS and suffix != ".dds":
+                    staged = preview_root / Path(rel)
+                    fs.copy_path(
+                        path,
+                        staged,
+                        checkpoint=checkpoint,
+                        should_cancel=should_cancel,
+                    )
+                    staged_previews.append((rel, staged))
+                if want_ini_stage and suffix == ".ini":
+                    fs.copy_path(
+                        path,
+                        ini_root / Path(rel),
+                        checkpoint=checkpoint,
+                        should_cancel=should_cancel,
+                    )
+
+        elif fs.is_file(source) and is_resident_archive(source):
+            _check_continue(checkpoint, should_cancel)
+            names = archive_service.list_contents(source)
+            normalized_names = [(name, _safe_relative_name(name)) for name in names]
+            if include_previews:
+                preview_names = [
+                    original
+                    for original, normalized in normalized_names
+                    if normalized
+                    and META_DIR not in normalized.split("/")
+                    and Path(normalized).suffix.lower() in IMAGE_EXTENSIONS
+                    and Path(normalized).suffix.lower() != ".dds"
+                ][:5]
+                if preview_names:
+                    extracted = {
+                        Path(fs.normal_path(path))
+                        for path in archive_service.extract_files(source, preview_names, preview_root)
+                    }
+                    for original in preview_names:
+                        rel = _safe_relative_name(original)
+                        staged = preview_root / Path(rel)
+                        # 解压失败可能留下不完整文件，仅发布已确认完成的成员。
+                        if staged in extracted and fs.is_file(staged):
+                            staged_previews.append((rel, staged))
+                    previews_complete = len(staged_previews) == len(preview_names)
+
+            if want_ini_stage:
+                expected = {
+                    normalized
+                    for _original, normalized in normalized_names
+                    if normalized.lower().endswith(".ini") and META_DIR not in normalized.split("/")
+                }
+                raw_inis = archive_service.read_all_inis(source)
+                top = _single_archive_top(names)
+                staged_members: set[str] = set()
+                for member, data in raw_inis.items():
+                    _check_continue(checkpoint, should_cancel)
+                    normalized = _safe_relative_name(member)
+                    rel = normalized
+                    if top and normalized.startswith(top + "/"):
+                        rel = normalized[len(top) + 1 :]
+                    rel = _safe_relative_name(rel)
+                    if not rel or META_DIR in rel.split("/"):
+                        continue
+                    fs.write_bytes(ini_root / Path(rel), data)
+                    staged_members.add(normalized)
+                ini_complete = expected.issubset(staged_members)
+
+        else:
+            logger.error("无法暂存导入元数据，不支持的准备源: %s", source)
+            return False
+
+        if want_ini_stage:
+            if ini_complete:
+                fs.ensure_dir(ini_root)
+                fs.write_text(
+                    ini_root / INI_OVERRIDES_SEEDED_MARKER,
+                    "1",
+                    encoding="utf-8",
+                )
+                prepared.staged_ini_overrides = ini_root
+            else:
+                logger.warning("压缩前 ini 提取不完整，未写 seeded 标记: %s", source)
+
+        if capture_source_version(source) != source_version:
+            raise OSError("Import source changed while staging previews")
+        prepared.staged_body_previews = staged_previews
+        prepared.staged_previews_complete = previews_complete
+        prepared.metadata_staged = True
+        return True
+    except InterruptedError:
+        return False
+    except Exception as e:
+        logger.error("压缩前暂存导入元数据失败 (%s): %s", source, e)
+        return False
