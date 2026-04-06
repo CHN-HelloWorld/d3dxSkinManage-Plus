@@ -312,3 +312,159 @@ class CategoryPresetService:
         if not row["thumbnail"]:
             return ""
         return str(safe_path(paths.resolve_image(row["id"], json.loads(row["thumbnail"]))))
+
+    def preview_import(self, source, game_id, *, cancelled=None, progress=None):
+        """验证并复制来源预设，提取图片后生成与目标分类的比较计划。
+
+        暂存文件均登记所有权；来源变化或准备失败时仅清理本次拥有的暂存对象。"""
+        target = self._target(game_id)
+        source = self._outside(source)
+        original = read_category_preset(source, cancelled=cancelled, progress=progress)
+        stage = self._new_stage()
+        owner = StagingOwnership(stage)
+        try:
+            fixed = stage / "input.d3dxcp"
+            _copy(source, fixed, cancelled, owner=owner)
+            document = read_category_preset(fixed, cancelled=cancelled, progress=progress)
+            if document.payload_sha256 != original.payload_sha256:
+                raise CategoryPresetError(tr("来源文件在准备时发生变化，请重新选择"))
+            image_dir = stage / "images"
+            owner.mkdir(image_dir)
+            for image in document.images:
+                _cancel(cancelled)
+                suffix = {
+                    "image/png": ".png",
+                    "image/jpeg": ".jpg",
+                    "image/bmp": ".bmp",
+                    "image/gif": ".gif",
+                    "image/webp": ".webp",
+                }[image.media_type]
+                image_path = image_dir / (image.image_id + suffix)
+                copy_category_preset_image(document, image.image_id, image_path, cancelled=cancelled)
+                owner.completed_file(image_path, image.image_id)
+            owner.verify()
+            return self._compare(document, target, source.name, stage, dict(owner.entries), cancelled, progress)
+        except BaseException:
+            self._cleanup_owned(owner)
+            raise
+
+    def _compare(self, document, target, source_name, stage, entries, cancelled, progress):
+        """比较预设与本地分类及 Mod 占用，传播祖先路径冲突并生成导入数量和决策。"""
+        self._assert_target(target)
+        with self._connection() as conn:
+            nodes, mods, fingerprint = self._snapshot(conn, target, (n.path for n in document.nodes))
+            paths = LibraryPaths(conn, {target.game_id: target.root})
+            rows = []
+            images = {p.stem: str(p) for p in (stage / "images").iterdir()}
+            for number, node in enumerate(document.nodes):
+                _cancel(cancelled)
+                key = directory_key(node.path)
+                local = nodes.get(key)
+                location = target.root / node.path
+                detail, local_image = "", ""
+                status = "existing" if local else "new"
+                if key in mods or (not local and os.path.lexists(location)):
+                    status = "conflict"
+                    kind = tr("同名 Mod") if key in mods or location.is_dir() else tr("同名文件")
+                    detail = tr("该位置已有{kind}，无法创建分类目录：{location}", kind=kind, location=location)
+                elif local and not location.is_dir():
+                    status, detail = "conflict", tr("已登记分类目录缺失或被文件占用：{location}", location=location)
+                elif local:
+                    if (local["name"], local["name_en"], local["node_type"]) != (
+                        node.name,
+                        node.name_en,
+                        node.node_type,
+                    ):
+                        detail = tr("名称或类型不同，保留本地设置")
+                    if local["thumbnail"]:
+                        local_image = self._image_path(paths, local)
+                        if not Path(local_image).is_file():
+                            detail += tr("；本地图片缺失，保留原图片引用")
+                fill = bool(local and not local["thumbnail"] and node.image_id and status == "existing")
+                rows.append(
+                    CategoryPresetRow(
+                        node.path,
+                        node.name,
+                        node.name_en,
+                        node.node_type,
+                        status,
+                        images.get(node.image_id, ""),
+                        bool(node.image_id),
+                        fill,
+                        detail,
+                        local["name"] if local else "",
+                        local["node_type"] if local else "",
+                        local_image,
+                    )
+                )
+                _notify(progress, N_("比较分类"), (number + 1) * 100 // len(document.nodes))
+            blocked = {directory_key(row.path): row.detail for row in rows if row.status == "conflict"}
+            for index, row in enumerate(rows):
+                ancestor = row.path.rpartition("/")[0]
+                while ancestor:
+                    if directory_key(ancestor) in blocked:
+                        rows[index] = replace(
+                            row, status="conflict", fill_image=False, detail=blocked[directory_key(ancestor)]
+                        )
+                        break
+                    ancestor = ancestor.rpartition("/")[0]
+        new = sum(r.status == "new" for r in rows)
+        existing = sum(r.status == "existing" for r in rows)
+        fill = sum(r.fill_image for r in rows)
+        conflicts = sum(r.status == "conflict" for r in rows)
+        return ImportPlan(
+            target,
+            source_name,
+            document.name,
+            document.suggested_game_name,
+            tuple(rows),
+            new,
+            existing,
+            fill,
+            conflicts,
+            sum(r.status == "new" and r.has_image for r in rows),
+            bool((new or fill) and not conflicts),
+            document,
+            stage,
+            fingerprint,
+            entries,
+        )
+
+    def recompare(self, plan, *, cancelled=None, progress=None):
+        """重新核验暂存输入后，按目标游戏当前状态刷新导入比较计划。"""
+        document = self._verify_input(plan, cancelled, progress)
+        return self._compare(
+            document,
+            self._target(plan.target.game_id),
+            plan.source_name,
+            plan.staging,
+            plan.stage_entries,
+            cancelled,
+            progress,
+        )
+
+    def _verify_input(self, plan, cancelled, progress):
+        """重新读取暂存预设并核对预览对象凭据，发现内容变化时要求重新选择文件。"""
+        self._outside(plan.staging)
+        document = read_category_preset(plan.document.source_path, cancelled=cancelled, progress=progress)
+        if document != plan.document:
+            raise CategoryPresetError(tr("暂存预设发生变化，请重新选择文件"))
+        for relative, expected in plan.stage_entries.items():
+            _cancel(cancelled)
+            path = plan.staging if relative == "." else plan.staging / relative
+            if path != plan.document.source_path and not matches(path, expected):
+                raise CategoryPresetError(tr("暂存预览发生变化，请重新选择文件：{path}", path=path))
+        return document
+
+    @contextmanager
+    def _mutation(self):
+        """在操作前后推进资料库版本并维护活动修改计数，异常退出也恢复计数。"""
+        with self.manager._library_epoch_lock:
+            self.manager._library_epoch += 1
+            self.manager._library_mutations += 1
+        try:
+            yield
+        finally:
+            with self.manager._library_epoch_lock:
+                self.manager._library_epoch += 1
+                self.manager._library_mutations -= 1
