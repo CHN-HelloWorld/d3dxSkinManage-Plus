@@ -468,3 +468,249 @@ class CategoryPresetService:
             with self.manager._library_epoch_lock:
                 self.manager._library_epoch += 1
                 self.manager._library_mutations -= 1
+
+    def _marker(self, row):
+        """将分类数据库行转换为可写入磁盘的分类标记结构。"""
+        return {
+            "schema": 2,
+            "kind": "d3dxSkinManage-Plus.category",
+            "id": row["id"],
+            "name": row["name"],
+            "name_en": row["name_en"],
+            "node_type": row["node_type"],
+            "sort_order": row["sort_order"],
+            "thumbnail": json.loads(row["thumbnail"]) if row["thumbnail"] else None,
+        }
+
+    def _prepare(self, plan, conn, cancelled, owner, progress=None):
+        """在受所有权凭据管理的暂存树中构造新增目录、图片及标记。
+
+        返回文件发布动作与数据库新增、更新记录；替换已有标记时保留备份，并在返回前校验暂存树。"""
+        _notify(progress, N_("准备目录"), 0)
+        prepared = 0
+        last_percent = 0
+        total = max(1, plan.new_count + plan.fill_count)
+        tree = owner.root
+        nodes, _, _ = self._snapshot(conn, plan.target, (n.path for n in plan.document.nodes))
+        rows = {directory_key(row.path): row for row in plan.rows}
+        actions, inserts, updates = [], [], []
+        next_sort = {}
+        for row in nodes.values():
+            parent = directory_key(row["path"].rpartition("/")[0])
+            next_sort[parent] = max(next_sort.get(parent, 0), row["sort_order"] + 1)
+        ordered = sorted(
+            enumerate(plan.document.nodes), key=lambda pair: (pair[1].path.count("/"), pair[1].sort_order, pair[0])
+        )
+        new_roots = []
+        for _, node in ordered:
+            _cancel(cancelled)
+            key = directory_key(node.path)
+            preview = rows[key]
+            parent = directory_key(node.path.rpartition("/")[0])
+            is_new = preview.status == "new"
+            if not is_new and not preview.fill_image:
+                continue
+            if is_new:
+                row = {
+                    "id": uuid.uuid4().hex,
+                    "game_id": plan.target.game_id,
+                    "parent_id": nodes[parent]["id"] if parent != "." else None,
+                    "directory_name": node.path.rsplit("/", 1)[-1],
+                    "name": node.name,
+                    "name_en": node.name_en,
+                    "node_type": node.node_type,
+                    "sort_order": next_sort.get(parent, 0),
+                    "thumbnail": "",
+                    "path": node.path,
+                }
+                next_sort[parent] = row["sort_order"] + 1
+                nodes[key] = row
+                inserts.append(row)
+                location = tree / node.path
+                owner.mkdir(location, parents=True)
+                if parent == "." or rows[parent].status != "new":
+                    new_roots.append(node.path)
+            else:
+                row = dict(nodes[key])
+                updates.append(row)
+                location = tree / ("fill-" + row["id"])
+                owner.mkdir(location)
+            if node.image_id:
+                meta = location / META_DIR
+                owner.mkdir(meta)
+                suffix = Path(preview.image_path).suffix
+                image_name = "category-" + uuid.uuid4().hex + suffix
+                image = meta / image_name
+                copy_category_preset_image(plan.document, node.image_id, image, cancelled=cancelled)
+                owner.completed_file(image, node.image_id)
+                row["thumbnail"] = json.dumps({"scope": "node", "path": f"{META_DIR}/{image_name}"}, ensure_ascii=False)
+                if not is_new:
+                    final_meta = plan.target.root / node.path / META_DIR
+                    safe_path(final_meta)
+                    if final_meta.exists():
+                        if not final_meta.is_dir():
+                            raise CategoryPresetError(tr("目录图片位置被文件占用：{final_meta}", final_meta=final_meta))
+                        actions.append(
+                            {
+                                "kind": "create",
+                                "source": str(image),
+                                "target": str(final_meta / image_name),
+                                "after": owner.entries[owner.key(image)],
+                            }
+                        )
+                    else:
+                        actions.append(
+                            {
+                                "kind": "tree",
+                                "source": str(meta),
+                                "target": str(final_meta),
+                                "entries": owner.subtree(meta),
+                            }
+                        )
+            marker = safe_path(location / CATEGORY_MARKER_FILE)
+            marker_bytes = json.dumps(self._marker(row), ensure_ascii=False).encode("utf-8")
+            with marker.open("xb") as stream:
+                owner.opened_file(marker, stream)
+                stream.write(marker_bytes)
+                owner.file_digest(marker, hashlib.sha256(marker_bytes).hexdigest())
+                stream.flush()
+                os.fsync(stream.fileno())
+            if not is_new:
+                final = plan.target.root / node.path / CATEGORY_MARKER_FILE
+                if final.exists():
+                    backup = location / "original-marker"
+                    before = receipt(final)
+                    _copy(final, backup, cancelled, owner=owner)
+                    actions.append(
+                        {
+                            "kind": "replace",
+                            "source": str(marker),
+                            "target": str(final),
+                            "before": before,
+                            "after": owner.entries[owner.key(marker)],
+                            "backup": str(backup),
+                            "backup_receipt": owner.entries[owner.key(backup)],
+                        }
+                    )
+                else:
+                    actions.append(
+                        {
+                            "kind": "create",
+                            "source": str(marker),
+                            "target": str(final),
+                            "after": owner.entries[owner.key(marker)],
+                        }
+                    )
+            prepared += 1
+            percent = min(99, prepared * 100 // total)
+            if percent > last_percent:
+                _notify(progress, N_("准备目录"), percent)
+                last_percent = percent
+        if not plan.target.root.exists():
+            # 尚未打开的游戏可能没有资源根目录，将其作为一个受管目录树准备。
+            root_stage = tree / ".root-publication"
+            owner.mkdir(root_stage)
+            for relative in new_roots:
+                owner.move(tree / relative, root_stage / relative)
+            root_target = plan.target.root
+            while not root_target.parent.exists():
+                wrapper = tree / (".parent-" + uuid.uuid4().hex)
+                owner.mkdir(wrapper)
+                owner.move(root_stage, wrapper / root_target.name)
+                root_stage, root_target = wrapper, root_target.parent
+            actions.insert(
+                0,
+                {
+                    "kind": "tree",
+                    "source": str(root_stage),
+                    "target": str(root_target),
+                    "entries": owner.subtree(root_stage),
+                },
+            )
+        else:
+            for relative in new_roots:
+                actions.insert(
+                    0,
+                    {
+                        "kind": "tree",
+                        "source": str(tree / relative),
+                        "target": str(plan.target.root / relative),
+                        "entries": owner.subtree(tree / relative),
+                    },
+                )
+        owner.verify()
+        _notify(progress, N_("准备目录"), 100)
+        return actions, inserts, updates
+
+    def _publish(self, action):
+        """核对动作的源及目标凭据后执行排他发布、比较替换或创建硬链接。"""
+        source, target = safe_path(action["source"]), safe_path(action["target"])
+        if action["kind"] == "tree":
+            if inventory(source) != action["entries"]:
+                raise CategoryPresetError(tr("暂存目录发生变化：{source}", source=source))
+            rename_exclusive(source, target)
+        elif action["kind"] == "replace":
+            if not matches(target, action["before"]) or not matches(source, action["after"]):
+                raise CategoryPresetError(tr("分类标记发生变化：{target}", target=target))
+            os.replace(source, target)
+        else:
+            if not matches(source, action["after"]):
+                raise CategoryPresetError(tr("暂存图片发生变化：{source}", source=source))
+            os.link(source, target)
+
+    def _commit_import(self, conn, operation_id, inserts, updates):
+        """写入新增节点和空图片补全，将恢复日志标记为已提交并提交数据库事务。"""
+        for row in inserts:
+            conn.execute(
+                """INSERT INTO nodes(id,game_id,parent_id,directory_name,name,name_en,node_type,sort_order,thumbnail)
+                            VALUES(:id,:game_id,:parent_id,:directory_name,:name,:name_en,:node_type,:sort_order,:thumbnail)""",
+                row,
+            )
+        for row in updates:
+            conn.execute("UPDATE nodes SET thumbnail=? WHERE id=? AND thumbnail=?", (row["thumbnail"], row["id"], ""))
+        conn.execute(
+            "UPDATE category_import_journal SET phase='committed',updated_at=? WHERE operation_id=?",
+            (datetime.now().isoformat(), operation_id),
+        )
+        conn.commit()
+
+    def _recover_one(self, conn, journal, *, preserve_preview=()):
+        """恢复单条分类导入日志，核对目录身份后撤销未提交发布并清理拥有的暂存内容。
+
+        恢复失败时保留日志与路径保护；全部成功后删除日志并释放保护，可保留预览文件供重试。"""
+        data = json.loads(journal["plan_json"])
+        operation_id = journal["operation_id"]
+        self.manager._library_protection.protect(operation_id, paths=data["protected_paths"])
+        errors = []
+        if journal["phase"] != "committed" and not data.get("rollback_done"):
+            errors = anchor_errors(data.get("directory_anchors", {}))
+            moved_actions = [
+                action
+                for action in data["actions"]
+                if action["kind"] == "tree" and not os.path.lexists(action["source"])
+            ]
+            errors.extend(published_errors(moved_actions, directories_only=True))
+            if errors:
+                # 已移动的目录可能位于原位置旁边，身份恢复前保护其所在范围。
+                self.manager._library_protection.protect(operation_id, paths=(Path(path).parent for path in errors))
+            else:
+                errors = rollback_actions(data["actions"])
+                if not errors:
+                    # 清理暂存目录前持久化实际文件结果，
+                    # 避免后续恢复把已经撤回的输出误认为被外部移动。
+                    data["rollback_done"] = True
+                    conn.execute(
+                        "UPDATE category_import_journal SET plan_json=?,updated_at=? WHERE operation_id=?",
+                        (json.dumps(data, ensure_ascii=False), datetime.now().isoformat(), operation_id),
+                    )
+                    conn.commit()
+        if not errors:
+            entries = {key: value for key, value in data["stage_entries"].items() if key not in preserve_preview}
+            errors = remove_inventory(journal["staging_path"], entries)
+        if errors:
+            logger.error("分类预设恢复未完成，保留记录及路径保护：%s", ", ".join(errors))
+            return errors
+        conn.execute("DELETE FROM category_import_journal WHERE operation_id=?", (operation_id,))
+        conn.commit()
+        self.manager._library_protection.release(operation_id)
+        return []
