@@ -709,3 +709,186 @@ class CategoryPresetDialog(QDialog):
             self._committed = True
             self._cancel_button.setEnabled(False)
             self._cancel_button.setText(tr("正在完成…"))
+
+    def _cancel_task(self):
+        """仅对未提交且非清理的任务请求协作取消，并禁用重复取消操作。"""
+        if self._worker is not None and not self._committed and self._task_kind != "cleanup":
+            self._worker.request_cancel()
+            self._cancel_button.setEnabled(False)
+            self._cancel_button.setText(tr("正在取消…"))
+
+    def _task_finished(self):
+        """结算线程并延迟释放 Qt 对象，再按错误、取消或成功分派页面更新及后续关闭清理。"""
+        worker = self._worker
+        if worker is None:
+            return
+        self._worker = None
+        self._page.setEnabled(True)
+        worker.deleteLater()
+        kind, callback = self._task_kind, self._task_success
+        if worker.error is not None:
+            self._close_requested = False
+            self._show_error(worker.error, file_error=kind == "read")
+        elif worker.was_cancelled:
+            if self._close_requested:
+                self._finish_close()
+            else:
+                self._show_cancelled(kind)
+        else:
+            callback(worker.result)
+            if self._close_requested and not self.busy:
+                self._finish_close()
+
+    def _show_error(self, message, *, file_error=False):
+        """区分来源文件错误与执行错误并提供重试入口；清理失败时允许重试或明确保留暂存文件。"""
+        from src.core.category_preset import CategoryPresetFileAccessError, CategoryPresetFormatError
+
+        detail = str(message)
+        if file_error and isinstance(message, CategoryPresetFormatError):
+            message = tr("分类预设文件格式不正确，请重新获取或请分享者重新导出。")
+        elif file_error and isinstance(message, CategoryPresetFileAccessError):
+            message = tr("无法读取分类预设文件，请确认文件仍存在且可以访问。")
+        else:
+            message = detail
+        title = tr("无法读取分类预设") if file_error else tr("操作未完成")
+        layout = self._new_page(
+            title, "file_error" if file_error else "error", size=(760, 450), step=0 if file_error else None
+        )
+        layout.addStretch()
+        layout.addWidget(self._notice(message, tone="danger"))
+        if file_error:
+            layout.addWidget(label(Path(self._source).name, role="strong", wrap=True))
+            if message != detail:
+                details = QPlainTextEdit(detail)
+                details.setReadOnly(True)
+                details.setMaximumHeight(120)
+                details.hide()
+                toggle = button(tr("详细信息"), lambda: details.setVisible(not details.isVisible()), quiet=True)
+                layout.addWidget(toggle, 0, Qt.AlignmentFlag.AlignLeft)
+                layout.addWidget(details)
+        layout.addStretch()
+        if self._task_kind == "cleanup":
+            self._footer(
+                tr("可重试清理，或保留当前文件后关闭。"),
+                (
+                    button(tr("保留文件并关闭"), self._keep_files_and_close),
+                    button(tr("重试清理"), self.request_close, primary=True),
+                ),
+            )
+            return
+        if file_error:
+            retry = button(tr("重新选择文件"), self._pick_source, primary=True)
+        elif self._import_plan is not None and not self._task_kind.startswith("export"):
+            retry = button(tr("重新比较"), self._recompare, primary=True)
+        else:
+            retry = button(tr("返回导出"), self._prepare_export, primary=True)
+        self._footer(tr("目标游戏：{game_name}", game_name=self._game_name), (button(tr("关闭"), self.reject), retry))
+
+    def _show_cancelled(self, kind):
+        """按被取消任务类型提供返回预览或关闭操作，尚无预览的导出准备只提供关闭。"""
+        layout = self._new_page(tr("操作已取消"), "cancelled", size=(680, 380))
+        layout.addStretch()
+        layout.addStretch()
+        if kind == "export_preview":
+            self._footer(actions=(button(tr("关闭"), self.reject),))
+            return
+        back = (
+            self._prepare_export
+            if kind.startswith("export")
+            else self._recompare
+            if self._import_plan
+            else self._show_source
+        )
+        self._footer(actions=(button(tr("关闭"), self.reject), button(tr("返回预览"), back, primary=True)))
+
+    def _import_success(self, result):
+        """更新分类数量并通知宿主刷新；展示导入统计或提交后仍需清理的恢复路径。"""
+        self._category_count += result.new_count
+        self.import_completed.emit(result.game_id)
+        if self._close_requested:
+            return
+        pending = getattr(result, "recovery_paths", ())
+        if pending:
+            layout = self._new_page(tr("分类已导入，清理待完成"), "recovery", size=(800, 520))
+            layout.addWidget(
+                self._notice(
+                    tr("以下路径尚未完成清理，已保留恢复记录。重启软件后会重试；相关目录暂不自动纳管。"), tone="warning"
+                )
+            )
+            scroll = QScrollArea()
+            scroll.setWidgetResizable(True)
+            paths = label("\n".join(pending), wrap=True)
+            paths.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+            scroll.setWidget(paths)
+            layout.addWidget(scroll, 1)
+            self._footer(
+                tr("目标游戏：{game_name}", game_name=self._game_name),
+                (
+                    button(tr("关闭"), self.reject),
+                    button(tr("查看分类"), partial(self._view_categories, result.game_id), primary=True),
+                ),
+            )
+            return
+        layout = self._new_page(tr("导入分类预设"), "result", size=(720, 500), step=2)
+        layout.addStretch()
+        symbol = label()
+        icons.apply_pixmap(symbol, "mod-updates/check-circle", 52, "success")
+        layout.addWidget(symbol, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(label(tr("导入完成"), role="title"), 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(
+            stat_strip(
+                [
+                    (result.new_count, tr("新增目录"), "success"),
+                    (result.existing_count, tr("已存在"), ""),
+                    (result.fill_count, tr("补充图片"), "accent"),
+                ]
+            )
+        )
+        if result.new_image_count:
+            layout.addWidget(
+                self._notice(
+                    tr("新增目录包含 {new_image_count} 张图片。", new_image_count=result.new_image_count),
+                    tone="success",
+                )
+            )
+        layout.addStretch()
+        self._footer(
+            tr("目标游戏：{game_name}", game_name=self._game_name),
+            (
+                button(tr("再次导入此文件"), self._recompare),
+                button(tr("查看分类"), partial(self._view_categories, result.game_id), primary=True),
+            ),
+        )
+
+    def _export_success(self, result):
+        """展示导出分类和图片数量及最终文件路径；关闭请求期间跳过结果页。"""
+        if self._close_requested:
+            return
+        layout = self._new_page(tr("导出分类预设"), "export_result", size=(740, 520))
+        layout.addStretch()
+        symbol = label()
+        icons.apply_pixmap(symbol, "mod-updates/check-circle", 52, "success")
+        layout.addWidget(symbol, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(label(tr("导出完成"), role="title"), 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addWidget(
+            stat_strip(
+                [
+                    (result.node_count, tr("分类目录"), ""),
+                    (result.image_count, tr("目录图片"), ""),
+                    (1, tr("预设文件"), "accent"),
+                ]
+            )
+        )
+        output = label(str(result.path), role="strong", wrap=True)
+        output.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(output)
+        layout.addStretch()
+        self._footer(
+            tr("当前游戏：{game_name}", game_name=self._game_name),
+            (button(tr("返回导出"), self._prepare_export), button(tr("完成"), self.reject, primary=True)),
+        )
+
+    def _view_categories(self, game_id):
+        """请求宿主导航到指定游戏分类，并通过统一清理路径关闭窗口。"""
+        self.view_categories_requested.emit(game_id)
+        self.reject()
