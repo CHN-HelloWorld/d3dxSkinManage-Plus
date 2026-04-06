@@ -516,3 +516,196 @@ class CategoryPresetDialog(QDialog):
             )
 
         self._run_task("export_preview", prepare, self.show_export_plan)
+
+    def show_export_plan(self, plan):
+        """接管导出计划并展示名称、目录、图片问题与分类树；关闭请求期间仅保留清理所需引用。"""
+        self._export_plan = plan
+        if self._close_requested:
+            return
+        layout = self._new_page(tr("导出分类预设"), "export", size=(1080, 740))
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        form_widget = QWidget()
+        form = QVBoxLayout(form_widget)
+        form.setContentsMargins(0, 0, 14, 0)
+        form.setSpacing(12)
+        form.addWidget(label(tr("预设名称"), role="strong"))
+        self._name_input = QLineEdit(self._export_name)
+        self._name_input.setObjectName("categoryPresetName")
+        self._name_input.setMaxLength(512)
+        self._name_input.setAccessibleName(tr("预设名称"))
+        form.addWidget(self._name_input)
+        self._name_error = label(wrap=True)
+        self._name_error.setStyleSheet(f"color: {theme.color('danger')};")
+        form.addWidget(self._name_error)
+        form.addWidget(label(tr("导出范围"), role="strong"))
+        form.addWidget(
+            label(tr("{name}\n完整分类树 · {count} 个目录", name=plan.target.name, count=len(plan.rows)), wrap=True)
+        )
+        self._images_check = QCheckBox(tr("包含目录图片"))
+        self._images_check.setChecked(self._include_images)
+        self._images_check.setObjectName("categoryPresetIncludeImages")
+        form.addWidget(self._images_check)
+        form.addWidget(
+            stat_strip(
+                [
+                    (len(plan.rows), tr("分类目录"), ""),
+                    (plan.image_count, tr("目录图片"), ""),
+                    (f"{plan.image_bytes / 1024 / 1024:.1f}", tr("图片 / MiB"), ""),
+                ]
+            )
+        )
+        for path, reason in plan.image_issues.items():
+            omit = button(
+                tr("取消这张图片"), partial(self._omit_image, path), quiet=True, name="categoryPresetOmitImage"
+            )
+            form.addWidget(self._notice(f"{path}\n{reason}", tone="warning", action=omit))
+        form.addWidget(label(tr("文件类型"), role="strong"))
+        form.addWidget(label(tr("分类预设文件（.d3dxcp）")))
+        form.addWidget(label(tr("输出位置"), role="strong"))
+        destination = QHBoxLayout()
+        self._destination_input = QLineEdit(self._destination)
+        self._destination_input.setReadOnly(True)
+        self._destination_input.setAccessibleName(tr("输出位置"))
+        destination.addWidget(self._destination_input, 1)
+        destination.addWidget(button(tr("选择…"), self._pick_destination))
+        form.addLayout(destination)
+        form.addWidget(label(tr("输出文件"), role="strong"))
+        self._filename_label = label(preset_filename(self._export_name), wrap=True)
+        self._filename_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        form.addWidget(self._filename_label)
+        form.addStretch()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setMinimumWidth(285)
+        scroll.setWidget(form_widget)
+        splitter.addWidget(scroll)
+        self._export_tree = PresetTree(export_mode=True)
+        self._export_tree.set_rows(plan.rows, image_issues=plan.image_issues)
+        splitter.addWidget(self._export_tree)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([345, 670])
+        layout.addWidget(splitter, 1)
+        self._export_button = button(tr("开始导出"), self._start_export, primary=True, name="categoryPresetStartExport")
+        self._footer(actions=(button(tr("取消"), self.reject), self._export_button))
+        self._name_input.textChanged.connect(self._update_export_name)
+        self._images_check.toggled.connect(self._toggle_images)
+        self._update_export_name()
+
+    def _update_export_name(self):
+        """校验名称并同步输出文件名；仅在有分类、目的目录且无名称或图片问题时启用导出。"""
+        self._export_name = self._name_input.text()
+        error = preset_name_error(self._export_name)
+        self._name_error.setText(error)
+        self._name_error.setVisible(bool(error))
+        self._name_input.setProperty("presetInvalid", bool(error))
+        self._name_input.style().unpolish(self._name_input)
+        self._name_input.style().polish(self._name_input)
+        self._filename_label.setText(preset_filename(self._export_name))
+        issues = bool(self._export_plan.image_issues)
+        self._footer_copy.setText(
+            tr("请先处理无法读取的目录图片。") if issues else tr("请检查预设名称。") if error else ""
+        )
+        self._export_button.setEnabled(bool(self._export_plan.rows and self._destination and not error and not issues))
+
+    def _toggle_images(self, checked):
+        """保存是否包含目录图片的选择并重新准备导出计划。"""
+        self._include_images = checked
+        self._prepare_export()
+
+    def _omit_image(self, path):
+        """记录需省略图片的分类路径，再重新生成导出预览以消除对应图片问题。"""
+        self._omitted_images.add(path)
+        self._prepare_export()
+
+    def _pick_destination(self):
+        """选择输出目录并重新计算导出操作是否可用，取消选择时保留原目录。"""
+        path = QFileDialog.getExistingDirectory(self, tr("选择输出位置"), self._destination)
+        if path:
+            self._destination = path
+            self._destination_input.setText(path)
+            self._update_export_name()
+
+    def _start_export(self):
+        """窗口空闲且导出条件满足时，使用当前计划、目的目录和名称启动后台导出。"""
+        if self.busy or not self._export_button.isEnabled():
+            return
+        self._run_task(
+            "export",
+            partial(self._service.execute_export, self._export_plan, self._destination, self._export_name),
+            self._export_success,
+        )
+
+    def _run_task(self, kind, work, success, *, silent=False):
+        """串行启动后台工作并保存成功回调。
+
+        任务执行前等待已取消的图片读取释放源文件；静默清理保留页面但禁用交互，其他任务展示进度页。
+        """
+        if self.busy:
+            return
+        self._task_kind, self._task_success = kind, success
+        self._committed = False
+        titles = {
+            "read": tr("正在读取分类预设"),
+            "compare": tr("正在比较分类树"),
+            "import": tr("正在导入分类预设"),
+            "export_preview": tr("正在准备导出"),
+            "export": tr("正在导出分类预设"),
+            "cleanup": tr("正在关闭"),
+        }
+        if silent:
+            # 清理期间保留当前页面和几何，避免关闭时出现短暂的额外任务页面。
+            for inspector in self._page.findChildren(PresetInspector):
+                self._image_waiters.extend(inspector.stop_loading())
+            self._page.setEnabled(False)
+        else:
+            layout = self._new_page(titles[kind], "job", size=(700, 440))
+            layout.addStretch()
+            layout.addWidget(label(tr("目标游戏：{game_name}", game_name=self._game_name), role="muted"))
+            self._progress_title = label(tr("准备中…"), role="subtitle", wrap=True)
+            layout.addWidget(self._progress_title)
+            self._progress_bar = QProgressBar()
+            self._progress_bar.setRange(0, 0)
+            self._progress_bar.setTextVisible(False)
+            layout.addWidget(self._progress_bar)
+            self._progress_number = label("", role="muted")
+            self._progress_number.setAlignment(Qt.AlignmentFlag.AlignRight)
+            layout.addWidget(self._progress_number)
+            layout.addStretch()
+            self._cancel_button = button(tr("取消"), self._cancel_task, name="categoryPresetCancelTask")
+            self._footer(actions=(self._cancel_button,))
+        image_waiters, self._image_waiters = self._image_waiters, []
+
+        def settled_work(**kwargs):
+            """在工作线程等待旧页面的图片解码结束，再调用可能删除暂存源文件的服务操作。"""
+            for done in image_waiters:
+                done.wait()
+            return work(**kwargs)
+
+        worker = _PresetTask(settled_work, self)
+        self._worker = worker
+        worker.progress.connect(self._task_progress)
+        worker.finished.connect(self._task_finished)
+        worker.start()
+
+    def _task_progress(self, phase, percent):
+        """在界面线程翻译任务阶段并约束百分比；收到提交阶段后禁用取消操作。"""
+        captions = {
+            "校验文件": tr("读取分类预设"),
+            "校验图片": tr("读取目录图片"),
+            "读取完成": tr("读取分类预设"),
+            "准备图片": tr("准备目录图片"),
+            "写入文件": tr("生成预设文件"),
+            "写入完成": tr("生成预设文件"),
+            "准备完成": tr("准备导出"),
+            "已提交": tr("正在完成…"),
+        }
+        self._progress_title.setText(captions.get(phase, tr(phase)))
+        self._progress_bar.setRange(0, 100)
+        self._progress_bar.setValue(max(0, min(percent, 100)))
+        self._progress_number.setText(f"{max(0, min(percent, 100))}%")
+        if phase == "已提交":
+            self._committed = True
+            self._cancel_button.setEnabled(False)
+            self._cancel_button.setText(tr("正在完成…"))
