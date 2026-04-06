@@ -266,3 +266,204 @@ class PresetTree(QFrame):
         """清除搜索条件并折叠完整分类树。"""
         self.search.clear()
         self.tree.collapseAll()
+
+    def next_issue(self):
+        """按快照顺序循环定位冲突节点，没有冲突时不改变选择。"""
+        issues = [row.path for row in self.rows if row.status == "conflict"]
+        if not issues:
+            return
+        current = self.tree.currentItem()
+        path = current.data(0, Qt.ItemDataRole.UserRole).path if current else ""
+        index = (issues.index(path) + 1) % len(issues) if path in issues else 0
+        self.reveal(issues[index])
+
+    def reveal(self, path):
+        """清除搜索并展开目标祖先、选中和滚动到指定路径；路径不存在时保留当前选择。"""
+        self.search.clear()
+        item = self.items.get(path)
+        if item is None:
+            return
+        parent = item.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        self.tree.setCurrentItem(item)
+        self.tree.scrollToItem(item)
+        self.tree.setFocus()
+
+    def _selected(self, current, previous):
+        """将选中项保存的完整记录通过信号交给详情面板，空选择不发送信号。"""
+        if current is not None:
+            self.node_selected.emit(current.data(0, Qt.ItemDataRole.UserRole))
+
+
+class _ImageSignals(QObject):
+    """承载后台解码结果及请求序号，将 QImage 交回界面线程。"""
+
+    ready = Signal(int, QImage)
+
+
+_preview_pool = None
+
+
+def _image_pool():
+    """惰性创建模块持有的单线程图片解码池，限制并发解码内存且隔离其他图像任务。"""
+    global _preview_pool
+    if _preview_pool is None:
+        # 独立串行队列限制原生解码内存，不占用其他缩略图和背景线程。
+        _preview_pool = QThreadPool()
+        _preview_pool.setMaxThreadCount(1)
+    return _preview_pool
+
+
+class _ImageJobs:
+    """由普通 Python 对象管理生命周期，销毁回调不访问 Qt 对象。"""
+
+    def __init__(self):
+        """创建图片任务引用集合，供控件销毁后仍可安全发送取消请求。"""
+        self.jobs = []
+
+    def cancel(self):
+        """对所有持有的图片任务设置取消事件，不阻塞等待解码结束。"""
+        for job in self.jobs:
+            job.cancelled.set()
+
+
+class _ImageTask(QRunnable):
+    """在专用线程池中解码有尺寸上限的目录图片，以事件标记取消和读取结束。"""
+
+    def __init__(self, sequence, path):
+        """保存请求序号和源路径，创建独立信号对象及取消、完成事件。"""
+        super().__init__()
+        self.signals = _ImageSignals()
+        self.sequence, self.path = sequence, path
+        self.cancelled, self.done = Event(), Event()
+
+    def run(self):
+        """后台读取不超过四千万像素的图片并缩放到预览尺寸。
+
+        取消后不发送结果；正常读取失败时发送空图像。无论是否取消或异常，均释放读取器并设置完成事件。
+        """
+        try:
+            if self.cancelled.is_set():
+                return
+            image = QImage()
+            reader = QImageReader(fs.native_path(self.path))
+            try:
+                reader.setDecideFormatFromContent(True)
+                reader.setAutoTransform(True)
+                size = reader.size()
+                if not self.cancelled.is_set() and size.isValid() and size.width() * size.height() <= 40_000_000:
+                    reader.setScaledSize(size.scaled(QSize(440, 280), Qt.AspectRatioMode.KeepAspectRatio))
+                    image = reader.read()
+                    if not image.isNull():
+                        image = image.scaled(
+                            440, 280, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                        )
+            finally:
+                del reader
+            if not self.cancelled.is_set():
+                self.signals.ready.emit(self.sequence, image)
+        finally:
+            # 移除解码源前在后台等待读取结束。
+            self.done.set()
+
+
+class PresetInspector(QFrame):
+    """展示选中分类的来源、保留策略与图片，并隔离过期的异步图片结果。"""
+
+    def __init__(self, parent=None):
+        """创建详情控件及图片任务生命周期容器，控件销毁时仅发送非阻塞取消请求。"""
+        super().__init__(parent)
+        self.setProperty("presetRole", "panel")
+        self.setMinimumWidth(220)
+        self._sequence = 0
+        self._image_lifetime = _ImageJobs()
+        self._image_jobs = self._image_lifetime.jobs
+        self.destroyed.connect(self._image_lifetime.cancel)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 14, 16, 16)
+        layout.setSpacing(10)
+        top = QHBoxLayout()
+        top.addWidget(label(tr("目录详情"), role="muted"))
+        top.addStretch()
+        self.status = label(role="strong")
+        top.addWidget(self.status)
+        layout.addLayout(top)
+        self.image = label(tr("暂无目录图片"), role="image")
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.image.setMinimumHeight(140)
+        self.image.setMaximumHeight(190)
+        self.image.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout.addWidget(self.image)
+        self.name = label(role="subtitle", wrap=True)
+        self.english = label(role="muted", wrap=True)
+        self.path = label(role="muted", wrap=True)
+        self.path.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.kind = label(wrap=True)
+        self.image_action = label(wrap=True)
+        self.detail = label(role="notice", wrap=True)
+        for widget in (self.name, self.english, self.path, self.kind, self.image_action, self.detail):
+            layout.addWidget(widget)
+        layout.addStretch()
+
+    def set_row(self, row):
+        """更新分类详情并取消旧图片请求；以递增序号提交新预览，优先使用预设图片路径。"""
+        self.stop_loading()
+        self._image_jobs[:] = [job for job in self._image_jobs if not job.done.is_set()]
+        self._sequence += 1
+        self.status.setText(tr(STATUS_TEXT.get(row.status, "")))
+        token = {"new": "success", "conflict": "danger"}.get(row.status, "text.secondary")
+        self.status.setStyleSheet(f"color: {theme.color(token)};")
+        self.name.setText(row.local_name or row.name)
+        self.english.setText(row.name_en)
+        self.english.setVisible(bool(row.name_en))
+        self.path.setText(row.path.replace("/", " / "))
+        self.kind.setText(tr("预设类型\u3000") + (tr("角色 / 对象") if row.node_type == "character" else tr("类别")))
+        behavior = tr("不设置图片")
+        if row.local_image_path:
+            behavior = tr("保留本地图片")
+        elif row.fill_image:
+            behavior = tr("补充目录图片")
+        elif row.has_image:
+            behavior = tr("随新增目录导入") if row.status == "new" else tr("保留已有图片引用")
+        self.image_action.setText(tr("目录图片\u3000") + behavior)
+        details = [row.detail] if row.detail else []
+        if row.local_name and (row.local_name != row.name or row.local_node_type != row.node_type):
+            local_type = tr("角色 / 对象") if row.local_node_type == "character" else tr("类别")
+            details.append(
+                tr(
+                    "预设名称：{name}\n本地名称：{local_name}\n本地类型：{local_type}\n将保留本地设置。",
+                    name=row.name,
+                    local_name=row.local_name,
+                    local_type=local_type,
+                )
+            )
+        self.detail.setText("\n".join(details))
+        self.detail.setVisible(bool(details))
+        self.image.setPixmap(QPixmap())
+        image_path = row.image_path or row.local_image_path
+        self.image.setText(tr("正在加载图片…") if image_path else tr("暂无目录图片"))
+        if image_path:
+            task = _ImageTask(self._sequence, image_path)
+            self._image_jobs.append(task)
+            task.signals.ready.connect(self._image_ready)
+            _image_pool().start(task)
+
+    def stop_loading(self):
+        """取消持有的解码任务，返回未完成任务的事件，供后台清理等待源文件释放。"""
+        self._image_lifetime.cancel()
+        return tuple(job.done for job in self._image_jobs if not job.done.is_set())
+
+    def _image_ready(self, sequence, image):
+        """在界面线程接受当前序号的图像并创建 QPixmap，空图像显示失败提示。"""
+        if sequence != self._sequence:
+            return
+        if image.isNull():
+            self.image.setText(tr("图片无法显示"))
+        else:
+            self.image.setPixmap(
+                QPixmap.fromImage(image).scaled(
+                    self.image.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
+                )
+            )
