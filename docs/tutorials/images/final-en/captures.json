@@ -1218,6 +1218,188 @@
       "required_text": [
         "+ 新建类别"
       ]
+    },
+    {
+      "file": "31-新建类别.webp",
+      "width": 1040,
+      "height": 1026,
+      "logical_width": 520,
+      "logical_height": 513,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "New Category",
+          "box": [
+            25,
+            52,
+            470,
+            27
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category image",
+          "box": [
+            25,
+            114,
+            140,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Click to choose\nor drop an image",
+          "box": [
+            25,
+            137,
+            140,
+            180
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Choose",
+          "box": [
+            29,
+            325,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Clear",
+          "box": [
+            99,
+            325,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category name *",
+          "box": [
+            185,
+            114,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "外观",
+          "box": [
+            185,
+            133,
+            310,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "English name",
+          "box": [
+            185,
+            181,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Appearance",
+          "box": [
+            185,
+            200,
+            310,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Node type",
+          "box": [
+            185,
+            248,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Category (allows multiple enabled Mods)",
+          "box": [
+            185,
+            267,
+            310,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "A character/object allows only one enabled Mod across all its subcategories.",
+          "box": [
+            185,
+            305,
+            310,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Cancel",
+          "box": [
+            305,
+            458,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Confirm",
+          "box": [
+            405,
+            458,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "New Category",
+          "box": [
+            36,
+            1,
+            434,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": [
+        "新建类别",
+        "节点类型",
+        "确认",
+        "外观"
+      ]
     }
   ]
 }
