@@ -285,3 +285,192 @@ class ImportWorkerThread(QThread):
     def get_created_preview_caches(self) -> list[Path]:
         """返回本批创建的预览缓存路径快照，调用方需排除已提交项目仍引用的缓存。"""
         return self._artifacts.preview_caches()
+
+    def acknowledge_db_done(self):
+        """由主线程在结果处理完成后设置确认事件，允许后台继续处理后续项目。"""
+        self._db_done.set()
+
+    def pause(self):
+        """请求协作暂停，使后续准备和进度检查点等待执行事件。"""
+        self._paused.clear()
+
+    def resume(self):
+        """解除暂停事件，允许等待中的后台文件准备继续。"""
+        self._paused.set()
+
+    def terminate_import(self):
+        """标记终止并释放暂停及数据库确认等待，由后续收尾处理未提交产物。"""
+        self._terminated = True
+        self._paused.set()  # 释放暂停等待。
+        self._db_done.set()  # 释放数据库确认等待。
+
+    @property
+    def is_paused(self) -> bool:
+        """返回执行事件是否处于暂停状态，不保证当前文件调用已经返回。"""
+        return not self._paused.is_set()
+
+
+class ParallelImportWorkerThread(QThread):
+    """在线程池中并行准备文件，按完成顺序串行交接界面线程的索引提交。
+
+    file_prepared 保留原项目索引，逐项等待数据库处理确认；并发进度在锁内聚合，
+    finished_all 仅在线程池已关闭且在途文件操作结束后发送。
+    """
+
+    progress_updated = Signal(int, int, str)
+    file_prepared = Signal(int, object)
+    finished_all = Signal()
+    # 全局进度采用零到一的小数及阶段文案，与顺序线程共用界面处理入口。
+    stage_progress = Signal(float, str)
+    #: 单项进度：(item_index, 该项自身 0~1 进度, 阶段文案)。见 ImportWorkerThread 同名信号。
+    #: 并行导入按原索引区分各项的阶段和进度。
+    item_progress = Signal(int, float, str)
+
+    def __init__(
+        self,
+        items: list[IntakeRequest],
+        *,
+        intake_service: ModIntakeService,
+        max_workers: int = 3,
+        parent=None,
+    ):
+        """校验请求和服务，保存线程池并发数并初始化受锁保护的进度与产物记录。"""
+        super().__init__(parent)
+        self._items = _require_intake_requests(items)
+        if intake_service is None:
+            raise TypeError("import workers require a ModIntakeService")
+        self._max_workers = max_workers
+        self._intake_service = intake_service
+        self._paused = threading.Event()
+        self._paused.set()
+        self._terminated = False
+        self._db_done = threading.Event()
+        self._db_done.set()
+        self._completed_count = 0
+        self._lock = threading.Lock()
+        # 并行进度聚合——记录每个在途 Mod 的内部完成分数(0~1)。总进度 =
+        # (已完成数 + Σ在途分数) / total。读写都在 self._lock 内（多 worker 并发回调）。
+        self._frac_by_index: dict[int, float] = {}
+        self._last_emitted_overall = -1.0  # 节流：分数变化过小不发信号，避免信号风暴
+        self._executor: ThreadPoolExecutor | None = None
+        self._artifacts = _CreatedImportArtifacts()
+
+    def _emit_stage(self, item_index: int, total_items: int, frac: float, text: str) -> None:
+        """在锁内累计并行任务的完成数量和在途分数，计算总体进度。
+
+        总进度变化不足阈值时不发出信号，限制界面更新频率。
+        """
+        if total_items <= 0:
+            return
+        if not _wait_for_worker(self):
+            return
+        frac = max(0.0, min(1.0, frac))
+        # 单项进度不参与全局节流，避免总体增量不足 0.005 时抑制局部任务的可见进展。
+        try:
+            self.item_progress.emit(item_index, frac, text)
+        except RuntimeError:
+            pass
+        with self._lock:
+            self._frac_by_index[item_index] = frac
+            overall = (self._completed_count + sum(self._frac_by_index.values())) / total_items
+            overall = max(0.0, min(1.0, overall))
+            if overall - self._last_emitted_overall < 0.005 and overall < 1.0:
+                return
+            self._last_emitted_overall = overall
+        try:
+            self.stage_progress.emit(overall, text)
+        except RuntimeError:
+            pass  # 控件已销毁
+
+    def run(self):
+        """在线程池并行准备请求，按完成顺序逐项等待主线程提交确认；退出前关闭线程池并等待在途操作。"""
+        total = len(self._items)
+
+        def process_item(index, request):
+            """在准备前响应暂停和终止，返回原索引、显示名称及准备结果或异常；未开始即终止时返回空值。"""
+            # 检查暂停和终止请求。
+            self._paused.wait()
+            if self._terminated:
+                return None
+
+            name = request.display_name or request.source_path.name
+            try:
+                prepared = self._prepare_request(
+                    request,
+                    item_index=index,
+                    total_items=total,
+                )
+            except Exception as exc:
+                prepared = exc
+            return (
+                index,
+                name,
+                prepared,
+            )
+
+        # 使用线程池并行处理
+        executor = ThreadPoolExecutor(max_workers=self._max_workers)
+        self._executor = executor
+        try:
+            # 提交所有任务
+            futures = {executor.submit(process_item, i, item): i for i, item in enumerate(self._items)}
+
+            # 按完成顺序处理结果
+            for future in as_completed(futures):
+                if not _wait_for_worker(self):
+                    break
+                if self._terminated:
+                    # 取消尚未开始的任务
+                    for f in futures:
+                        f.cancel()
+                    break
+
+                try:
+                    result = future.result()
+                    if result is None:
+                        continue
+
+                    index, name, prepared_result = result
+
+                    # 更新进度
+                    with self._lock:
+                        self._completed_count += 1
+                        current = self._completed_count
+                        # 该 Mod 已完成，从在途分数表移除（其分数已并入 completed_count，
+                        # 否则会被重复计入总和）
+                        self._frac_by_index.pop(index, None)
+
+                    detail = tr("正在导入: {name} ({current}/{total})", name=name, current=current, total=total)
+                    # 单项完成只推进总进度，不以粗粒度索引覆盖已有细分进度。
+                    self.stage_progress.emit(current / total, detail)
+                    self.progress_updated.emit(current, total, detail)
+
+                    # 等待上一次DB操作完成
+                    self._db_done.wait()
+                    if self._terminated:
+                        break
+
+                    # 通知主线程执行SQLite操作
+                    self._db_done.clear()
+                    self.file_prepared.emit(index, prepared_result)
+                    # 等待主线程完成DB写入
+                    self._db_done.wait()
+                    if self._terminated:
+                        _rollback_prepared(self._intake_service, prepared_result)
+                        break
+
+                except Exception as e:
+                    logger.error("并行导入处理失败: %s", e)
+                    with self._lock:
+                        self._completed_count += 1
+        finally:
+            # wait=True: 等待正在运行的 copy_mod/compress_to_zip 完成
+            # cancel_futures=True: 取消尚未开始的任务
+            # 这样确保 run 返回时所有文件 IO 都已结束，主线程可安全清理
+            executor.shutdown(wait=True, cancel_futures=True)
+            self._executor = None
+
+        if not self._terminated:
+            _wait_for_worker(self)
+        self.progress_updated.emit(total, total, tr("导入完成") if not self._terminated else tr("导入已终止"))
+        self.finished_all.emit()
