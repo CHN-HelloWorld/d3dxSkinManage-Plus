@@ -1023,3 +1023,204 @@ class ArchiveService:
                 return None
             entries.append(accepted)
         return entries
+
+    def read_all_inis(self, archive_path: str | Path) -> dict:
+        """一次打开归档并读取全部 INI，排除元数据目录。
+
+        返回成员名称与字节内容的映射，避免逐个读取时反复初始化归档及解压器。
+        """
+        archive = Path(archive_path)
+        suffix = archive.suffix.lower()
+        result: dict[str, bytes] = {}
+
+        def _is_ini(n: str) -> bool:
+            """筛选不属于管理元数据目录的 INI 文件成员，兼容归档中的两种路径分隔符。"""
+            nn = n.replace("\\", "/")
+            return not nn.endswith("/") and nn.lower().endswith(".ini") and META_DIR not in nn.split("/")
+
+        try:
+            if suffix == ".zip":
+                with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    for n in zf.namelist():
+                        if _is_ini(n):
+                            result[n] = zf.read(n)
+            elif suffix == ".7z":
+                if not PY7ZR_AVAILABLE:
+                    return {}
+                # py7zr 通过单次打开和定向提取接口读取归档成员。
+                # 仅提取 INI 成员到临时目录后读取，避免解压无关的大型纹理文件。
+                import tempfile
+
+                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                    names = [n for n in sz.getnames() if _is_ini(n)]
+                    if not names:
+                        return {}
+                    tmpdir = Path(tempfile.mkdtemp(prefix="7z_inis_"))
+                    try:
+                        sz.extract(path=str(tmpdir), targets=names)
+                        for n in names:
+                            fp2 = tmpdir / n.replace("\\", "/")
+                            if fp2.is_file():
+                                result[n] = fp2.read_bytes()
+                    finally:
+                        shutil.rmtree(str(tmpdir), ignore_errors=True)
+            elif suffix == ".rar":
+                if not RAR_AVAILABLE:
+                    return {}
+                rf, kind = self._rar_open(archive)
+                if rf is None:
+                    return {}
+                for n in self._rar_file_names(rf, kind):
+                    if _is_ini(n):
+                        try:
+                            result[n] = rf.read(n)
+                        except Exception:
+                            pass
+        except Exception as e:
+            logger.error("批量读归档 ini 失败 (%s): %s", archive.name, e)
+        return result
+
+    def read_file(self, archive_path: str | Path, internal_path: str) -> bytes | None:
+        """从压缩包中读取单个文件的内容
+
+        参数：
+            archive_path: 压缩包路径
+            internal_path: 压缩包内的文件相对路径
+
+        返回：
+            文件字节内容，失败返回 None
+        """
+        archive = Path(archive_path)
+        suffix = archive.suffix.lower()
+
+        try:
+            if suffix == ".zip":
+                with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    return zf.read(internal_path)
+            elif suffix == ".7z":
+                if not PY7ZR_AVAILABLE:
+                    return None
+                # 使用 py7zr 的 extract 接口提取单个成员到临时目录，再读取其内容。
+                import tempfile
+
+                tmpdir = Path(tempfile.mkdtemp(prefix="7z_read_"))
+                try:
+                    with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                        sz.extract(path=str(tmpdir), targets=[internal_path])
+                    out = tmpdir / internal_path.replace("\\", "/")
+                    return out.read_bytes() if out.is_file() else None
+                finally:
+                    shutil.rmtree(str(tmpdir), ignore_errors=True)
+            elif suffix == ".rar":
+                if not RAR_AVAILABLE:
+                    return None
+                rf, _kind = self._rar_open(archive)
+                if rf is None:
+                    return None
+                return rf.read(internal_path)
+            else:
+                return None
+        except Exception as e:
+            logger.error("读取压缩包文件失败 (%s/%s): %s", archive.name, internal_path, e)
+            return None
+
+    def extract_files(self, archive_path: str | Path, internal_paths: list[str], dest_dir: str | Path) -> list[Path]:
+        """从压缩包中提取指定文件到目标目录
+
+        参数：
+            archive_path: 压缩包路径
+            internal_paths: 要提取的文件列表（内部路径）
+            dest_dir: 解压目标目录
+
+        返回：
+            提取成功的文件路径列表
+        """
+        archive = Path(archive_path)
+        dest = Path(dest_dir)
+        fs.ensure_dir(dest)
+        suffix = archive.suffix.lower()
+        extracted: list[Path] = []
+
+        try:
+            if suffix == ".zip":
+                with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    for name in internal_paths:
+                        try:
+                            zf.extract(name, fs.native_path(dest))
+                            extracted.append(dest / name)
+                        except KeyError:
+                            pass
+            elif suffix == ".7z":
+                if not PY7ZR_AVAILABLE:
+                    return []
+                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                    sz.extract(path=fs.native_path(dest), targets=internal_paths)
+                    for name in internal_paths:
+                        p = dest / name
+                        if fs.exists(p):
+                            extracted.append(p)
+            elif suffix == ".rar":
+                if not RAR_AVAILABLE:
+                    return []
+                rf, _kind = self._rar_open(archive)
+                if rf is None:
+                    return []
+                # 两后端都提供 read，用 read+写入磁盘统一实现（unrar.cffi 无 extract）
+                for name in internal_paths:
+                    try:
+                        data = rf.read(name)
+                        outp = dest / name.replace("\\", "/")
+                        fs.ensure_dir(outp.parent)
+                        with open(fs.native_path(outp), "wb") as f:
+                            f.write(data)
+                        extracted.append(outp)
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error("提取压缩包文件失败 (%s): %s", archive.name, e)
+
+        return extracted
+
+    # ZIP 修改
+
+    def remove_files_from_zip(self, zip_path: str | Path, internal_paths: list[str]) -> bool:
+        """从 ZIP 中批量移除文件（通过重建 ZIP 实现）
+
+        参数：
+            zip_path: ZIP 文件路径
+            internal_paths: 要移除的文件路径列表
+
+        返回：
+            是否成功
+        """
+        zip_path = Path(zip_path)
+        remove_set = set(internal_paths)
+        try:
+            temp_path = zip_path.parent / f"{zip_path.stem}_tmp.zip"
+            with zipfile.ZipFile(zip_path, "r") as zf_in:
+                with zipfile.ZipFile(temp_path, "w", zipfile.ZIP_DEFLATED) as zf_out:
+                    for item in zf_in.infolist():
+                        if item.filename not in remove_set:
+                            zf_out.writestr(item, zf_in.read(item.filename))
+            temp_path.replace(zip_path)
+            logger.info("已从 ZIP 批量移除 %d 个文件", len(internal_paths))
+            return True
+        except Exception as e:
+            logger.error("从 ZIP 批量移除文件失败: %s", e)
+            temp_path = zip_path.parent / f"{zip_path.stem}_tmp.zip"
+            if temp_path.exists():
+                try:
+                    temp_path.unlink()
+                except OSError:
+                    pass
+            return False
+
+    @staticmethod
+    def _get_unique_path(path: Path) -> Path:
+        """获取不冲突的路径"""
+        counter = 1
+        base = path
+        while path.exists():
+            path = base.parent / f"{base.name}_{counter}"
+            counter += 1
+        return path
