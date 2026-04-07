@@ -822,3 +822,204 @@ class ArchiveService:
             return False
         finally:
             shutil.rmtree(str(tmpdir), ignore_errors=True)
+
+    def remove_members_7z(self, archive_path: str | Path, pred) -> bool:
+        """从 .7z 移除满足 ``pred(name)`` 的成员（整包重压实现）。无匹配则免重压直接成功。"""
+        if not PY7ZR_AVAILABLE:
+            return False
+        archive = Path(archive_path)
+        import tempfile
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="7z_strip_"))
+        try:
+            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+                names = [n for n in sz.getnames()]
+            if not any(pred(n) for n in names):
+                return True
+            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+                sz.extractall(path=str(tmpdir))
+            tmp_out = archive.with_name(archive.stem + "_strip_tmp.7z")
+            tmp_out.unlink(missing_ok=True)
+            with py7zr.SevenZipFile(str(tmp_out), mode="w") as sz:
+                for fp in sorted(tmpdir.rglob("*")):
+                    if not fp.is_file():
+                        continue
+                    rel = str(fp.relative_to(tmpdir)).replace("\\", "/")
+                    if pred(rel):
+                        continue
+                    sz.write(str(fp), rel)
+            archive.unlink(missing_ok=True)
+            tmp_out.replace(archive)
+            return True
+        except Exception as e:
+            logger.error("7z 移除成员失败: %s", e)
+            return False
+        finally:
+            shutil.rmtree(str(tmpdir), ignore_errors=True)
+
+    def inject_member_rar(self, archive_path: str | Path, arcname: str, data: bytes) -> bool:
+        """向已存在的 .rar 追加/覆盖成员（WinRAR ``rar a`` + ``-ap<内部路径前缀>``）。
+
+        WinRAR 支持向已有归档就地追加成员，无需整包重建。把待写内容落到临时暂存目录，
+        用 ``-ap{top}`` 指定归档内路径前缀，使成员进到 ``{top}/.d3dxmeta/info.json``。
+        """
+        rar_exe = find_winrar_rar_exe()
+        if not rar_exe:
+            return False
+        archive = Path(archive_path)
+        arcname = arcname.replace("\\", "/")
+        # 拆出「归档内目录前缀」与「文件名」：rar 用 -ap 指定前缀、参数只给要加的本地文件
+        if "/" in arcname:
+            prefix, fname = arcname.rsplit("/", 1)
+        else:
+            prefix, fname = "", arcname
+        import subprocess
+        import tempfile
+
+        tmpdir = Path(tempfile.mkdtemp(prefix="rar_inject_"))
+        try:
+            # 先剔除旧的同路径成员（覆盖语义），再加新的
+            self.remove_members_rar(archive, lambda n: n.replace("\\", "/") == arcname)
+            local = tmpdir / fname
+            local.write_bytes(data)
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            cmd = [rar_exe, "a", "-o+", "-idq", "-ep"]
+            if prefix:
+                cmd.append(f"-ap{prefix}")
+            cmd += [str(archive), fname]
+            proc = subprocess.run(cmd, cwd=str(tmpdir), creationflags=creationflags, capture_output=True, timeout=300)
+            if proc.returncode != 0:
+                logger.error(
+                    "RAR 注入成员失败 (rc=%s): %s",
+                    proc.returncode,
+                    (proc.stderr or b"").decode("utf-8", "ignore")[:200],
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.error("RAR 注入成员异常: %s", e)
+            return False
+        finally:
+            shutil.rmtree(str(tmpdir), ignore_errors=True)
+
+    def remove_members_rar(self, archive_path: str | Path, pred) -> bool:
+        """从 .rar 删除满足 ``pred(name)`` 的成员（WinRAR ``rar d``）。无匹配则直接成功。"""
+        rar_exe = find_winrar_rar_exe()
+        if not rar_exe:
+            return False
+        archive = Path(archive_path)
+        if not archive.exists():
+            return True
+        try:
+            targets = [n for n in self.list_contents(archive) if pred(n.replace("\\", "/"))]
+            if not targets:
+                return True
+            import subprocess
+
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            # rar d 匹配成员名须用归档内的原生路径分隔符（WinRAR 在 Windows 下用反斜杠）：
+            # 传正斜杠会匹配不到、返回 rc=10（no files deleted）。故用 list_contents 返回的原样。
+            cmd = [rar_exe, "d", "-idq", str(archive)] + list(targets)
+            proc = subprocess.run(cmd, creationflags=creationflags, capture_output=True, timeout=300)
+            return proc.returncode == 0
+        except Exception as e:
+            logger.error("RAR 删除成员异常: %s", e)
+            return False
+
+    # 内容读取
+
+    def list_contents(self, archive_path: str | Path) -> list[str]:
+        """列出压缩包中的文件（不含目录条目）
+
+        参数：
+            archive_path: 压缩包路径
+
+        返回：
+            文件路径列表（内部相对路径）
+        """
+        archive = Path(archive_path)
+        suffix = archive.suffix.lower()
+
+        try:
+            if suffix == ".zip":
+                with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    return [n for n in zf.namelist() if not n.endswith("/")]
+            elif suffix == ".7z":
+                if not PY7ZR_AVAILABLE:
+                    logger.error("py7zr 未安装，无法读取 .7z 文件")
+                    return []
+                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                    return [info.filename for info in sz.list() if not info.is_directory]
+            elif suffix == ".rar":
+                if not RAR_AVAILABLE:
+                    logger.error("无可用 RAR 解压后端，无法读取 .rar 文件")
+                    return []
+                rf, kind = self._rar_open(archive)
+                if rf is None:
+                    return []
+                return self._rar_file_names(rf, kind)
+            else:
+                logger.error("不支持的压缩格式: %s", suffix)
+                return []
+        except Exception as e:
+            logger.error("列出压缩包内容失败 (%s): %s", archive.name, e)
+            return []
+
+    def list_entries(self, archive_path: str | Path) -> list[tuple[str, int, int]] | None:
+        """只读归档成员表，返回路径、解压后大小及 CRC-32，不解压文件。
+
+        目录成员被排除，路径统一为正斜杠并保留归档顶层。空归档返回空列表；
+        无法读取或任一有效成员缺少可用 CRC 时返回 None。
+        调用方须通过实际内容计算相同字段，保持内容指纹公式一致。
+        """
+        archive = Path(archive_path)
+        suffix = archive.suffix.lower()
+
+        def _accept(rel: str, size, crc) -> tuple[str, int, int] | None:
+            """统一归一 + CRC 可用性判定。返回 None 代表该成员的 CRC 不可用。"""
+            if crc is None:
+                return None
+            size = int(size or 0)
+            crc = int(crc) & 0xFFFFFFFF
+            # CRC32 为 0 且有内容 → 后端没记 CRC（空文件的 CRC32 天然是 0，是合法值）
+            if crc == 0 and size > 0:
+                return None
+            return rel.replace("\\", "/"), size, crc
+
+        try:
+            if suffix == ".zip":
+                with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    infos = [i for i in zf.infolist() if not i.is_dir()]
+                    raw = [(i.filename, i.file_size, i.CRC) for i in infos]
+            elif suffix == ".7z":
+                if not PY7ZR_AVAILABLE:
+                    return None
+                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                    infos = [i for i in sz.list() if not i.is_directory]
+                    raw = [(i.filename, i.uncompressed, i.crc32) for i in infos]
+            elif suffix == ".rar":
+                if not RAR_AVAILABLE:
+                    return None
+                rf, kind = self._rar_open(archive)
+                if rf is None:
+                    return None
+                raw = [
+                    (i.filename, i.file_size, getattr(i, "CRC", None))
+                    for i in rf.infolist()
+                    if not self._rar_is_dir(i, kind)
+                ]
+            else:
+                return None
+        except Exception as e:
+            logger.debug("读取归档成员表失败，将回退逐字节 (%s): %s", archive.name, e)
+            return None
+
+        entries: list[tuple[str, int, int]] = []
+        for name, size, crc in raw:
+            accepted = _accept(name, size, crc)
+            if accepted is None:
+                # 任一成员缺少可用 CRC 时读取完整归档内容，不能忽略该成员后生成身份。
+                logger.debug("归档成员缺可用 CRC，整包回退逐字节: %s -> %s", archive.name, name)
+                return None
+            entries.append(accepted)
+        return entries
