@@ -118,3 +118,170 @@ class _CreatedImportArtifacts:
         """在锁内取得容器路径快照，返回独立列表供完成后的清理使用。"""
         with self._lock:
             return [Path(path) for path in self._containers]
+
+    def preview_caches(self) -> list[Path]:
+        """在锁内取得预览缓存路径快照，返回值不共享内部集合。"""
+        with self._lock:
+            return [Path(path) for path in self._preview_caches]
+
+
+def _remove_path_reliably(path: str | Path) -> bool:
+    """删除文件/目录并验证结果；Windows 长路径始终走扩展长度 API。"""
+    target = Path(fs.normal_path(path))
+
+    def _on_error(func, failed_path, _exc_info):
+        """对删除失败路径尝试添加写权限后重试原操作，重试失败由外层最终存在性检查判断。"""
+        try:
+            import stat
+
+            os.chmod(failed_path, stat.S_IWRITE)
+            func(failed_path)
+        except OSError:
+            pass
+
+    try:
+        if fs.is_dir(target):
+            fs.rmtree(target, ignore_errors=False, onerror=_on_error)
+        elif fs.exists(target):
+            fs.unlink(target, missing_ok=True)
+    except OSError as e:
+        logger.warning("删除导入残留失败 (%s): %s", target, e)
+    return not fs.exists(target)
+
+
+class ImportWorkerThread(QThread):
+    """顺序准备导入文件，并逐项等待界面线程确认数据库处理。
+
+    file_prepared 发送原索引及 PreparedIntake 或异常；progress_updated 和 stage_progress
+    报告批次进度，item_progress 报告单项进度，finished_all 表示准备循环结束。
+    """
+
+    progress_updated = Signal(int, int, str)
+    file_prepared = Signal(int, object)
+    finished_all = Signal()
+    # 报告全局小数进度及当前处理说明，反映单个 Mod 内部操作的推进。
+    stage_progress = Signal(float, str)
+    #: 单项进度：(item_index, 该项自身 0~1 进度, 阶段文案)。
+    #: 任务中心据此更新对应明细行，避免并行任务的全局进度丢失单项对应关系。
+    item_progress = Signal(int, float, str)
+
+    def __init__(
+        self,
+        items: list[IntakeRequest],
+        *,
+        intake_service: ModIntakeService,
+        parent=None,
+    ):
+        """校验请求和必要的纳管服务，初始化暂停、终止、数据库确认事件及产物记录；无服务时抛出 TypeError。"""
+        super().__init__(parent)
+        self._items = _require_intake_requests(items)
+        if intake_service is None:
+            raise TypeError("import workers require a ModIntakeService")
+        self._intake_service = intake_service
+        self._paused = threading.Event()
+        self._paused.set()  # 初始状态允许继续执行。
+        self._terminated = False
+        self._db_done = threading.Event()
+        self._db_done.set()  # 首次迭代无需等待确认。
+        self._artifacts = _CreatedImportArtifacts()
+
+    def run(self):
+        """逐项准备文件并将结果或异常投递给主线程，等待数据库确认后继续；终止会解除等待并停止后续处理。"""
+        total = len(self._items)
+        for i, request in enumerate(self._items):
+            # 检查暂停请求。
+            self._paused.wait()
+
+            # 检查终止请求。
+            if self._terminated:
+                break
+
+            name = request.display_name or request.source_path.name
+            try:
+                result = self._prepare_request(
+                    request,
+                    item_index=i,
+                    total_items=total,
+                )
+            except Exception as exc:
+                result = exc
+
+            detail = tr("正在导入: {name} ({value}/{total})", name=name, value=i + 1, total=total)
+            self.progress_updated.emit(i, total, detail)
+
+            # 等待上一次DB操作完成
+            self._db_done.wait()
+            if self._terminated:
+                break
+
+            # 通知主线程执行SQLite操作
+            self._db_done.clear()
+            self.file_prepared.emit(i, result)
+            # 等待主线程完成DB写入
+            self._db_done.wait()
+            if self._terminated:
+                _rollback_prepared(self._intake_service, result)
+                break
+
+        if not self._terminated:
+            _wait_for_worker(self)
+        self.progress_updated.emit(total, total, tr("导入完成") if not self._terminated else tr("导入已终止"))
+        self.finished_all.emit()
+
+    def _emit_stage(self, item_index: int, total_items: int, frac: float, text: str) -> None:
+        """将条目索引及单项进度折算为 0 到 1 的整体进度。"""
+        if total_items <= 0:
+            return
+        if not _wait_for_worker(self):
+            return
+        overall = (item_index + max(0.0, min(1.0, frac))) / total_items
+        try:
+            self.stage_progress.emit(overall, text)
+            # 同时报告单项进度，供明细行显示。
+            self.item_progress.emit(item_index, max(0.0, min(1.0, frac)), text)
+        except RuntimeError:
+            pass  # 控件已销毁
+
+    def _prepare_request(
+        self,
+        request,
+        *,
+        item_index: int = 0,
+        total_items: int = 1,
+    ):
+        """调用纳管服务准备文件并登记实际创建的容器和缓存，返回准备结果；服务异常交由调用方处理。"""
+        if self._intake_service is None:
+            raise RuntimeError("planned intake requires a ModIntakeService")
+
+        last_progress = 0.0
+
+        def report(value, text: str) -> None:
+            """保留单项已报告的最大进度，空值只更新说明，再折算为批次进度。"""
+            nonlocal last_progress
+            if value is not None:
+                last_progress = max(last_progress, float(value))
+            self._emit_stage(
+                item_index,
+                total_items,
+                last_progress,
+                text,
+            )
+
+        prepared = self._intake_service.prepare(
+            request,
+            progress=report,
+            should_cancel=lambda: not _wait_for_worker(self),
+        )
+        if isinstance(prepared, PreparedIntake):
+            self._artifacts.add_container(prepared.container_path)
+            if prepared.preview_cache_path is not None:
+                self._artifacts.add_preview_cache(prepared.preview_cache_path)
+        return prepared
+
+    def get_created_paths(self) -> list[Path]:
+        """返回本批实际登记的容器路径快照，供界面在后台操作结束后按所有权清理。"""
+        return self._artifacts.containers()
+
+    def get_created_preview_caches(self) -> list[Path]:
+        """返回本批创建的预览缓存路径快照，调用方需排除已提交项目仍引用的缓存。"""
+        return self._artifacts.preview_caches()
