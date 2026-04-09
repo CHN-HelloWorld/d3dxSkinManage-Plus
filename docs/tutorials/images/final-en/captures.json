@@ -4678,6 +4678,271 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "09-编辑Mod.webp",
+      "width": 1520,
+      "height": 1072,
+      "logical_width": 760,
+      "logical_height": 536,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Edit Mod",
+          "box": [
+            70,
+            49,
+            82,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            173,
+            49,
+            563,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Display name",
+          "box": [
+            24,
+            113,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例 Mod A",
+          "box": [
+            24,
+            133,
+            432,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "Also rename the Mod file or folder",
+          "box": [
+            24,
+            172,
+            209,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Author",
+          "box": [
+            24,
+            202,
+            314,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "教程示例",
+          "box": [
+            24,
+            222,
+            314,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Version",
+          "box": [
+            350,
+            202,
+            106,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "1.0",
+          "box": [
+            350,
+            222,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Source URL",
+          "box": [
+            24,
+            266,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Description",
+          "box": [
+            24,
+            330,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Age rating",
+          "box": [
+            498,
+            113,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "G · All ages",
+          "box": [
+            498,
+            133,
+            238,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Tags",
+          "box": [
+            498,
+            184,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            505,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            571,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2 / 20",
+          "box": [
+            698,
+            277,
+            38,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "File Info",
+          "box": [
+            498,
+            320,
+            134,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Read-only",
+          "box": [
+            638,
+            320,
+            76,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "No changes yet",
+          "box": [
+            22,
+            488,
+            487,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Cancel",
+          "box": [
+            517,
+            488,
+            76,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Save changes",
+          "box": [
+            601,
+            488,
+            137,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Edit Mod - 示例 Mod A",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
