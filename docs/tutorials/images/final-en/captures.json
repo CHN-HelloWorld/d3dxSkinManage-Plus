@@ -4545,6 +4545,139 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "05-导入Mod.webp",
+      "width": 1360,
+      "height": 1080,
+      "logical_width": 680,
+      "logical_height": 540,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "Add Files",
+          "box": [
+            12,
+            43,
+            89,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add Folder",
+          "box": [
+            113,
+            43,
+            101,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Remove Selected",
+          "box": [
+            529,
+            43,
+            139,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 / 1",
+          "box": [
+            325,
+            390,
+            30,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Remove",
+          "box": [
+            225,
+            440,
+            103,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Remove all",
+          "box": [
+            334,
+            440,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - All ages",
+          "box": [
+            418,
+            123,
+            156,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - All ages",
+          "box": [
+            418,
+            159,
+            156,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Cancel",
+          "box": [
+            451,
+            494,
+            75,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Confirm Import",
+          "box": [
+            538,
+            494,
+            130,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Import Mod",
+          "box": [
+            36,
+            1,
+            594,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
