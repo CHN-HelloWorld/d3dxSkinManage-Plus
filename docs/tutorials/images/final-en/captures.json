@@ -5198,6 +5198,293 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "25-分类导出.webp",
+      "width": 1520,
+      "height": 1480,
+      "logical_width": 760,
+      "logical_height": 740,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Export category preset",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Complete category tree",
+          "box": [
+            329,
+            109,
+            124,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            459,
+            109,
+            7,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Expand",
+          "box": [
+            472,
+            112,
+            61,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Collapse",
+          "box": [
+            539,
+            112,
+            67,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Preset name",
+          "box": [
+            25,
+            98,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏-category-preset",
+          "box": [
+            25,
+            126,
+            354,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Export scope",
+          "box": [
+            25,
+            174,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏\nComplete category tree · 4 folders",
+          "box": [
+            25,
+            202,
+            354,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "Include category images",
+          "box": [
+            25,
+            247,
+            354,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            44,
+            292,
+            98,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category folders",
+          "box": [
+            44,
+            328,
+            98,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            162,
+            292,
+            99,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category images",
+          "box": [
+            162,
+            328,
+            99,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0.0",
+          "box": [
+            281,
+            292,
+            79,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Images / MiB",
+          "box": [
+            281,
+            328,
+            79,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "File type",
+          "box": [
+            25,
+            368,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Category preset file (.d3dxcp)",
+          "box": [
+            25,
+            396,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Output location",
+          "box": [
+            25,
+            424,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Choose…",
+          "box": [
+            292,
+            455,
+            87,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Output file",
+          "box": [
+            25,
+            500,
+            354,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏-category-preset.d3dxcp",
+          "box": [
+            25,
+            528,
+            354,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Cancel",
+          "box": [
+            545,
+            695,
+            71,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Start export",
+          "box": [
+            624,
+            695,
+            111,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Export category preset",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
