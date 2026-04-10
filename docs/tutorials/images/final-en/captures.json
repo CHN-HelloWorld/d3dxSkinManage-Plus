@@ -6919,6 +6919,326 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "14-导入与导出.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "General",
+          "box": [
+            216,
+            29,
+            94,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Personalization",
+          "box": [
+            318,
+            29,
+            146,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Shortcuts",
+          "box": [
+            472,
+            29,
+            105,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Import and export",
+          "box": [
+            585,
+            29,
+            164,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Online Mods",
+          "box": [
+            757,
+            29,
+            129,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Update",
+          "box": [
+            894,
+            29,
+            91,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            92,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Import",
+          "box": [
+            216,
+            151,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Export",
+          "box": [
+            216,
+            195,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Import behavior",
+          "box": [
+            460,
+            168,
+            123,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod import format",
+          "box": [
+            429,
+            218,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Choose how Mods are stored in the library. Imported archives keep their original format unless conversion is forced.",
+          "box": [
+            429,
+            240,
+            310,
+            50
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "ZIP archive (widely supported)",
+          "box": [
+            763,
+            236,
+            294,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Always use the import format",
+          "box": [
+            429,
+            318,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "When disabled, imported archives keep their original format for faster imports.",
+          "box": [
+            429,
+            340,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Off",
+          "box": [
+            813,
+            318,
+            19,
+            55
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Learn more",
+          "box": [
+            429,
+            379,
+            70,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Processing performance",
+          "box": [
+            460,
+            453,
+            183,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Import concurrency",
+          "box": [
+            429,
+            503,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Simultaneous archive tasks, from 1 to 16.",
+          "box": [
+            429,
+            525,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "7",
+          "box": [
+            763,
+            504,
+            80,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "tasks",
+          "box": [
+            849,
+            503,
+            30,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Auto recommend",
+          "box": [
+            885,
+            505,
+            130,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Changes apply immediately and are saved automatically",
+          "box": [
+            235,
+            900,
+            328,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Reset",
+          "box": [
+            1370,
+            908,
+            33,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
