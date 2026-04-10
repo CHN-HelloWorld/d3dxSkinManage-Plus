@@ -7239,6 +7239,260 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "15-在线设置.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "General",
+          "box": [
+            216,
+            29,
+            94,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Personalization",
+          "box": [
+            318,
+            29,
+            146,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Shortcuts",
+          "box": [
+            472,
+            29,
+            105,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Import and export",
+          "box": [
+            585,
+            29,
+            164,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Online Mods",
+          "box": [
+            757,
+            29,
+            129,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Update",
+          "box": [
+            894,
+            29,
+            91,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            92,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Online Mod proxy",
+          "box": [
+            216,
+            151,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod updates",
+          "box": [
+            216,
+            195,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Online Mod connection",
+          "box": [
+            460,
+            168,
+            177,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Enable proxy",
+          "box": [
+            429,
+            218,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Use the General page's proxy for browsing, thumbnails and downloads.",
+          "box": [
+            429,
+            240,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Off",
+          "box": [
+            813,
+            218,
+            19,
+            55
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current proxy configuration",
+          "box": [
+            429,
+            301,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "The main proxy switch is off.",
+          "box": [
+            429,
+            323,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Open proxy settings",
+          "box": [
+            763,
+            303,
+            165,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "If GameBanana is inaccessible from your region, enable the configured proxy here.",
+          "box": [
+            430,
+            372,
+            906,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Changes apply immediately and are saved automatically",
+          "box": [
+            235,
+            900,
+            328,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Reset",
+          "box": [
+            1370,
+            908,
+            33,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
