@@ -5065,6 +5065,139 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "10-分类预设.webp",
+      "width": 1520,
+      "height": 840,
+      "logical_width": 760,
+      "logical_height": 420,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Game category presets",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            76,
+            113,
+            498,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 category folders",
+          "box": [
+            76,
+            135,
+            498,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Complete category tree",
+          "box": [
+            580,
+            113,
+            138,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Import category preset",
+          "box": [
+            87,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Add categories and category images.",
+          "box": [
+            45,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Export category preset",
+          "box": [
+            449,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Share the complete category tree and its images.",
+          "box": [
+            407,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current game: 示例游戏",
+          "box": [
+            25,
+            375,
+            639,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Close",
+          "box": [
+            672,
+            375,
+            63,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Game category presets",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
