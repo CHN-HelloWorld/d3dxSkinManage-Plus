@@ -5485,6 +5485,260 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "20-删除游戏.webp",
+      "width": 1400,
+      "height": 1280,
+      "logical_width": 700,
+      "logical_height": 640,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Delete \"示例游戏\"",
+          "box": [
+            77,
+            52,
+            598,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "The following data will be permanently deleted without going to the Recycle Bin. This cannot be undone.",
+          "box": [
+            77,
+            96,
+            598,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Resource folder size",
+          "box": [
+            42,
+            160,
+            135,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "215.8 KB",
+          "box": [
+            551,
+            160,
+            107,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "6",
+          "box": [
+            42,
+            202,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mods in library",
+          "box": [
+            42,
+            240,
+            139,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            201,
+            202,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Categories / Characters",
+          "box": [
+            201,
+            240,
+            139,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            360,
+            202,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Presets",
+          "box": [
+            360,
+            240,
+            139,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1",
+          "box": [
+            519,
+            202,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Deployed copies",
+          "box": [
+            519,
+            240,
+            139,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Items to be deleted",
+          "box": [
+            42,
+            319,
+            616,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Entire game resource folder, including the Mod library",
+          "box": [
+            42,
+            347,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\data\\Sample Game",
+          "box": [
+            42,
+            371,
+            616,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "All files and subfolders inside this folder will be deleted",
+          "box": [
+            42,
+            396,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "All Mod deployment data for this game",
+          "box": [
+            42,
+            424,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "The game's configuration, presets, key/variant preferences and update records.",
+          "box": [
+            42,
+            452,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Export Mods you want to keep first. Back up any manually added files outside the deletion locations listed above.",
+          "box": [
+            25,
+            499,
+            650,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Cancel",
+          "box": [
+            426,
+            595,
+            75,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Permanently delete",
+          "box": [
+            511,
+            595,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Delete game",
+          "box": [
+            36,
+            1,
+            614,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
