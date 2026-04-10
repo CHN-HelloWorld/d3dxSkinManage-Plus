@@ -6390,6 +6390,535 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "13-快捷键.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "General",
+          "box": [
+            216,
+            29,
+            94,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Personalization",
+          "box": [
+            318,
+            29,
+            146,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Shortcuts",
+          "box": [
+            472,
+            29,
+            105,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Import and export",
+          "box": [
+            585,
+            29,
+            164,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Online Mods",
+          "box": [
+            757,
+            29,
+            129,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Update",
+          "box": [
+            894,
+            29,
+            91,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            92,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Key bindings",
+          "box": [
+            216,
+            151,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "General",
+          "box": [
+            460,
+            168,
+            58,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Action",
+          "box": [
+            429,
+            211,
+            636,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Shortcuts",
+          "box": [
+            1079,
+            211,
+            170,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Action",
+          "box": [
+            1263,
+            211,
+            54,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Copy",
+          "box": [
+            429,
+            251,
+            36,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Copy selected text, or copy presets in the preset list",
+          "box": [
+            429,
+            274,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            259,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Cut",
+          "box": [
+            429,
+            316,
+            24,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Cut selected text, or prepare to move selected items",
+          "box": [
+            429,
+            339,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            324,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Paste",
+          "box": [
+            429,
+            381,
+            38,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Paste copied or cut content into the current target",
+          "box": [
+            429,
+            404,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            389,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Select all",
+          "box": [
+            429,
+            446,
+            61,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Select all content in the current editor or list",
+          "box": [
+            429,
+            469,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            454,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Delete",
+          "box": [
+            429,
+            511,
+            45,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Delete selected text or items, keeping the usual confirmation",
+          "box": [
+            429,
+            534,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            519,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Refresh",
+          "box": [
+            429,
+            576,
+            54,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Refresh the current game's Mod library and check for file changes",
+          "box": [
+            429,
+            599,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            584,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Search this page",
+          "box": [
+            429,
+            641,
+            114,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Focus the search field and select its text on pages that support search",
+          "box": [
+            429,
+            664,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            649,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Search settings",
+          "box": [
+            429,
+            706,
+            106,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Open Settings and focus its search field",
+          "box": [
+            429,
+            729,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            714,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Navigation",
+          "box": [
+            460,
+            794,
+            84,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Action",
+          "box": [
+            429,
+            837,
+            636,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Shortcuts",
+          "box": [
+            1079,
+            837,
+            170,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Action",
+          "box": [
+            1263,
+            837,
+            54,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Open Settings",
+          "box": [
+            429,
+            877,
+            98,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "Restore",
+          "box": [
+            1263,
+            885,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "Changes apply immediately and are saved automatically",
+          "box": [
+            235,
+            900,
+            328,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Reset",
+          "box": [
+            1370,
+            908,
+            33,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
