@@ -8067,6 +8067,579 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "27-图片与缓存.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "General",
+          "box": [
+            216,
+            29,
+            94,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Personalization",
+          "box": [
+            318,
+            29,
+            146,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Shortcuts",
+          "box": [
+            472,
+            29,
+            105,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Import and export",
+          "box": [
+            585,
+            29,
+            164,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Online Mods",
+          "box": [
+            757,
+            29,
+            129,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Update",
+          "box": [
+            894,
+            29,
+            91,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            92,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod management",
+          "box": [
+            216,
+            151,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Network proxy",
+          "box": [
+            216,
+            195,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Download data",
+          "box": [
+            216,
+            239,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Images and cache",
+          "box": [
+            216,
+            283,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Image memory cache",
+          "box": [
+            458,
+            164,
+            164,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "RAM",
+          "box": [
+            630,
+            165,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Keep recent images in memory for faster revisits in Overview, Gallery and Online Mods.",
+          "box": [
+            458,
+            186,
+            928,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current image memory",
+          "box": [
+            429,
+            228,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2.9",
+          "box": [
+            429,
+            252,
+            48,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            482,
+            266,
+            24,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Effective limit 256 MiB",
+          "box": [
+            429,
+            304,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1%",
+          "box": [
+            594,
+            304,
+            20,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Image cache only, not total application memory.",
+          "box": [
+            429,
+            342,
+            185,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Cache budget",
+          "box": [
+            656,
+            281,
+            180,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "64–8192 MiB, allocated as needed",
+          "box": [
+            656,
+            303,
+            180,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "256",
+          "box": [
+            852,
+            282,
+            76,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            936,
+            281,
+            23,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Auto recommend",
+          "box": [
+            967,
+            283,
+            130,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Images currently displayed remain available after clearing the cache.",
+          "box": [
+            427,
+            394,
+            782,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Clear image memory",
+          "box": [
+            1221,
+            394,
+            167,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Disk cache",
+          "box": [
+            458,
+            466,
+            80,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "DISK",
+          "box": [
+            546,
+            467,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Keep downloaded online images to avoid downloading them again.",
+          "box": [
+            458,
+            488,
+            928,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current disk usage",
+          "box": [
+            429,
+            530,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            429,
+            556,
+            20,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MB",
+          "box": [
+            454,
+            570,
+            21,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Includes online images and other regenerable caches",
+          "box": [
+            429,
+            610,
+            185,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Online image cache limit",
+          "box": [
+            656,
+            530,
+            586,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Limits only the disk space used by online images",
+          "box": [
+            656,
+            549,
+            586,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "512 MB",
+          "box": [
+            1254,
+            530,
+            112,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0 · Unlimited",
+          "box": [
+            656,
+            599,
+            66,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 GB",
+          "box": [
+            1342,
+            599,
+            24,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Slider maximum",
+          "box": [
+            656,
+            630,
+            180,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sets the slider's range, not the current limit",
+          "box": [
+            656,
+            649,
+            180,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "4",
+          "box": [
+            852,
+            637,
+            76,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "GB",
+          "box": [
+            935,
+            637,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "When the limit is exceeded, the least recently viewed online thumbnails are removed first and downloaded again when needed.",
+          "box": [
+            656,
+            685,
+            710,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Clear regenerable caches while keeping downloaded Mod archives.",
+          "box": [
+            427,
+            721,
+            792,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Clear disk cache",
+          "box": [
+            1249,
+            721,
+            139,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Changes apply immediately and are saved automatically",
+          "box": [
+            235,
+            900,
+            328,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Reset",
+          "box": [
+            1370,
+            908,
+            33,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
