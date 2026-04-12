@@ -8894,6 +8894,227 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "17-工具箱.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Category organization",
+          "box": [
+            224,
+            35,
+            1171,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Game category presets",
+          "box": [
+            266,
+            69,
+            136,
+            46
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current game",
+          "box": [
+            414,
+            69,
+            80,
+            46
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Import presets to add categories and folder images.\nYou can also share the current game's complete category tree.",
+          "box": [
+            228,
+            127,
+            1163,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Import category preset",
+          "box": [
+            228,
+            178,
+            203,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Export category preset",
+          "box": [
+            440,
+            178,
+            201,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Shares categories and folder images; excludes Mod files",
+          "box": [
+            248,
+            226,
+            1143,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Maintenance and diagnostics",
+          "box": [
+            224,
+            301,
+            1171,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Rebuild Index",
+          "box": [
+            264,
+            334,
+            96,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current game",
+          "box": [
+            369,
+            334,
+            80,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Rescan the library and restore the current game's index.",
+          "box": [
+            264,
+            356,
+            992,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Rebuild Index",
+          "box": [
+            1272,
+            335,
+            123,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "View Logs",
+          "box": [
+            264,
+            403,
+            71,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Apply",
+          "box": [
+            344,
+            403,
+            34,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Inspect application logs to troubleshoot crashes / errors / odd behavior",
+          "box": [
+            264,
+            425,
+            1018,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "View Logs",
+          "box": [
+            1298,
+            404,
+            97,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
