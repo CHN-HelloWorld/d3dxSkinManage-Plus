@@ -9391,6 +9391,480 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "19-关于.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Games",
+          "box": [
+            193,
+            10,
+            61,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Card view",
+          "box": [
+            1046,
+            10,
+            123,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add game",
+          "box": [
+            1309,
+            10,
+            117,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏 (Current environment)",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add preview image",
+          "box": [
+            1097,
+            355,
+            171,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Delete",
+          "box": [
+            1274,
+            355,
+            93,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Game name",
+          "box": [
+            1037,
+            405,
+            74,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1124,
+            405,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "English name",
+          "box": [
+            1037,
+            441,
+            81,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1124,
+            441,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Executable",
+          "box": [
+            1037,
+            477,
+            66,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1124,
+            479,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1124,
+            519,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod folder",
+          "box": [
+            1037,
+            557,
+            69,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1124,
+            559,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Current environment",
+          "box": [
+            1037,
+            599,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Save",
+          "box": [
+            1046,
+            650,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Delete",
+          "box": [
+            1236,
+            651,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current",
+          "box": [
+            329,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            209,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            199,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "About this project",
+          "box": [
+            755,
+            49,
+            120,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "A modern Mod manager for the community, recognizing earlier contributions while starting afresh with new code and design.",
+          "box": [
+            543,
+            189,
+            520,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current status",
+          "box": [
+            574,
+            254,
+            93,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "In development · Unreleased",
+          "box": [
+            677,
+            254,
+            204,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "·",
+          "box": [
+            891,
+            254,
+            3,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Started 2026-03-09",
+          "box": [
+            904,
+            254,
+            128,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Project story",
+          "box": [
+            838,
+            356,
+            524,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "The Spark Lives On",
+          "box": [
+            838,
+            379,
+            524,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Discover the story behind Plus",
+          "box": [
+            838,
+            422,
+            524,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "October 2026 project film",
+          "box": [
+            838,
+            448,
+            524,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Watch film",
+          "box": [
+            866,
+            536,
+            77,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "TRIBUTE",
+          "box": [
+            249,
+            634,
+            66,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Honoring the original d3dxSkinManage author",
+          "box": [
+            219,
+            658,
+            1169,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "Every thriving community begins with someone who takes the first step. This project has no code or engineering ties to the original d3dxSkinManage, but its pioneering contribution deserves recognition.",
+          "box": [
+            219,
+            699,
+            720,
+            57
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "The pioneer's spark",
+          "box": [
+            322,
+            799,
+            1039,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "The original d3dxSkinManage author single-handedly established an early approach to community Mod management, making it easier for creators and players to manage and switch Mods. That pioneering effort remains a shared inspiration for the tools that followed.",
+          "box": [
+            322,
+            833,
+            1039,
+            57
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "Notice: d3dxSkinManage-Plus is an independent project with entirely rewritten code. It does not reference, derive from or belong to the original d3dxSkinManage project. This acknowledgment recognizes its historical contribution to the community.",
+          "box": [
+            322,
+            900,
+            1039,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
