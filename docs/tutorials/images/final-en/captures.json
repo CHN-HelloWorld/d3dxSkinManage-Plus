@@ -9115,6 +9115,282 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "18-插件.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "Install plugin",
+          "box": [
+            995,
+            16,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Rescan",
+          "box": [
+            1139,
+            16,
+            97,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Open plugins folder",
+          "box": [
+            1248,
+            16,
+            176,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod inventory export",
+          "box": [
+            582,
+            88,
+            690,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "v0.1.0",
+          "box": [
+            582,
+            117,
+            37,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Disabled",
+          "box": [
+            1288,
+            88,
+            52,
+            45
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "d3dxSkinManage-Plus",
+          "box": [
+            522,
+            149,
+            876,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Export mods from the current game or a category subtree to CSV for organizing and sharing an inventory.",
+          "box": [
+            522,
+            181,
+            876,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Reload",
+          "box": [
+            522,
+            213,
+            95,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Uninstall",
+          "box": [
+            633,
+            213,
+            107,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Enable the plugin and satisfy its dependencies to use its settings and features.",
+          "box": [
+            522,
+            263,
+            876,
+            48
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Permissions and source · 7 permissions",
+          "box": [
+            522,
+            327,
+            876,
+            49
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "My plugins",
+          "box": [
+            211,
+            81,
+            83,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3",
+          "box": [
+            475,
+            81,
+            8,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "All 3",
+          "box": [
+            211,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Enabled 0",
+          "box": [
+            303,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Disabled 3",
+          "box": [
+            395,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod inventory export",
+          "box": [
+            262,
+            216,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Preset check",
+          "box": [
+            262,
+            281,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Preset cycle",
+          "box": [
+            262,
+            346,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Install plugins from archives, or place them in the plugins folder and rescan. First-time activation requires trust confirmation.",
+          "box": [
+            211,
+            878,
+            272,
+            50
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
