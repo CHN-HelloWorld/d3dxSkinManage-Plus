@@ -10417,6 +10417,700 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "24-在线Mod.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Games",
+          "box": [
+            193,
+            10,
+            61,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "Card view",
+          "box": [
+            1046,
+            10,
+            123,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add game",
+          "box": [
+            1309,
+            10,
+            117,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏 (Current environment)",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Add preview image",
+          "box": [
+            1097,
+            355,
+            171,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Delete",
+          "box": [
+            1274,
+            355,
+            93,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Game name",
+          "box": [
+            1037,
+            405,
+            74,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1124,
+            405,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "English name",
+          "box": [
+            1037,
+            441,
+            81,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1124,
+            441,
+            304,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Executable",
+          "box": [
+            1037,
+            477,
+            66,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1124,
+            479,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1124,
+            519,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod folder",
+          "box": [
+            1037,
+            557,
+            69,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1124,
+            559,
+            264,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Current environment",
+          "box": [
+            1037,
+            599,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Save",
+          "box": [
+            1046,
+            650,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Delete",
+          "box": [
+            1236,
+            651,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Current",
+          "box": [
+            329,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            209,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            199,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "Default",
+          "box": [
+            1033,
+            4,
+            174,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "Blur NSFW",
+          "box": [
+            1215,
+            4,
+            142,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "示例游戏（占位）",
+          "box": [
+            187,
+            46,
+            127,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "/",
+          "box": [
+            318,
+            46,
+            21,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "Mods",
+          "box": [
+            343,
+            46,
+            78,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "/",
+          "box": [
+            425,
+            46,
+            21,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "示例分类",
+          "box": [
+            450,
+            46,
+            95,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod A",
+          "box": [
+            193,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            193,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            209,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            252,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            289,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod B",
+          "box": [
+            411,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            411,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            427,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            470,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            507,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod C",
+          "box": [
+            629,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            629,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            645,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            688,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            725,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod D",
+          "box": [
+            847,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            847,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            863,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            906,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            943,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod E",
+          "box": [
+            1065,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            1065,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            1081,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            1124,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            1161,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod F",
+          "box": [
+            193,
+            531,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            193,
+            566,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            209,
+            600,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            252,
+            600,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            289,
+            600,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "About",
+          "box": [
+            0,
+            816,
+            173,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Mod Loader",
+          "box": [
+            0,
+            853,
+            173,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "Launch Game",
+          "box": [
+            0,
+            890,
+            173,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
