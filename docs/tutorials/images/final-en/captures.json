@@ -10306,6 +10306,117 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "23-日志.webp",
+      "width": 1780,
+      "height": 1120,
+      "logical_width": 890,
+      "logical_height": 560,
+      "device_pixel_ratio": 2.0,
+      "language": "en-US",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "Session:",
+          "box": [
+            11,
+            11,
+            49,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "2026-10-30 #8",
+          "box": [
+            66,
+            11,
+            150,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Level:",
+          "box": [
+            222,
+            11,
+            34,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "All",
+          "box": [
+            262,
+            11,
+            107,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "Auto-scroll to bottom",
+          "box": [
+            375,
+            18,
+            163,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Refresh",
+          "box": [
+            544,
+            11,
+            100,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Open Log Folder",
+          "box": [
+            650,
+            11,
+            157,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "Copy",
+          "box": [
+            813,
+            11,
+            66,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Showing 1 / 1 lines",
+          "box": [
+            11,
+            533,
+            868,
+            16
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
