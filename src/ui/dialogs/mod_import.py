@@ -672,3 +672,121 @@ class ModImportDialog(QDialog):
         """使已有请求序号失效并设置取消事件，阻止旧任务更新当前预览。"""
         self._preview_request_id += 1
         self._preview_cancelled.set()
+
+    @Slot(int, str, QImage)
+    def _on_preview_ready(self, request_id: int, path: str, image: QImage) -> None:
+        """仅接受序号和路径均匹配的解码结果，在界面线程创建带设备像素比的 QPixmap。"""
+        if request_id != self._preview_request_id or path != self._current_preview_path:
+            return
+        if image.isNull():
+            self._preview_label.setText(t("无预览图"))
+            return
+        pixmap = QPixmap.fromImage(image)
+        pixmap.setDevicePixelRatio(self._preview_label.devicePixelRatioF())
+        self._preview_label.setPixmap(pixmap)
+
+    def done(self, result: int) -> None:
+        """在任何对话框结束路径使异步预览请求失效，再交由 Qt 设置结果和隐藏窗口。"""
+        self._cancel_preview_request()
+        super().done(result)
+
+    def _apply_import_column_widths(self, force_ratio: bool = False, preferred_col: int = 1) -> None:
+        """按可用宽度分配或补齐列宽，保留分级文本最小宽度；手动调整后允许水平滚动而不强制收缩。"""
+        if self._import_header_dragging:
+            return
+        if self._import_syncing_widths:
+            return
+        self._import_syncing_widths = True
+        try:
+            viewport_w = max(420, self._table.viewport().width())
+            minimum_widths = list(self._import_col_min_widths)
+            combo = self._table.cellWidget(0, 2)
+            if combo is not None:
+                option = QStyleOptionViewItem()
+                self._table.initViewItemOption(option)
+                option.rect = self._table.visualRect(self._table.model().index(0, 2))
+                content = self._table.style().subElementRect(
+                    QStyle.SubElement.SE_ItemViewItemText,
+                    option,
+                    self._table,
+                )
+                # 单元格、箭头和文字边距共同占用宽度，需保证各语言分级文本可读。
+                padding = max(0, self._table.columnWidth(2) - content.width())
+                minimum_widths[2] = max(minimum_widths[2], combo.sizeHint().width() + padding)
+            if force_ratio:
+                used = 0
+                for idx in range(3):
+                    w = max(minimum_widths[idx], int(viewport_w * self._import_col_ratios[idx]))
+                    self._table.setColumnWidth(idx, w)
+                    used += w
+                self._table.setColumnWidth(3, max(minimum_widths[3], viewport_w - used))
+
+            widths = [self._table.columnWidth(i) for i in range(4)]
+            total_w = sum(widths)
+
+            if total_w < viewport_w:
+                target_col = preferred_col if 0 <= preferred_col < 4 else 1
+                self._table.setColumnWidth(target_col, widths[target_col] + (viewport_w - total_w))
+                return
+
+            if not force_ratio:
+                # 用户已手动调整列宽，不强制收缩，让水平滚动条自然出现
+                return
+
+            overflow = total_w - viewport_w
+            # 来源路径列(1)信息量最大，放到最后才收缩；优先压缩预览图/年龄分级/名称
+            shrink_order = [3, 2, 0, 1]
+            if 0 <= preferred_col < 4 and preferred_col in shrink_order:
+                shrink_order = [idx for idx in shrink_order if idx != preferred_col] + [preferred_col]
+
+            for idx in shrink_order:
+                if overflow <= 0:
+                    break
+                cur = self._table.columnWidth(idx)
+                min_w = minimum_widths[idx]
+                can_shrink = max(0, cur - min_w)
+                if can_shrink <= 0:
+                    continue
+                cut = min(overflow, can_shrink)
+                self._table.setColumnWidth(idx, cur - cut)
+                overflow -= cut
+        finally:
+            self._import_syncing_widths = False
+
+    def _on_import_header_section_resized(self, _logical_index: int, old_size: int, new_size: int) -> None:
+        """记录非程序同步引起的列宽变化，使后续窗口调整保留手动设置。"""
+        if self._import_syncing_widths:
+            return
+        if old_size != new_size:
+            self._import_user_resized = True
+
+    def resizeEvent(self, event) -> None:
+        """窗口尺寸变化后更新列宽，表头正在拖动时暂缓，避免与用户操作竞争。"""
+        super().resizeEvent(event)
+        if self._import_header_dragging:
+            return
+        self._apply_import_column_widths(force_ratio=not self._import_user_resized)
+
+    def _preview_image_rect(self):
+        """预览图在 label 内的实际居中矩形；无图时返回 None。"""
+        pm = self._preview_label.pixmap()
+        if pm is None or pm.isNull():
+            return None
+        dpr = pm.devicePixelRatio() or 1.0
+        pw = int(round(pm.width() / dpr))
+        ph = int(round(pm.height() / dpr))
+        x0 = (self._preview_label.width() - pw) // 2
+        y0 = (self._preview_label.height() - ph) // 2
+        return QRect(x0, y0, pw, ph)
+
+    def _on_preview_label_clicked(self, event) -> None:
+        """仅在点击实际图片矩形时打开查看器，居中图片周围的留白不触发操作。"""
+        r = self._preview_image_rect()
+        if r is not None and r.contains(event.pos()):
+            self._open_current_preview_viewer()
+
+    def _on_preview_label_moved(self, event) -> None:
+        """指针位于实际图片范围时显示可点击光标，在留白区域恢复箭头。"""
+        r = self._preview_image_rect()
+        inside = r is not None and r.contains(event.pos())
+        self._preview_label.setCursor(Qt.CursorShape.PointingHandCursor if inside else Qt.CursorShape.ArrowCursor)
