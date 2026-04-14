@@ -249,3 +249,327 @@ class _DropdownBelowStyle(QProxyStyle):
         if hint == QStyle.StyleHint.SH_ComboBox_Popup:
             return 0
         return super().styleHint(hint, option, widget, returnData)
+
+
+class _NoWheelComboBox(QComboBox):
+    """年龄分级下拉框在收起时忽略滚轮，避免滚动表格时意外修改分级。
+
+    wheelEvent 将事件交给父级滚动区处理；展开后的列表由弹出视图处理滚轮事件。
+    """
+
+    def wheelEvent(self, e):
+        """忽略收起状态的滚轮输入，使父级滚动区域继续处理而不改变年龄分级。"""
+        e.ignore()
+
+
+class _PathElideDelegate(QStyledItemDelegate):
+    """来源路径列使用尾部省略，优先保留盘符与上级目录，便于区分输入来源。"""
+
+    def initStyleOption(self, option, index):
+        """在默认单元格样式基础上改用尾部省略，优先保留来源路径的前部信息。"""
+        super().initStyleOption(option, index)
+        option.textElideMode = Qt.TextElideMode.ElideRight
+
+
+class ModImportDialog(QDialog):
+    """维护导入候选列表及预览选择，确认后以信号交出参数；目标节点由构造参数固定。"""
+
+    import_confirmed = Signal(list, str)  # [(path, name, selected_preview_name, age_rating), ...], node_id
+
+    def __init__(
+        self,
+        node_id: str = "",
+        initial_paths: list[str] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        """保存目标节点和候选来源，初始化扫描及预览取消状态，加入初始路径后选中最后一项。"""
+        super().__init__(parent)
+        # 原生表面准备完成后再处理可能影响整张表单的属性。
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        anim.install_intro_fade(self)
+        self._character_id = node_id
+        self._entries: list[_ImportEntry] = []
+        self._current_preview_index = 0
+        self._current_preview_path = ""
+        self._preview_request_id = 0
+        self._preview_cancelled = Event()
+        self._scan_worker: _ScanWorker | None = None
+        self._import_col_ratios = (0.16, 0.56, 0.18, 0.10)
+        self._import_col_min_widths = (110, 280, 150, 86)
+        self._import_syncing_widths = False
+        self._import_header_dragging = False
+        self._import_user_resized = False
+        self.setAcceptDrops(True)
+        self._setup_ui()
+        acrylic.apply_dialog_acrylic(self)
+        if initial_paths:
+            self._add_entries_batch(initial_paths)
+            # 自动选中最后添加的Mod并显示预览
+            if self._entries:
+                self._table.setCurrentCell(len(self._entries) - 1, 0)
+
+    def _setup_ui(self) -> None:
+        """构建来源表格、分级控件、预览管理区和确认操作，并安装列宽拖动及空白选择事件过滤。"""
+        self.setWindowTitle(t("导入 Mod"))
+        self.setMinimumSize(680, 540)
+        self.setModal(True)
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(12)
+
+        # 添加文件按钮
+        btn_row = QHBoxLayout()
+        # 先挂接嵌套布局再添加内容，避免 PySide 更换间距项所有者后重复释放。
+        layout.addLayout(btn_row)
+        add_file_btn = QPushButton(t("添加文件"))
+        add_file_btn.clicked.connect(self._browse_files)
+        btn_row.addWidget(add_file_btn)
+
+        add_folder_btn = QPushButton(t("添加文件夹"))
+        add_folder_btn.clicked.connect(self._browse_folder)
+        btn_row.addWidget(add_folder_btn)
+
+        btn_row.addStretch()
+
+        remove_btn = QPushButton(t("移除选中"))
+        remove_btn.clicked.connect(self._remove_selected)
+        btn_row.addWidget(remove_btn)
+
+        # 文件列表
+        self._table = QTableWidget()
+        self._table.setColumnCount(4)
+        self._table.setHorizontalHeaderLabels([tr("名称"), tr("来源路径"), tr("年龄分级"), tr("预览图")])
+        # 所有列均可调整宽度
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(60)  # 禁止把列拖到 0 宽度导致内容不可见
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        self._table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._table.setColumnWidth(0, 160)
+        self._table.setColumnWidth(1, 340)
+        self._table.setColumnWidth(2, 170)
+        self._table.setColumnWidth(3, 100)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.verticalHeader().setVisible(False)
+        # 表格行高须容纳下拉框边框与内边距，同时清除单元格垂直内边距，
+        # 避免控件超出当前行；水平边距与文字列保持一致。
+        self._table.verticalHeader().setDefaultSectionSize(36)
+        self._table.setStyleSheet("QTableWidget::item { padding: 0px 6px; }")
+        self._table.setAlternatingRowColors(True)
+        self._table.setItemDelegateForColumn(1, _PathElideDelegate(self._table))
+        header.sectionResized.connect(self._on_import_header_section_resized)
+        header.viewport().installEventFilter(self)
+
+        content_splitter = QSplitter(Qt.Orientation.Vertical)
+        content_splitter.setChildrenCollapsible(False)
+        content_splitter.addWidget(self._table)
+
+        # 预览区
+        self._preview_label = QLabel()
+        self._preview_label.setMinimumHeight(120)
+        self._preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._preview_label.setStyleSheet(
+            f"border: 1px dashed {theme.color('stroke.control')}; border-radius: {theme.radius('control')}px;"
+        )
+        self._preview_label.setText(t("无预览图"))
+        # 仅实际图片范围显示可点击光标，预览区留白保持普通箭头。
+        self._preview_label.setMouseTracking(True)
+        self._preview_label.mousePressEvent = self._on_preview_label_clicked
+        self._preview_label.mouseMoveEvent = self._on_preview_label_moved
+
+        preview_area = QWidget()
+        preview_area_layout = QVBoxLayout(preview_area)
+        preview_area_layout.setContentsMargins(0, 0, 0, 0)
+        preview_area_layout.setSpacing(8)
+        preview_area_layout.addWidget(self._preview_label)
+
+        # 预览图导航 - 居中
+        preview_nav = QHBoxLayout()
+        preview_area_layout.addLayout(preview_nav)
+        preview_nav.setSpacing(8)
+
+        preview_nav.addStretch()
+
+        self._prev_preview_btn = QPushButton()
+        icons.apply_icon(self._prev_preview_btn, "actions/chevron-left")
+        self._prev_preview_btn.setIconSize(QSize(16, 16))
+        self._prev_preview_btn.setFixedSize(32, 32)
+        self._prev_preview_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._prev_preview_btn.setToolTip(tr("上一张预览图"))
+        self._prev_preview_btn.setAccessibleName(tr("上一张预览图"))
+        self._prev_preview_btn.clicked.connect(self._show_prev_preview)
+        preview_nav.addWidget(self._prev_preview_btn)
+
+        self._preview_page_label = QLabel("0 / 0")
+        self._preview_page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preview_nav.addWidget(self._preview_page_label)
+
+        self._next_preview_btn = QPushButton()
+        icons.apply_icon(self._next_preview_btn, "actions/chevron-right")
+        self._next_preview_btn.setIconSize(QSize(16, 16))
+        self._next_preview_btn.setFixedSize(32, 32)
+        self._next_preview_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._next_preview_btn.setToolTip(tr("下一张预览图"))
+        self._next_preview_btn.setAccessibleName(tr("下一张预览图"))
+        self._next_preview_btn.clicked.connect(self._show_next_preview)
+        preview_nav.addWidget(self._next_preview_btn)
+
+        preview_nav.addStretch()
+
+        # 预览图管理按钮区 - 居中显示
+        preview_mgmt_row = TagFlowLayout(spacing=6)
+        preview_area_layout.addLayout(preview_mgmt_row)
+        preview_mgmt_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        preview_mgmt_row.setContentsMargins(0, 8, 0, 8)
+
+        self._delete_preview_btn = QPushButton(tr("移除"))
+        icons.apply_icon(self._delete_preview_btn, "actions/remove")
+        self._delete_preview_btn.setIconSize(QSize(16, 16))
+        self._delete_preview_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._delete_preview_btn.setToolTip(tr("从本次导入中移除此预览图，保留原始文件"))
+        self._delete_preview_btn.clicked.connect(self._delete_current_preview)
+        preview_mgmt_row.addWidget(self._delete_preview_btn)
+
+        self._delete_all_previews_btn = QPushButton(tr("全部移除"))
+        icons.apply_icon(self._delete_all_previews_btn, "actions/remove")
+        self._delete_all_previews_btn.setIconSize(QSize(16, 16))
+        self._delete_all_previews_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._delete_all_previews_btn.setToolTip(tr("从本次导入中移除全部预览图，保留原始文件"))
+        self._delete_all_previews_btn.clicked.connect(self._delete_all_previews)
+        preview_mgmt_row.addWidget(self._delete_all_previews_btn)
+
+        content_splitter.addWidget(preview_area)
+        content_splitter.setSizes([360, 200])
+        layout.addWidget(content_splitter, 1)
+
+        self._update_preview_nav()
+
+        self._table.currentCellChanged.connect(self._on_selection_changed)
+        # 安装事件过滤器 - 点击空白处取消选中
+        self._table.viewport().installEventFilter(self)
+        self._apply_import_column_widths(force_ratio=not self._import_user_resized)
+
+        # 底部按钮
+        bottom = QHBoxLayout()
+        layout.addLayout(bottom)
+        bottom.addStretch()
+
+        cancel_btn = QPushButton(t("取消"))
+        cancel_btn.clicked.connect(self.reject)
+        bottom.addWidget(cancel_btn)
+
+        import_btn = QPushButton(t("确认导入"))
+        import_btn.setProperty("accent", True)
+        import_btn.clicked.connect(self._on_import)
+        bottom.addWidget(import_btn)
+
+    def _add_entry(self, path: str, auto_select: bool = False) -> None:
+        """按来源路径字符串去重后添加一项并重建表格，可自动选择新加入项。"""
+        # 避免重复
+        for e in self._entries:
+            if e.source_path == path:
+                return
+        entry = _ImportEntry(path)
+        self._entries.append(entry)
+        self._refresh_table()
+        if auto_select:
+            new_row = len(self._entries) - 1
+            self._table.setCurrentCell(new_row, 0)
+        self._update_preview_nav()
+
+    def _add_entries_batch(self, paths: list[str], auto_select_last: bool = False) -> None:
+        """批量添加条目，仅在全部添加完后刷新一次表格（避免 O(n²) 重建）"""
+        existing = {e.source_path for e in self._entries}
+        added = False
+        for p in paths:
+            if p not in existing:
+                entry = _ImportEntry(p)
+                self._entries.append(entry)
+                existing.add(p)
+                added = True
+        if added:
+            self._refresh_table()
+            if auto_select_last and self._entries:
+                self._table.setCurrentCell(len(self._entries) - 1, 0)
+            self._update_preview_nav()
+
+    def _refresh_table(self) -> None:
+        """取消旧扫描并最多等待二百毫秒，然后屏蔽重绘和信号重建各行，为未扫描项目启动新线程。"""
+        # 取消进行中的后台扫描
+        if self._scan_worker is not None:
+            self._scan_worker.cancel()
+            self._scan_worker.wait(200)
+            self._scan_worker = None
+
+        # 禁用 UI 更新 + 信号，避免每行设置时触发重绘
+        self._table.setUpdatesEnabled(False)
+        self._table.blockSignals(True)
+        try:
+            self._table.setRowCount(len(self._entries))
+            unscanned: list[tuple[int, _ImportEntry]] = []
+            for i, entry in enumerate(self._entries):
+                name_item = QTableWidgetItem(entry.name)
+                self._table.setItem(i, 0, name_item)
+
+                src_item = QTableWidgetItem(entry.source_path)
+                src_item.setToolTip(entry.source_path)
+                src_item.setFlags(src_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(i, 1, src_item)
+
+                if not entry._scanned:
+                    unscanned.append((i, entry))
+
+                # 年龄分级列嵌入下拉框，避免单元格文本与委托编辑器重叠或样式不一致。
+                rating_code = _normalize_age_rating(entry.age_rating)
+                self._table.setCellWidget(i, 2, self._make_age_combo(i, rating_code))
+
+                # 预览图列
+                if entry._scanned:
+                    preview_str = str(len(entry.previews)) + " " + t("张图片") if entry.previews else "-"
+                else:
+                    preview_str = tr("扫描中…")
+                prev_item = QTableWidgetItem(preview_str)
+                prev_item.setFlags(prev_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+                self._table.setItem(i, 3, prev_item)
+        finally:
+            self._table.blockSignals(False)
+            self._table.setUpdatesEnabled(True)
+
+        # 启动后台线程扫描未扫描的条目
+        if unscanned:
+            self._scan_worker = _ScanWorker(unscanned)
+            self._scan_worker.entry_scanned.connect(self._on_entry_scanned)
+            self._scan_worker.start()
+
+        self._apply_import_column_widths(force_ratio=not self._import_user_resized)
+
+    def _on_entry_scanned(self, row: int, keys: list, previews: list) -> None:
+        """按原行索引写回扫描结果并过滤已排除图片，选中行完成时刷新预览和导航。"""
+        if row < 0 or row >= len(self._entries):
+            return
+        entry = self._entries[row]
+        entry._scanned = True
+        entry.keys = keys
+        previews = [path for path in previews if entry.preview_name(path) not in entry.excluded_previews]
+        entry.previews = previews
+        if previews and not entry.selected_preview_path:
+            entry.selected_preview_path = previews[0]
+
+        # 更新预览图列
+        preview_str = str(len(previews)) + " " + t("张图片") if previews else "-"
+        prev_item = QTableWidgetItem(preview_str)
+        prev_item.setFlags(prev_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._table.setItem(row, 3, prev_item)
+
+        # 若当前选中的就是这一行，刷新预览区
+        if self._table.currentRow() == row:
+            self._show_current_preview(row)
+            self._update_preview_nav()
+        self._apply_import_column_widths(force_ratio=False)
