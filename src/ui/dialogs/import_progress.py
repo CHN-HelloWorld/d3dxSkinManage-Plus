@@ -769,3 +769,192 @@ class ImportProgressDialog(QDialog):
             return text
         head = text.split(":", 1)[0]
         return f"{head}: {_item_label(item, source)}"
+
+    def _on_stage_progress(self, overall: float, text: str):
+        """将任务的全局进度映射为 0 到 1000 的量程，并显示当前步骤。"""
+        text = self._relabel_stage(text)
+        val = max(0, min(1000, int(overall * 1000)))
+        self._set_progress_value(val, text=text)
+        if self._ui_paused:
+            return
+        self._view.update_progress(
+            self._display_progress_value / 10.0,
+            tr("正在导入… {value}%", value=self._display_progress_value // 10),
+            text,
+        )
+
+    def _on_progress(self, current: int, total: int, detail: str):
+        """把批次计数折算为单调总体进度，暂停时仅缓存；并行计数不用于推断单项索引。"""
+        # 每个 Mod 起步 / 收尾的粗粒度进度（0~1000 量程）；阶段细节由 _on_stage_progress 驱动。
+        value = int(current / total * 1000) if total > 0 else 0
+        self._set_progress_value(value, text=detail)
+        if self._ui_paused:
+            return
+        pct = self._display_progress_value // 10
+        self._view.update_progress(
+            self._display_progress_value / 10.0,
+            tr("正在导入 {current}/{total} ({pct}%)", current=current, total=total, pct=pct),
+            detail,
+        )
+        # 注意：并行 worker 的 current 是**完成计数**（_completed_count），不是条目索引，
+        # 乱序完成时 current-1 会指到无关的行上。逐项行状态一律由 _on_file_prepared
+        # 使用工作线程提供的条目索引更新状态。
+
+    def _mark_view_item(self, index: int, status: str, text: str = "") -> None:
+        """更新面板明细行；名称沿用 _setup_ui 登记时的显示名。"""
+        if index < 0 or index >= len(self._items):
+            return
+        item = self._items[index]
+        source = item[0] if isinstance(item, (list, tuple)) and item else ""
+        display = _item_label(item, source)
+        self._view.update_item(index, str(display), status, text)
+
+    def _set_progress_value(self, value: int, *, text: str = "", force: bool = False) -> None:
+        """进度只允许单调前进；暂停期间仅缓存，不重绘。"""
+        value = max(0, min(1000, int(value)))
+        if not force:
+            value = max(self._display_progress_value, value)
+        if self._ui_paused:
+            self._pending_progress_value = max(self._pending_progress_value, value)
+            if text:
+                self._pending_progress_text = text
+            return
+        self._display_progress_value = value
+        self._pending_progress_value = max(self._pending_progress_value, value)
+
+    def _on_file_prepared(self, index: int, result):
+        """在界面线程处理文件准备结果并确认数据库交接。
+
+        暂停时缓存结果且不确认，终止后只释放等待；正常处理区分成功、重复和失败，再允许后台继续。
+        """
+        # 终止后仍可能收到已排队的 file_prepared 信号，此时禁止登记数据库，
+        # 避免索引指向已清理的文件，或遗漏终止决策需要处理的已提交项。
+        if self._was_terminated:
+            if self._worker:
+                self._worker.acknowledge_db_done()
+            return
+        # 暂停操作与已排队的文件完成信号可能交错，暂停期间先缓存结果，
+        # 不提交数据库或发送确认；恢复后按原顺序提交并释放工作线程。
+        if self._ui_paused:
+            self._pending_prepared_results.append((index, result))
+            return
+        mod = None
+        if result is not None:
+            try:
+                mod = self._register_mod_in_db(result)
+            except DuplicateIntakeError as exc:
+                result = exc
+            except IntakeTargetMissingError as exc:
+                result = exc
+                logger.warning("导入跳过（目标目录已不存在）: %s", exc)
+        self._completed_results.append((index, mod))
+        # 逐项明细终态：登记成功 → 已纳管；重复 → 已回滚；其余异常 → 失败。
+        if mod is not None:
+            # 在明细中显示元数据降级，区别于源文件未提供信息的情况。
+            notice = getattr(result, "metadata_notice", "")
+            if notice:
+                logger.warning("导入降级: %s", notice)
+            self._mark_view_item(index, ST_DONE, tr("已导入·无元数据") if notice else tr("已导入"))
+        elif isinstance(result, DuplicateIntakeError):
+            self._mark_view_item(index, ST_ROLLED_BACK, tr("重复，已跳过"))
+        else:
+            self._failed_indexes.add(int(index))
+            detail = tr("已跳过·目标目录已不存在") if isinstance(result, IntakeTargetMissingError) else tr("失败")
+            self._mark_view_item(index, ST_FAILED, detail)
+        # 完成一个 Mod → 进度推进到「已完成数 / 总数」（0~1000 量程）
+        total = max(1, len(self._items))
+        self._set_progress_value(int(len(self._completed_results) / total * 1000))
+        # 通知工作线程可以继续下一个
+        if self._worker:
+            self._worker.acknowledge_db_done()
+
+    def _register_mod_in_db(self, result: object) -> Mod | None:
+        """提交有效准备结果并登记需保留的预览缓存。
+
+        准备错误和普通提交失败返回空值，提交时的重复或目标失效异常继续抛出供明细区分。
+        """
+        if isinstance(result, DuplicateIntakeError):
+            self._skipped_duplicates += 1
+            logger.info("跳过重复 Mod: %s", result)
+            return None
+        if isinstance(result, Exception):
+            logger.error("统一纳管准备失败: %s", result)
+            return None
+        if not isinstance(result, PreparedIntake):
+            logger.error("导入 worker 返回了无效结果: %r", type(result).__name__)
+            return None
+        try:
+            mod = self._intake_service.commit(result)
+        except DuplicateIntakeError as exc:
+            self._skipped_duplicates += 1
+            logger.info("跳过重复 Mod: %s", exc)
+            raise  # 保留实际结果，用于明细展示和失败计数。
+        except IntakeTargetMissingError:
+            raise  # 保留失败原因，交给逐项明细展示；commit 已完成回滚。
+        except Exception as exc:
+            logger.error("统一纳管提交失败: %s", exc)
+            return None
+        # 记录已提交项目的预览缓存路径，终止清理时保留这些仍被资源引用的文件。
+        if mod is not None and result.preview_cache_path is not None:
+            try:
+                self._committed_preview_caches.add(fs.normal_path(result.preview_cache_path))
+            except Exception:
+                pass
+        return mod
+
+    def _on_finished(self):
+        """结算正常批次并清理未提交产物，暂停时延后结算，终止批次由单独流程收尾。
+
+        同时尝试清除应用数据目录下的 temp 目录；面板完成状态依据实际提交、重复及失败记录生成。
+        """
+        if self._ui_paused and not self._was_terminated:
+            self._finish_pending = True
+            return
+        # 结束时将进度设为量程上限，避免浮点取整导致未满。
+        self._set_progress_value(1000, force=True)
+        # 清理临时目录（仅在全部导入完成后清理一次）
+        temp_dir = get_data_dir() / "temp"
+        if fs.is_dir(temp_dir):
+            try:
+                fs.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+        if self._was_terminated:
+            return  # 由终止处理统一完成。
+        # 正常结束也清一次本轮未成功登记的产物（例如 DB 写入失败）。只依据 worker
+        # 精确记录的本轮路径，不扫描/误删用户并发放进目录的其他文件。
+        self._cleanup_orphaned_files(self._completed_keep_names())
+        self._cleanup_uncommitted_preview_caches()
+        # 显示跳过的重复 Mod 数量
+        imported_count = self._committed_count()
+        failed_count = len(self._failed_indexes)
+        # 顶层状态须反映明细中的失败，避免失败批次显示成功并自动收起。
+        if failed_count:
+            parts = [
+                tr("已导入 {imported_count} 个", imported_count=imported_count),
+                tr("{failed_count} 个失败", failed_count=failed_count),
+            ]
+            if self._skipped_duplicates > 0:
+                parts.insert(1, tr("跳过 {skipped_duplicates} 个重复", skipped_duplicates=self._skipped_duplicates))
+            self._view.finish(tr("导入完成，但有失败项"), "，".join(parts), ok=False)
+        elif self._skipped_duplicates > 0:
+            self._view.finish(
+                tr("导入完成"),
+                tr(
+                    "已导入 {imported_count} 个，跳过 {skipped_duplicates} 个重复",
+                    imported_count=imported_count,
+                    skipped_duplicates=self._skipped_duplicates,
+                ),
+                ok=True,
+            )
+        else:
+            self._view.finish(
+                tr("导入完成"), tr("已导入 {imported_count} 个 Mod", imported_count=imported_count), ok=True
+            )
+        self._release_panel()
+        self.import_finished.emit(self._completed_results)
+        self.accept()
+
+    def _committed_count(self) -> int:
+        """返回已成功登记入库的数量，供任务面板和终止提示共同使用。"""
+        return sum(1 for _idx, mod in self._completed_results if mod is not None)
