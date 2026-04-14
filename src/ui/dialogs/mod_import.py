@@ -139,3 +139,113 @@ def _detect_previews_from_archive(archive_path: Path) -> list[str]:
     except Exception:
         pass
     return []
+
+
+class _ImportEntry:
+    """保存单个输入来源的扫描缓存、年龄分级及预览选择，编辑选择不修改源文件。"""
+
+    def __init__(self, path: str):
+        """从路径派生初始名称及归档类型，初始化尚未扫描且默认全年龄的导入项。"""
+        self.source_path = path
+        self.name = Path(path).stem
+        self.keys: list[str] = []
+        self.previews: list[str] = []
+        self.excluded_previews: list[str] = []
+        self.is_archive = Path(path).suffix.lower() in ARCHIVE_EXTENSIONS
+        self.selected_preview_index: int = 0
+        self.selected_preview_path: str = ""
+        self.age_rating: str = "G"  # 默认全年龄
+        self._scanned = False
+
+    def preview_name(self, preview_path: str) -> str:
+        """返回相对于来源目录或归档扫描缓存的预览身份，路径不在对应根目录内时抛出 ValueError。"""
+        source = Path(self.source_path)
+        root = source if source.is_dir() else get_data_dir() / "temp" / "preview_scan" / source.stem
+        return Path(preview_path).relative_to(root).as_posix()
+
+    def ensure_scanned(self) -> None:
+        """首次调用时同步检测按键和预览并选中首图，后续调用复用条目缓存，不在构造时执行文件读取。"""
+        if self._scanned:
+            return
+        self._scanned = True
+        p = Path(self.source_path)
+        if p.is_dir():
+            self.keys = _detect_keys(p)
+            self.previews = _detect_previews(p)
+            if self.previews:
+                self.selected_preview_path = self.previews[0]
+        elif self.is_archive:
+            self.keys = _detect_keys_from_archive(p)
+            self.previews = _detect_previews_from_archive(p)
+            if self.previews:
+                self.selected_preview_path = self.previews[0]
+
+
+class _ScanWorker(QThread):
+    """后台顺序扫描输入的按键和预览，结果经信号交回界面线程更新条目。"""
+
+    entry_scanned = Signal(int, list, list)  # row, keys, previews
+
+    def __init__(self, entries: list[tuple[int, _ImportEntry]]):
+        """保存行索引与条目快照列表，创建由导入窗口保存引用的无父对象扫描线程。"""
+        super().__init__()
+        self._entries = entries
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """请求扫描在条目间或按键、预览阶段边界停止，不中断当前归档调用。"""
+        self._cancelled = True
+
+    def run(self) -> None:
+        """顺序检测未扫描输入的按键和预览，通过原行索引回传结果；取消后停止后续扫描及结果发送。"""
+        for idx, entry in self._entries:
+            if self._cancelled:
+                break
+            if entry._scanned:
+                continue
+            p = Path(entry.source_path)
+            if p.is_dir():
+                keys = _detect_keys(p)
+                if self._cancelled:
+                    break
+                previews = _detect_previews(p)
+                if not self._cancelled:
+                    self.entry_scanned.emit(idx, keys, previews)
+            elif entry.is_archive:
+                keys = _detect_keys_from_archive(p)
+                if self._cancelled:
+                    break
+                previews = _detect_previews_from_archive(p)
+                if not self._cancelled:
+                    self.entry_scanned.emit(idx, keys, previews)
+
+
+_AGE_RATING_OPTIONS: list[tuple[str, str]] = [
+    ("G", N_("G - 全年龄")),
+    ("P", N_("P - 轻微敏感")),
+    ("R", N_("R - 限制级")),
+    ("X", N_("X · 18+ 内容")),
+]
+
+
+def _normalize_age_rating(value: str) -> str:
+    """提取首个非空白字符并转为合法分级代码，空值或未知代码统一使用 G。"""
+    if not value:
+        return "G"
+    code = value.strip().upper()[:1]
+    return code if code in {"G", "P", "R", "X"} else "G"
+
+
+class _DropdownBelowStyle(QProxyStyle):
+    """将 QComboBox 面板固定为向下展开的列表。
+
+    应用级 QSS 可使 QStyleSheetStyle 将 SH_ComboBox_Popup 设为 1，使用菜单式弹出，
+    导致当前项与收起状态的文本重叠。将该样式提示设为 0 可使用下拉列表布局。
+    其余绘制由外层 QStyleSheetStyle 接管，保留 QSS 的 SVG 下拉箭头。
+    """
+
+    def styleHint(self, hint, option=None, widget=None, returnData=None):
+        """强制组合框使用列表式下拉而非菜单式弹出，其他样式提示沿用基类。"""
+        if hint == QStyle.StyleHint.SH_ComboBox_Popup:
+            return 0
+        return super().styleHint(hint, option, widget, returnData)
