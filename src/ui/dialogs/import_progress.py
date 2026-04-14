@@ -474,3 +474,64 @@ class ParallelImportWorkerThread(QThread):
             _wait_for_worker(self)
         self.progress_updated.emit(total, total, tr("导入完成") if not self._terminated else tr("导入已终止"))
         self.finished_all.emit()
+
+    def _prepare_request(
+        self,
+        request,
+        *,
+        item_index: int = 0,
+        total_items: int = 1,
+    ):
+        """在池线程准备单项文件并线程安全地登记产物，将暂停与终止检查交给服务回调。"""
+        if self._intake_service is None:
+            raise RuntimeError("planned intake requires a ModIntakeService")
+        last_progress = 0.0
+
+        def report(value, text: str) -> None:
+            """使当前任务的进度单调递增，并交给带锁的批次聚合器发送进度信号。"""
+            nonlocal last_progress
+            if value is not None:
+                last_progress = max(last_progress, float(value))
+            self._emit_stage(item_index, total_items, last_progress, text)
+
+        prepared = self._intake_service.prepare(
+            request,
+            progress=report,
+            should_cancel=lambda: not _wait_for_worker(self),
+        )
+        if isinstance(prepared, PreparedIntake):
+            self._artifacts.add_container(prepared.container_path)
+            if prepared.preview_cache_path is not None:
+                self._artifacts.add_preview_cache(prepared.preview_cache_path)
+        return prepared
+
+    def get_created_paths(self) -> list[Path]:
+        """返回所有准备线程登记的容器路径快照，供线程池结束后清理未提交项目。"""
+        return self._artifacts.containers()
+
+    def get_created_preview_caches(self) -> list[Path]:
+        """返回并行准备创建的预览缓存路径快照，不在读取时删除任何缓存。"""
+        return self._artifacts.preview_caches()
+
+    def acknowledge_db_done(self):
+        """由主线程确认当前结果已经处理，释放串行提交交接的等待。"""
+        self._db_done.set()
+
+    def pause(self):
+        """关闭共享执行事件，使并行任务在各自的协作检查点暂停。"""
+        self._paused.clear()
+
+    def resume(self):
+        """设置共享执行事件，唤醒等待中的并行准备任务。"""
+        self._paused.set()
+
+    def terminate_import(self):
+        """请求整个批次停止并解除暂停和数据库等待，线程池收尾负责等待仍在运行的文件操作。"""
+        self._terminated = True
+        self._paused.set()
+        self._db_done.set()
+
+    @property
+    def is_paused(self) -> bool:
+        """返回共享执行事件是否关闭，表示批次请求的暂停状态。"""
+        return not self._paused.is_set()
