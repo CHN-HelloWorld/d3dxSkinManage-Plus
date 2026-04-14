@@ -573,3 +573,102 @@ class ModImportDialog(QDialog):
             self._show_current_preview(row)
             self._update_preview_nav()
         self._apply_import_column_widths(force_ratio=False)
+
+    def _make_age_combo(self, row: int, code: str) -> QComboBox:
+        """创建不会随滚轮误改的年龄分级组合框。
+
+        代理样式强制使用下拉列表并归属组合框，绘制仍由全局样式处理；初始化选中项后才连接写回信号。
+        """
+        combo = _NoWheelComboBox()
+        proxy = _DropdownBelowStyle()
+        proxy.setParent(combo)
+        combo.setStyle(proxy)
+        for c, text in _AGE_RATING_OPTIONS:
+            combo.addItem(tr(text), c)
+        sel = next((k for k in range(combo.count()) if combo.itemData(k) == code), 0)
+        combo.setCurrentIndex(sel)
+        # 连接放在 setCurrentIndex 之后，避免初始化时误触发写回
+        combo.currentIndexChanged.connect(lambda _i, cb=combo, r=row: self._on_age_combo_changed(r, cb))
+        return combo
+
+    def _on_age_combo_changed(self, row: int, combo: QComboBox) -> None:
+        """将合法行对应组合框的选中数据规范化后写回导入项，忽略失效行索引。"""
+        if 0 <= row < len(self._entries):
+            self._entries[row].age_rating = _normalize_age_rating(str(combo.currentData() or "G"))
+
+    def _browse_files(self) -> None:
+        """允许多选支持的归档文件，并逐项加入待导入列表。"""
+        exts = " ".join(f"*{e}" for e in ARCHIVE_EXTENSIONS)
+        files, _ = QFileDialog.getOpenFileNames(self, t("选择 Mod 文件"), "", f"{t('压缩包文件')} ({exts})")
+        for f in files:
+            self._add_entry(f)
+
+    def _browse_folder(self) -> None:
+        """选择单个文件夹作为导入来源，选定后添加并自动聚焦新行。"""
+        folder = QFileDialog.getExistingDirectory(self, t("选择文件夹..."))
+        if folder:
+            self._add_entry(folder, auto_select=True)
+
+    def _remove_selected(self) -> None:
+        """仅从本次导入列表移除选中行并重置预览，无选择时提示；不删除输入文件。"""
+        rows = set()
+        for item in self._table.selectedItems():
+            rows.add(item.row())
+        # 没有选中项目时提示选择所需范围。
+        if not rows:
+            QMessageBox.information(self, t("导入 Mod"), tr("请先选中要取消导入的Mod"))
+            return
+        for row in sorted(rows, reverse=True):
+            if 0 <= row < len(self._entries):
+                del self._entries[row]
+        self._refresh_table()
+        # 移除后主动刷新预览区，否则被删项的预览图残留在预览框
+        self._current_preview_index = 0
+        self._show_current_preview(self._table.currentRow())
+        self._update_preview_nav()
+
+    def _on_selection_changed(self, row: int, col: int, prev_row: int, _prev_col: int) -> None:
+        """保存上一条目的预览页码并恢复新条目的页码，再异步刷新图片及导航按钮。"""
+        # 保存上一个条目的预览图索引
+        if 0 <= prev_row < len(self._entries):
+            self._entries[prev_row].selected_preview_index = self._current_preview_index
+        # 恢复新条目的预览图索引
+        if 0 <= row < len(self._entries):
+            self._current_preview_index = self._entries[row].selected_preview_index
+        else:
+            self._current_preview_index = 0
+        self._show_current_preview(row)
+        self._update_preview_nav()
+
+    def _show_current_preview(self, row: int = -1) -> None:
+        """取消旧预览请求并按当前条目页码异步加载图片，同时记录本次导入的默认预览路径。"""
+        self._cancel_preview_request()
+        if row < 0:
+            row = self._table.currentRow()
+        if 0 <= row < len(self._entries):
+            entry = self._entries[row]
+            if entry.previews and 0 <= self._current_preview_index < len(entry.previews):
+                # 记录用户当前查看的预览图路径（用于导入时确定默认预览图）
+                entry.selected_preview_path = entry.previews[self._current_preview_index]
+                self._current_preview_path = entry.selected_preview_path
+                self._preview_label.clear()
+                self._preview_label.setText(tr("加载预览图…"))
+                self._preview_cancelled = Event()
+                dpr = self._preview_label.devicePixelRatioF()
+                task = _PreviewTask(
+                    self._preview_request_id,
+                    self._current_preview_path,
+                    self._preview_label.size() * dpr,
+                    self._preview_cancelled,
+                )
+                task.signals.ready.connect(self._on_preview_ready)
+                QThreadPool.globalInstance().start(task)
+                return
+        self._current_preview_path = ""
+        self._preview_label.clear()
+        self._preview_label.setText(t("无预览图"))
+
+    def _cancel_preview_request(self) -> None:
+        """使已有请求序号失效并设置取消事件，阻止旧任务更新当前预览。"""
+        self._preview_request_id += 1
+        self._preview_cancelled.set()
