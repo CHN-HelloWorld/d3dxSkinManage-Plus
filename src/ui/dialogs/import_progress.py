@@ -535,3 +535,237 @@ class ParallelImportWorkerThread(QThread):
     def is_paused(self) -> bool:
         """返回共享执行事件是否关闭，表示批次请求的暂停状态。"""
         return not self._paused.is_set()
+
+
+class _NoopView:
+    """无面板时的空视图。
+
+    导入控制器通过共用任务中心面板显示进度。调用方未提供面板时，空视图将渲染调用
+    处理为空操作，使业务路径无需逐次检查面板是否存在。
+
+    仅允许调用约定的渲染方法，其他属性访问抛出 AttributeError，避免掩盖缺少面板的问题。
+    """
+
+    #: 允许静默忽略的渲染方法（与 TaskCenterPanel 的对外 API 对齐）
+    _RENDER_METHODS = frozenset(
+        {
+            "start_batch",
+            "update_progress",
+            "update_item",
+            "finish",
+            "finish_cancelled",
+            "queue_info",
+            "set_paused",
+            "set_stop_enabled",
+            "reposition",
+            "retheme",
+        }
+    )
+
+    def __getattr__(self, name):
+        """为约定的面板渲染方法返回空操作，其他属性抛出 AttributeError 以暴露错误的面板依赖。"""
+        if name in self._RENDER_METHODS:
+
+            def _noop(*_args, **_kwargs):
+                """接收并忽略渲染调用的参数，返回空值且不保存界面状态。"""
+                return None
+
+            return _noop
+        raise AttributeError(
+            tr(
+                "_NoopView 没有 {name!r}：导入控制器未注入任务中心面板（构造时传 panel=），因此无法访问面板内部状态。",
+                name=name,
+            )
+        )
+
+
+class ImportProgressDialog(QDialog):
+    """导入进度控制器。
+
+    通过主窗口右下角的共用任务中心面板显示进度，导入期间用户可以继续浏览。
+    QDialog 提供 accept/reject 生命周期接口；控制器实例自身不调用 show/exec。
+
+    控制器负责工作线程调度、主线程 SQLite 提交、产物清理和终止处理。
+    """
+
+    import_finished = Signal(list)  # 记录条目索引及可选的 Mod 对象。
+
+    def __init__(
+        self,
+        items: list,
+        node_id: str,
+        mod_manager,
+        parent: QWidget | None = None,
+        panel=None,
+    ) -> None:
+        """在主线程捕获目标目录及原有名称，创建纳管服务和批次结果记录，并绑定可选任务面板。"""
+        super().__init__(parent)
+        self._items = items
+        self._character_id = node_id
+        self._mod_manager = mod_manager
+        self._intake_service = ModIntakeService(mod_manager)
+        self._worker: ImportWorkerThread | None = None
+        self._completed_results: list = []
+        self._was_terminated = False
+        self._skipped_duplicates: int = 0
+        # 单独记录失败项索引；重复项和失败项均可能返回空结果，不能由提交数量反推。
+        self._failed_indexes: set[int] = set()
+        self._ui_paused = False
+        self._display_progress_value = 0
+        self._pending_progress_value = 0
+        self._pending_progress_text = ""
+        self._pending_prepared_results: list[tuple[int, object]] = []
+        # 已成功登记项的预览缓存路径（终止清理时须豁免，见 _cleanup_uncommitted_preview_caches）
+        self._committed_preview_caches: set[str] = set()
+        self._finish_pending = False
+        self._cleanup_done = False
+        # 预先在主线程中计算目标目录（涉及SQLite查询）
+        self._dest_parent = ""
+        try:
+            self._dest_parent = str(mod_manager._get_character_library(node_id, create=False))
+        except KeyError:
+            # 目标缺失由任务面板报告，未捕获目标时不允许清理文件。
+            pass
+        # 记录导入前目录中已有的文件/文件夹名称，终止时不误删
+        self._pre_existing_names: set[str] = set()
+        dest_path = Path(self._dest_parent)
+        if self._dest_parent and fs.is_dir(dest_path):
+            self._pre_existing_names = {item.name for item in fs.list_children(dest_path)}
+        self._panel = panel
+        self._view = panel if panel is not None else _NoopView()
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """保持控制器窗口隐藏，绑定宿主任务中心的控制信号并初始化批次明细。"""
+        # 本控制器自身永不显示：所有反馈都渲染到主窗口右下角的共用浮层。
+        self.setModal(False)
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        if self._panel is None:
+            return
+
+        self._panel.pause_requested.connect(self._on_pause)
+        self._panel.resume_requested.connect(self._on_resume)
+        self._panel.stop_requested.connect(self._on_stop_clicked)
+
+        self._panel.start_batch(
+            len(self._items),
+            tr("正在导入 {count} 个 Mod", count=len(self._items)),
+            has_pause=True,
+            stop_tooltip=tr("停止导入"),
+            cancelled_title=tr("已停止导入"),
+            done_text=tr("已导入"),
+            pause_tooltip=tr("暂停导入"),
+            resume_tooltip=tr("继续导入"),
+        )
+        self._panel.update_progress(0.0, tr("正在导入 {count} 个 Mod", count=len(self._items)), tr("准备中…"))
+        for index, item in enumerate(self._items):
+            source = item[0] if isinstance(item, (list, tuple)) and item else ""
+            display = _item_label(item, source)
+            self._panel.update_item(index, str(display), ST_QUEUED)
+
+    def _release_panel(self) -> None:
+        """断开与共用浮层的连线，避免下一批导入/纳管收到本批的回调。"""
+        if self._panel is None:
+            return
+        for sig, slot in (
+            (self._panel.pause_requested, self._on_pause),
+            (self._panel.resume_requested, self._on_resume),
+            (self._panel.stop_requested, self._on_stop_clicked),
+        ):
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass
+        self._panel = None
+        self._view = _NoopView()
+
+    def start_import(self):
+        """在主线程规划请求后按配置选择串行或并行准备；目标已失效时为全部项目记录失败并结算。"""
+        from src.core.config import Config
+
+        parallel_workers = effective_archive_workers(Config().get("import.parallel_workers"))
+        try:
+            planned_items = self._plan_intake_requests()
+        except IntakeTargetMissingError as exc:
+            # 确认导入到启动 worker 之间目标也可能被删除；所有项共用这个目标。
+            for index in range(len(self._items)):
+                self._on_file_prepared(index, exc)
+            self._on_finished()
+            return
+
+        # 多项导入统一可并行：直拷、解压和格式转换都属于独立文件 IO。
+        use_parallel = len(planned_items) > 1 and parallel_workers > 1
+
+        if use_parallel:
+            self._worker = ParallelImportWorkerThread(
+                planned_items,
+                intake_service=self._intake_service,
+                max_workers=parallel_workers,
+                parent=self,
+            )
+        else:
+            self._worker = ImportWorkerThread(
+                planned_items,
+                intake_service=self._intake_service,
+                parent=self,
+            )
+
+        self._worker.progress_updated.connect(self._on_progress)
+        self._worker.file_prepared.connect(self._on_file_prepared)
+        self._worker.finished_all.connect(self._on_finished)
+        self._worker.stage_progress.connect(self._on_stage_progress)
+        # 将单项进度和当前步骤写入明细行。
+        if hasattr(self._worker, "item_progress"):
+            self._worker.item_progress.connect(self._on_item_progress)
+        self._worker.start()
+
+    def _on_item_progress(self, index: int, frac: float, text: str) -> None:
+        """将单项处理说明及百分比写入对应明细行。"""
+        if self._ui_paused:
+            return
+        pct = int(max(0.0, min(1.0, frac)) * 100)
+        # 明细行已显示 Mod 名称，移除处理说明中的重复名称，为百分比保留空间。
+        stage = (text or "").split(":", 1)[0].strip()
+        label = f"{stage} {pct}%" if stage else f"{pct}%"
+        self._mark_view_item(index, ST_RUNNING, label)
+
+    def _plan_intake_requests(self) -> list[IntakeRequest]:
+        """在主线程将输入元组转换为固定游戏和节点的纳管请求，仅透传允许的附加参数；目标失效异常交由启动流程处理。"""
+        requests: list[IntakeRequest] = []
+        for item in self._items:
+            source_path = item[0]
+            display_name = item[1] if len(item) >= 2 else ""
+            selected_preview = item[2] if len(item) >= 3 else ""
+            age_rating = item[3] if len(item) >= 4 else "G"
+            # 可选第五元素提供允许透传的规划参数，使商店安装复用后台导入，
+            # 同时携带 GameBanana 元数据、自动预览设置及强制年龄分级。
+            extras = item[4] if len(item) >= 5 and isinstance(item[4], dict) else {}
+            extras = {k: v for k, v in extras.items() if k in _PLAN_EXTRA_KEYS}
+            requests.append(
+                self._intake_service.plan_request(
+                    source_path=source_path,
+                    game_id=self._mod_manager.current_game_id,
+                    node_id=self._character_id,
+                    display_name=display_name,
+                    selected_preview_name=selected_preview,
+                    age_rating=(age_rating.value if hasattr(age_rating, "value") else str(age_rating)),
+                    **extras,
+                )
+            )
+        return requests
+
+    def _relabel_stage(self, text: str) -> str:
+        """在单项批次中，将阶段文案中的源文件名替换为明细行的显示名称。
+
+        商店下载使用包含 MD5 和文件标识的缓存文件名，显示时改用 Mod 名称；
+        普通导入保留源文件名。
+        """
+        if len(self._items) != 1 or ":" not in (text or ""):
+            return text
+        item = self._items[0]
+        try:
+            source = item[0] if item else ""
+        except TypeError:
+            return text
+        head = text.split(":", 1)[0]
+        return f"{head}: {_item_label(item, source)}"
