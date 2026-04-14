@@ -958,3 +958,223 @@ class ImportProgressDialog(QDialog):
     def _committed_count(self) -> int:
         """返回已成功登记入库的数量，供任务面板和终止提示共同使用。"""
         return sum(1 for _idx, mod in self._completed_results if mod is not None)
+
+    def _on_pause(self):
+        """冻结界面提交和进度展示，再请求工作线程暂停，确保确认期间已提交数量稳定。"""
+        self._ui_paused = True
+        if self._worker:
+            self._worker.pause()
+        self._view.set_paused(True)
+        done = self._committed_count()
+        self._view.update_progress(
+            self._display_progress_value / 10.0,
+            tr("导入已暂停 · 已导入 {done}/{count} 个", done=done, count=len(self._items)),
+            tr("选择“继续导入”恢复任务，或选择“停止导入”。"),
+        )
+
+    def _on_resume(self):
+        """先处理暂停期间缓存的准备结果，再恢复后台执行，并补发挂起的批次完成处理。"""
+        self._ui_paused = False
+        self._set_progress_value(self._pending_progress_value)
+        # 后台仍保持暂停，先处理缓存的主线程登记结果；确认只释放数据库等待。
+        # 缓存处理完成后再解除暂停事件，恢复文件操作。
+        pending, self._pending_prepared_results = self._pending_prepared_results, []
+        for index, result in pending:
+            self._on_file_prepared(index, result)
+        if self._worker:
+            self._worker.resume()
+        self._view.set_paused(False)
+        self._view.update_progress(
+            self._display_progress_value / 10.0,
+            tr("正在导入… {value}%", value=self._display_progress_value // 10),
+            self._pending_progress_text or "",
+        )
+        if self._finish_pending:
+            self._finish_pending = False
+            self._on_finished()
+
+    def _on_stop_clicked(self):
+        """先暂停工作线程，再显示终止确认。
+
+        QMessageBox 使用嵌套事件循环；暂停后可避免 file_prepared 在确认期间修改
+        _completed_results，使弹窗前计算的 imported_count 与实际提交状态保持一致。
+        """
+        if not self._ui_paused:
+            self._on_pause()
+        self._on_terminate()
+
+    def _on_terminate(self):
+        """取得保留或撤销已导入项目的决定后请求终止，并安排延后清理；选择继续则恢复任务。"""
+        if not self._worker:
+            return
+
+        imported_count = self._committed_count()
+        total_count = len(self._items)
+        remaining = total_count - imported_count
+
+        # 先获取用户的保留或撤销决策，再调用 terminate_import，使取消确认不改变任务状态。
+        cancel_all = False
+        if imported_count == 0:
+            cancel_all = True
+        else:
+            # 确认框使用可见宿主作为父窗口，保证居中和窗口堆叠关系正确。
+            msg = QMessageBox(self.parentWidget())
+            msg.setWindowTitle(tr("终止导入"))
+            msg.setText(
+                tr(
+                    "已导入 {imported_count} 个 Mod，还有 {remaining} 个未导入。\n\n请选择操作：",
+                    imported_count=imported_count,
+                    remaining=remaining,
+                )
+            )
+            cancel_all_btn = msg.addButton(tr("取消全部导入"), QMessageBox.ButtonRole.DestructiveRole)
+            msg.addButton(tr("保留已导入的Mod"), QMessageBox.ButtonRole.AcceptRole)
+            resume_btn = msg.addButton(tr("继续导入"), QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(resume_btn)
+            msg.exec()
+            clicked = msg.clickedButton()
+            if clicked is resume_btn:
+                # 取消停止操作后恢复工作线程。
+                if self._ui_paused:
+                    self._on_resume()
+                return
+            cancel_all = clicked is cancel_all_btn
+
+        self._was_terminated = True
+        self._worker.terminate_import()
+
+        # 存储决策，延迟到工作线程结束后执行
+        self._terminate_cancel_all = cancel_all
+        # 暂停期间已经复制完成但尚未登记的结果不属于“已导入”；终止后统一按未提交产物清理。
+        self._pending_prepared_results.clear()
+
+        # 更新 UI 为"正在停止"状态
+        self._view.set_stop_enabled(False)
+        self._view.update_progress(
+            self._display_progress_value / 10.0,
+            tr("正在停止导入…"),
+            tr("正在等待后台任务结束…"),
+        )
+
+        # 工作线程结束后才能清理文件。先连接完成信号，再主动检查一次结束状态，
+        # 覆盖线程在确认对话框的嵌套事件循环中已经完成的情况。
+        # finished 发出与 isRunning 更新可能不同步，清理方法通过 _cleanup_done 保证幂等。
+        self._worker.finished.connect(self._do_deferred_cleanup)
+        if not self._worker.isRunning():
+            self._do_deferred_cleanup()
+        else:
+            # 五秒后再次尝试幂等清理，处理工作线程结束信号未到达的情况。
+            call_later(5000, self, self._do_deferred_cleanup)
+
+    def _do_deferred_cleanup(self):
+        """幂等处理终止后的保留或撤销决定并报告结果；调用方须确保后台文件操作已经结束。"""
+        if self._cleanup_done:
+            return
+        self._cleanup_done = True
+        cancel_all = getattr(self, "_terminate_cancel_all", False)
+
+        if cancel_all:
+            # 删除已导入的Mod（DB记录 + 物理文件）
+            removed = 0
+            for idx, mod in self._completed_results:
+                if mod:
+                    try:
+                        self._mod_manager.delete_mod(mod.mod_id)
+                        removed += 1
+                    except Exception:
+                        pass
+            self._cleanup_orphaned_files(set())
+            self._cleanup_uncommitted_preview_caches()
+            self._view.finish_cancelled(
+                tr("已取消全部导入，回滚 {removed} 个已导入的 Mod", removed=removed)
+                if removed
+                else tr("已取消全部导入，未提交内容已清理")
+            )
+            self._release_panel()
+            self.import_finished.emit([])
+        else:
+            keep_paths = self._completed_keep_names()
+            self._cleanup_orphaned_files(keep_paths)
+            self._cleanup_uncommitted_preview_caches()
+            kept = self._committed_count()
+            self._view.finish_cancelled(
+                tr("已停止导入，保留已导入的 {kept} 个 Mod", kept=kept) if kept else tr("已停止导入，未提交内容已清理")
+            )
+            self._release_panel()
+            self.import_finished.emit(self._completed_results)
+
+        self.reject()
+
+    def _completed_keep_names(self) -> set[str]:
+        """收集已提交项目应保留的顶层名称，有容器标记时保留父容器名，否则保留内容自身名称。"""
+        keep_paths: set[str] = set()
+        for _idx, mod in self._completed_results:
+            if not mod or not mod.path:
+                continue
+            body = Path(fs.normal_path(mod.path))
+            try:
+                from src.core.mod_package import MOD_CONTAINER_MARKER
+
+                if fs.is_file(body.parent / MOD_CONTAINER_MARKER):
+                    keep_paths.add(body.parent.name)
+                    continue
+            except Exception:
+                pass
+            keep_paths.add(body.name)
+        return keep_paths
+
+    def _cleanup_orphaned_files(self, keep_names: set[str]) -> None:
+        """仅清理工作线程登记的本批容器路径。
+
+        跳过导入前已有或明确保留的名称，拒绝目标目录外的路径；目标未捕获或已不存在时不执行清理。
+        """
+        if not self._dest_parent:
+            return
+        dest = Path(fs.normal_path(self._dest_parent))
+        if not fs.is_dir(dest):
+            return
+        # 合并：导入前已存在的 + 明确要保留的
+        safe_names = self._pre_existing_names | keep_names
+        candidates = self._worker.get_created_paths() if self._worker is not None else ()
+        for item in candidates:
+            item = Path(fs.normal_path(item))
+            if item.name in safe_names:
+                continue
+            # 即使任务返回异常路径，也不允许越出本次目标目录。
+            try:
+                if os.path.commonpath([fs.native_path(dest), fs.native_path(item)]) != fs.native_path(dest):
+                    logger.warning("拒绝清理目标目录外路径: %s", item)
+                    continue
+            except ValueError:
+                continue
+            if _remove_path_reliably(item):
+                logger.info("已清理未提交的导入产物: %s", item)
+            else:
+                logger.warning("导入残留仍存在: %s", item)
+
+    def _cleanup_uncommitted_preview_caches(self) -> None:
+        """清理未提交项的预览缓存。
+
+        保留路径来自提交时记录的 PreparedIntake.preview_cache_path，
+        不根据名称推导或调用带目录创建副作用的路径辅助函数。
+        """
+        get_caches = getattr(self._worker, "get_created_preview_caches", None)
+        if not callable(get_caches):
+            return
+        keep = self._committed_preview_caches
+        for cache in get_caches():
+            if not fs.exists(cache):
+                continue
+            if fs.normal_path(cache) in keep:
+                continue  # 已成功登记 —— 用户保留的 Mod 靠它显示预览图
+            if _remove_path_reliably(cache):
+                logger.info("已清理未提交的预览缓存: %s", cache)
+            else:
+                logger.warning("预览缓存残留仍存在: %s", cache)
+
+    def closeEvent(self, event):
+        """后台线程仍运行时拒绝窗口关闭，任务结束后交由 Qt 处理。"""
+        if self._worker and self._worker.isRunning():
+            event.ignore()
+        else:
+            super().closeEvent(event)
