@@ -790,3 +790,149 @@ class ModImportDialog(QDialog):
         r = self._preview_image_rect()
         inside = r is not None and r.contains(event.pos())
         self._preview_label.setCursor(Qt.CursorShape.PointingHandCursor if inside else Qt.CursorShape.ArrowCursor)
+
+    def _open_current_preview_viewer(self) -> None:
+        """当前预览路径有效且仍存在时打开模态图片查看器。"""
+        if not self._current_preview_path:
+            return
+        if not Path(self._current_preview_path).exists():
+            return
+        dialog = ImageViewerDialog(self._current_preview_path, parent=self)
+        dialog.exec()
+
+    def _show_prev_preview(self) -> None:
+        """存在上一张图片时回退页码，并更新当前默认预览及导航状态。"""
+        if self._current_preview_index > 0:
+            self._current_preview_index -= 1
+            self._show_current_preview()
+            self._update_preview_nav()
+
+    def _show_next_preview(self) -> None:
+        """当前条目存在下一张图片时推进页码，并刷新异步图片和导航状态。"""
+        row = self._table.currentRow()
+        if 0 <= row < len(self._entries):
+            entry = self._entries[row]
+            if self._current_preview_index < len(entry.previews) - 1:
+                self._current_preview_index += 1
+                self._show_current_preview()
+                self._update_preview_nav()
+
+    def _update_preview_nav(self) -> None:
+        """按当前条目的图片数量和页码启用导航及移除按钮，保留控件占位以稳定布局。"""
+        row = self._table.currentRow()
+        total = 0
+        if 0 <= row < len(self._entries):
+            total = len(self._entries[row].previews)
+        current = self._current_preview_index + 1 if total > 0 else 0
+        self._preview_page_label.setText(f"{current} / {total}")
+        self._prev_preview_btn.setEnabled(self._current_preview_index > 0)
+        self._next_preview_btn.setEnabled(self._current_preview_index < total - 1)
+        has_previews = total > 0
+        # 保持控件占位，避免预览区域高度跳变
+        self._prev_preview_btn.setVisible(True)
+        self._next_preview_btn.setVisible(True)
+        self._preview_page_label.setVisible(True)
+        self._delete_preview_btn.setVisible(True)
+        self._delete_all_previews_btn.setVisible(True)
+        self._prev_preview_btn.setEnabled(has_previews and self._current_preview_index > 0)
+        self._next_preview_btn.setEnabled(has_previews and self._current_preview_index < total - 1)
+        self._delete_preview_btn.setEnabled(has_previews)
+        self._delete_all_previews_btn.setEnabled(has_previews)
+
+    def _delete_current_preview(self) -> None:
+        """仅记录本次导入排除项，不修改用户文件或扫描缓存。"""
+        row = self._table.currentRow()
+        if 0 <= row < len(self._entries):
+            entry = self._entries[row]
+            if entry.previews and 0 <= self._current_preview_index < len(entry.previews):
+                preview_path = entry.previews[self._current_preview_index]
+                entry.excluded_previews.append(entry.preview_name(preview_path))
+                del entry.previews[self._current_preview_index]
+                if self._current_preview_index >= len(entry.previews) and entry.previews:
+                    self._current_preview_index = len(entry.previews) - 1
+                elif not entry.previews:
+                    self._current_preview_index = 0
+                entry.selected_preview_path = entry.previews[self._current_preview_index] if entry.previews else ""
+                self._show_current_preview(row)
+                self._update_preview_nav()
+                self._update_preview_count_cell(row, entry)
+
+    def _delete_all_previews(self) -> None:
+        """从本次导入中排除全部已列出的预览图。"""
+        row = self._table.currentRow()
+        if 0 <= row < len(self._entries):
+            entry = self._entries[row]
+            if not entry.previews:
+                return
+            reply = QMessageBox.question(
+                self,
+                tr("确认移除"),
+                tr("将此 Mod 的全部 {count} 张预览图从本次导入中移除？\n原始文件会保留。", count=len(entry.previews)),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                entry.excluded_previews.extend(entry.preview_name(path) for path in entry.previews)
+                entry.previews.clear()
+                entry.selected_preview_path = ""
+                self._current_preview_index = 0
+                self._show_current_preview(row)
+                self._update_preview_nav()
+                self._update_preview_count_cell(row, entry)
+
+    def _update_preview_count_cell(self, row: int, entry: _ImportEntry) -> None:
+        """用当前条目预览数量替换只读表格单元格，无图片时显示占位符。"""
+        preview_str = str(len(entry.previews)) + " " + t("张图片") if entry.previews else "-"
+        prev_item = QTableWidgetItem(preview_str)
+        prev_item.setFlags(prev_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self._table.setItem(row, 3, prev_item)
+
+    def _on_import(self) -> None:
+        """停止后台扫描并同步补齐未扫描项，收集名称、分级和预览相对路径后发送导入确认。
+
+        排除的预览通过可选附加参数传递，源文件不变；发送信号后尝试清理扫描缓存并接受对话框。
+        """
+        if not self._entries:
+            return
+        # 停止后台扫描
+        self._stop_scan_worker()
+        # 对尚未扫描的条目同步扫描（用户已点击导入，不可跳过）
+        for entry in self._entries:
+            entry.ensure_scanned()
+        # 以表格当前名称生成导入参数，空白名称保留条目原值。
+        for i, entry in enumerate(self._entries):
+            name_item = self._table.item(i, 0)
+            if name_item:
+                entry.name = name_item.text().strip() or entry.name
+
+        # 保存当前选中条目的预览图索引
+        current_row = self._table.currentRow()
+        if 0 <= current_row < len(self._entries):
+            self._entries[current_row].selected_preview_index = self._current_preview_index
+            entry = self._entries[current_row]
+            if entry.previews and 0 <= self._current_preview_index < len(entry.previews):
+                entry.selected_preview_path = entry.previews[self._current_preview_index]
+
+        # 为每个条目将用户选择的预览图设为首位（默认预览图）
+        for entry in self._entries:
+            if entry.selected_preview_path and entry.selected_preview_path in entry.previews:
+                idx = entry.previews.index(entry.selected_preview_path)
+                if idx > 0:
+                    entry.previews.insert(0, entry.previews.pop(idx))
+
+        char_id = self._character_id
+        items = []
+        for e in self._entries:
+            # 传递预览的相对路径，以区分不同子目录中的同名图片。
+            selected_preview_name = ""
+            if e.selected_preview_path:
+                try:
+                    selected_preview_name = e.preview_name(e.selected_preview_path)
+                except ValueError:
+                    selected_preview_name = Path(e.selected_preview_path).name
+            item = (e.source_path, e.name, selected_preview_name, e.age_rating)
+            if e.excluded_previews:
+                item += ({"excluded_previews": tuple(dict.fromkeys(e.excluded_previews))},)
+            items.append(item)
+        self.import_confirmed.emit(items, char_id)
+        self._cleanup_preview_scan_temp()
+        self.accept()
