@@ -936,3 +936,116 @@ class ModImportDialog(QDialog):
         self.import_confirmed.emit(items, char_id)
         self._cleanup_preview_scan_temp()
         self.accept()
+
+    def _cleanup_preview_scan_temp(self) -> None:
+        """尝试删除应用数据目录中的整个预览扫描缓存，清理异常不阻止窗口结束。"""
+        import shutil
+
+        temp_dir = get_data_dir() / "temp" / "preview_scan"
+        if temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
+
+    # 拖拽支持
+
+    def _stop_scan_worker(self) -> None:
+        """请求当前扫描线程取消并最多等待五百毫秒，然后释放窗口保存的线程引用。"""
+        if self._scan_worker is not None:
+            self._scan_worker.cancel()
+            self._scan_worker.wait(500)
+            self._scan_worker = None
+
+    def reject(self) -> None:
+        """请求停止扫描并尝试清理预览扫描临时目录，再经对话框结束路径取消预览请求。"""
+        self._stop_scan_worker()
+        self._cleanup_preview_scan_temp()
+        super().reject()
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """只检查拖放是否声明 URL 格式，不在进入事件中读取实际数据，以减少系统拖放通信阻塞。"""
+        # 仅检查格式可用性，不读取实际数据，避免 COM IPC 卡顿
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """先接受拖放以释放来源，再排队解析 URI 列表字节；缺少原始字节时使用 QUrl 列表。"""
+        if event.mimeData().hasUrls():
+            # 先接受事件释放拖拽源
+            event.acceptProposedAction()
+            # 优先使用原始 uri-list 字节数据，避免在主线程创建大量 QUrl 对象导致卡顿
+            raw_data = event.mimeData().data("text/uri-list")
+            if raw_data and not raw_data.isEmpty():
+                raw_bytes = bytes(raw_data)
+                call_later(0, self, lambda: self._process_raw_drop(raw_bytes))
+            else:
+                # 回退：少量文件时用 urls
+                urls = list(event.mimeData().urls())
+                call_later(0, self, lambda: self._process_drop_urls(urls))
+
+    def _process_raw_drop(self, raw_bytes: bytes) -> None:
+        """在排队回调中解析 URI 列表并解码本地文件路径，只将目录或支持的归档加入候选列表。"""
+        import urllib.parse
+
+        paths: list[str] = []
+        try:
+            text = raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            text = raw_bytes.decode("latin-1", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("file:///"):
+                path = urllib.parse.unquote(line[8:])
+                path = path.replace("/", "\\") if "\\" not in path else path
+            elif line.startswith("file://"):
+                path = urllib.parse.unquote(line[7:])
+                path = path.replace("/", "\\") if "\\" not in path else path
+            else:
+                continue
+            p = Path(path)
+            if p.is_dir() or p.suffix.lower() in ARCHIVE_EXTENSIONS:
+                paths.append(path)
+        if paths:
+            self._add_entries_batch(paths, auto_select_last=True)
+
+    def _process_drop_urls(self, urls: list) -> None:
+        """从拖放 URL 快照筛选本地目录和支持的归档，批量加入列表并选中最后一项。"""
+        paths: list[str] = []
+        for url in urls:
+            if url.isLocalFile():
+                p = Path(url.toLocalFile())
+                if p.is_dir() or p.suffix.lower() in ARCHIVE_EXTENSIONS:
+                    paths.append(url.toLocalFile())
+        if paths:
+            self._add_entries_batch(paths, auto_select_last=True)
+
+    def eventFilter(self, obj, event) -> bool:
+        """记录表头拖动状态并处理表格空白点击取消选择；其他事件交由基类处理以避开控件拆卸访问。"""
+        from PySide6.QtCore import QEvent
+
+        kind = event.type()
+        # 垃圾回收清除 Python 状态后仍可能收到子控件拆卸事件，仅指针输入需要访问活动表格。
+        if kind not in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonRelease):
+            return super().eventFilter(obj, event)
+        header_viewport = self._table.horizontalHeader().viewport()
+        if obj == header_viewport:
+            if kind == QEvent.Type.MouseButtonPress:
+                self._import_header_dragging = True
+            elif kind == QEvent.Type.MouseButtonRelease:
+                self._import_header_dragging = False
+            return False
+        if obj == self._table.viewport() and kind == QEvent.Type.MouseButtonPress:
+            index = self._table.indexAt(event.position().toPoint())
+            if not index.isValid():
+                self._table.clearSelection()
+                self._table.setCurrentCell(-1, -1)
+                self._preview_label.clear()
+                self._preview_label.setText(t("无预览图"))
+                self._current_preview_index = 0
+                self._update_preview_nav()
+        return super().eventFilter(obj, event)
