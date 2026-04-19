@@ -119,3 +119,279 @@ def _atomic_write(path: Path, data: bytes) -> bool:
     except OSError as e:
         logger.warning("ini 同步写入失败 (%s): %s", path, e)
         return False
+
+
+class SyncPair:
+    """一对需同步的 ini：源 override 文件 ↔ 部署副本 ini。
+
+    ``override_path`` 可能尚不存在（运行期回写会首次创建它）。
+    ``deployed_path`` 在 Mod 启用期间总存在。
+    ``last_hash`` = 上次对账后两侧一致的内容 hash（判断变更方向的基准）。
+    """
+
+    __slots__ = (
+        "rel",
+        "override_path",
+        "deployed_path",
+        "last_hash",
+        "has_key_bindings",
+    )
+
+    def __init__(
+        self,
+        rel: str,
+        override_path: Path,
+        deployed_path: Path,
+        last_hash: str | None,
+        has_key_bindings: bool | None = None,
+    ):
+        """保存相对 INI 路径、覆盖与部署位置、上次摘要及按键识别状态。"""
+        self.rel = rel
+        self.override_path = override_path
+        self.deployed_path = deployed_path
+        self.last_hash = last_hash
+        # 用于过滤 UI 通知：无按键 ini 从“无→无”变化时无需重建按键面板；同时保留
+        # “有→无”状态，确保删除最后一个 key= 后仍会刷新并隐藏旧显示。
+        self.has_key_bindings = has_key_bindings
+
+
+class IniSyncManager:
+    """管理所有已启用 Mod 的 ini 双向同步。
+
+    生命周期：启用（部署完成）→ register_mod；禁用（删部署前）→ final_reconcile_mod
+    + unregister_mod；应用退出 → stop。
+    """
+
+    def __init__(self, enable_watch: bool = True, debounce_seconds: float = 0.12, sweep_seconds: float = 3.0):
+        """初始化同步配对、路径索引及监听引用，设置防抖和定期核对间隔。"""
+        self._pairs: dict[str, list[SyncPair]] = {}  # mod_id → pairs
+        self._lock = threading.RLock()
+        # 修改监控可能等待 watchdog 的分发锁，而回调会获取同步对锁，
+        # 因此监控操作必须在同步对锁之外执行。
+        self._watch_lock = threading.RLock()
+        self._observer = None
+        self._watched: set[str] = set()  # 已 schedule 的目录（去重）
+        self._watch_handles: dict[str, object] = {}  # 规范路径 → watchdog ObservedWatch
+        self._watch_refcounts: dict[str, int] = {}  # 多个 deployment 共用目录时引用计数
+        self._mod_watch_keys: dict[str, set[str]] = {}  # deployment id → 观察目录键
+        # 按事件路径定位同步对，避免单个文件保存触发全部文件校验。
+        self._path_index: dict[str, list[tuple[str, SyncPair]]] = {}
+        # 短时间内的创建、修改和移动事件合并为一次局部对账。
+        self._debounce_seconds = max(0.0, float(debounce_seconds))
+        self._pending_paths: set[str] = set()
+        self._debounce_timer: threading.Timer | None = None
+        self._debounce_deadline = 0.0
+        self._stopped = False
+        # enable_watch 为 False 时只提供手动对账，不启动文件监控。
+        self._enable_watch = enable_watch
+        # 部署目录重建或移动可能使原有监控句柄失效，因此定期检查已登记文件。
+        # 先比较大小和修改时间，仅在签名变化时计算内容摘要并对账。
+        self._sweep_seconds = max(0.0, float(sweep_seconds))
+        self._sweep_timer: threading.Timer | None = None
+        self._sweep_sigs: dict[int, tuple] = {}  # id(pair) → 两侧 stat 签名
+        # INI 原先或现在含按键声明时通知调用方。回调可能在工作线程执行，
+        # 须通过信号转交界面更新，不能直接访问 Qt 控件或线程绑定的数据库连接。
+        self.on_synced = None  # cb(mod_id): 相关按键显示可能变化（watchdog 线程）
+
+    # 注册 / 注销
+
+    @_configuration_io
+    def register_mod(
+        self,
+        mod_id: str,
+        body_path: str,
+        deploy_target: str,
+        source_watch_root: str | Path | None = None,
+        deploy_watch_root: str | Path | None = None,
+        *,
+        prepared_pairs: list[dict] | None = None,
+    ) -> int:
+        """登记已部署 Mod 的 INI 同步关系，返回登记数量。
+
+        body_path 用于定位容器覆盖文件，deploy_target 指定部署目录。
+        source_watch_root 和 deploy_watch_root 指定共享监控根，多个 Mod 可复用监控句柄。
+        观察公共根可避免容器内部句柄阻止上级目录移动，并在部署子目录重建后继续接收事件。
+        同一路径重新登记时保留运行期基线并安排局部核对，避免源库事件先到而吞掉修改通知。
+        """
+        # 重复登记（预设恢复/部署切换）必须先撤掉上一轮目录引用，否则观察句柄会永久累积。
+        with self._watch_lock:
+            with self._lock:
+                if self._stopped:
+                    return 0
+                previous_pairs = {
+                    (_path_key(pair.override_path), _path_key(pair.deployed_path)): (
+                        pair.last_hash,
+                        pair.has_key_bindings,
+                    )
+                    for pair in self._pairs.get(mod_id, ())
+                }
+                removed = self._remove_registration_locked(mod_id)
+            self._unschedule_watches(removed)
+
+        deploy_dir = Path(deploy_target)
+        if not deploy_dir.is_dir():
+            return 0
+        pairs: list[SyncPair] = []
+        retained_paths: list[Path] = []
+        ini_files = []
+        if prepared_pairs is None:
+            try:
+                ini_files = sorted(deploy_dir.rglob("*.ini"))
+            except OSError:
+                pass
+        else:
+            # 更新线程已经解码、建立关联并计算摘要，原子提交后在界面线程安装基线时不重复读取 INI。
+            overrides = resolve_ini_overrides_dir(body_path)
+            if overrides is not None:
+                for data in prepared_pairs:
+                    relative = Path(data["rel"])
+                    if relative.is_absolute() or ".." in relative.parts:
+                        raise ValueError(tr("同步路径必须位于 Mod 内"))
+                    pairs.append(
+                        SyncPair(
+                            relative.as_posix(),
+                            overrides / relative,
+                            deploy_dir / relative,
+                            data["last_hash"],
+                            data.get("has_key_bindings"),
+                        )
+                    )
+        for ini in ini_files:
+            # 部署 INI 使用相对于部署根目录的路径，与覆盖文件的相对路径保持一致。
+            try:
+                rel = ini.relative_to(deploy_dir).as_posix()
+            except ValueError:
+                continue
+            if ".d3dxmeta" in rel.split("/"):
+                continue  # 元数据不同步
+            op = override_path_for(body_path, rel)
+            if op is None:
+                continue  # 非容器本体 → 无 override 能力，跳过
+            if not ini.is_file():
+                if not ini.is_symlink() or not op.is_file():
+                    continue
+                # 程序目录被剪切后，外部部署中的软链接仍指向旧位置。按当前容器内
+                # 同一相对 INI 重新绑定；无链接权限时复用既有的硬链接/复制回退。
+                from src.core.mod_storage import ModStorage
+
+                ModStorage().link_ini(op, ini)
+                if not ini.is_file():
+                    continue
+            previous = previous_pairs.get((_path_key(op), _path_key(ini)))
+            if previous is not None:
+                pairs.append(SyncPair(rel, op, ini, *previous))
+                retained_paths.append(ini)
+                continue
+            # 跨进程没有上一轮的内存基线。已有 override 与独立部署副本不一致时，按
+            # mtime 判断关闭期间改动方向；时间相同仍以部署侧为准，与运行期冲突规则一致。
+            # 新部署正常已叠加 override，两侧相同，因此这里不会产生额外写盘。
+            deploy_hash = _hash_file(ini)
+            override_hash = _hash_file(op)
+            if (
+                override_hash is not None
+                and deploy_hash is not None
+                and override_hash != deploy_hash
+                and not _is_linked(ini)
+            ):
+                try:
+                    deploy_mtime = ini.stat().st_mtime_ns
+                    override_mtime = op.stat().st_mtime_ns
+                except OSError:
+                    deploy_mtime = override_mtime = 0
+                if override_mtime > deploy_mtime:
+                    data = _read_bytes(op)
+                    if data is not None and _atomic_write(ini, data):
+                        deploy_hash = override_hash
+                        logger.info("ini 冷启动对账: override -> deploy (%s)", rel)
+                else:
+                    data = _read_bytes(ini)
+                    if data is not None and _atomic_write(op, data):
+                        override_hash = deploy_hash
+                        logger.info("ini 冷启动对账: deploy -> override (%s)", rel)
+            # last_hash 必须取冷启动对账后的共同内容，后续事件才能正确判断方向。
+            pairs.append(SyncPair(rel, op, ini, deploy_hash, _has_key_bindings(ini)))
+        with self._watch_lock:
+            with self._lock:
+                if self._stopped:
+                    return 0
+                # 锁外发现文件期间可能出现并发注册，安装结果时须原子替换该注册。
+                removed = self._remove_registration_locked(mod_id)
+                if pairs:
+                    self._pairs[mod_id] = pairs
+                    for pair in pairs:
+                        for path in (pair.override_path, pair.deployed_path):
+                            self._path_index.setdefault(_path_key(path), []).append((mod_id, pair))
+            self._unschedule_watches(removed)
+            if not pairs:
+                return 0
+            watch_keys: set[str] = set()
+            self._add_mod_watch_locked(
+                watch_keys,
+                Path(deploy_watch_root) if deploy_watch_root else deploy_dir,
+            )
+            ov_dir = resolve_ini_overrides_dir(body_path)
+            if ov_dir is not None:
+                ov_dir.mkdir(parents=True, exist_ok=True)
+                # 直接观察覆盖目录可能阻止 Windows 移动其上级容器，
+                # 因此优先共享源库根监控；独立调用至少观察容器根。
+                source_root = Path(source_watch_root) if source_watch_root else ov_dir.parent.parent
+                self._add_mod_watch_locked(watch_keys, source_root)
+            if watch_keys:
+                self._mod_watch_keys[mod_id] = watch_keys
+        logger.info("ini 同步已登记: %s（%d 对）", mod_id, len(pairs))
+        self._ensure_sweep()
+        if self._enable_watch and retained_paths:
+            # 重建监控句柄期间可能丢失原生事件，仅补充核对本次沿用基线的路径。
+            self.schedule_reconcile_paths(retained_paths)
+        return len(pairs)
+
+    def snapshot_mod(self, mod_id: str) -> list[dict]:
+        """保留已有同步基线，供文件事务回滚使用。"""
+        with self._lock:
+            return [
+                {"rel": pair.rel, "last_hash": pair.last_hash, "has_key_bindings": pair.has_key_bindings}
+                for pair in self._pairs.get(mod_id, ())
+            ]
+
+    def unregister_mod(self, mod_id: str) -> None:
+        """注销 Mod 的所有同步对（禁用/删除时调；应先 final_reconcile_mod）。"""
+        with self._watch_lock:
+            with self._lock:
+                removed = self._remove_registration_locked(mod_id)
+            self._unschedule_watches(removed)
+
+    def _remove_registration_locked(self, mod_id: str) -> list:
+        """持有两把锁时移除登记；返回需要在 pair 锁外退订的观察句柄。"""
+        removed = []
+        # 仅更新当前部署的路径，避免每次注册都重建其他路径而产生平方级开销。
+        for pair in self._pairs.pop(mod_id, ()):
+            self._sweep_sigs.pop(id(pair), None)
+            for path in (pair.override_path, pair.deployed_path):
+                key = _path_key(path)
+                refs = [ref for ref in self._path_index.get(key, ()) if ref[0] != mod_id]
+                if refs:
+                    self._path_index[key] = refs
+                else:
+                    self._path_index.pop(key, None)
+        for key in self._mod_watch_keys.pop(mod_id, set()):
+            remaining = self._watch_refcounts.get(key, 0) - 1
+            if remaining > 0:
+                self._watch_refcounts[key] = remaining
+                continue
+            self._watch_refcounts.pop(key, None)
+            self._watched.discard(key)
+            watch = self._watch_handles.pop(key, None)
+            if watch is not None:
+                removed.append(watch)
+        return removed
+
+    def _unschedule_watches(self, watches: list) -> None:
+        """仅持有监控锁，排队回调仍可获取同步对锁。"""
+        if self._observer is None:
+            return
+        for watch in watches:
+            try:
+                self._observer.unschedule(watch)
+            except (KeyError, RuntimeError):
+                # 被删除的观察根可能已让 emitter 自行退出；本地状态仍须完成释放。
+                pass
