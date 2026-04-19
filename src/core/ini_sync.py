@@ -395,3 +395,120 @@ class IniSyncManager:
             except (KeyError, RuntimeError):
                 # 被删除的观察根可能已让 emitter 自行退出；本地状态仍须完成释放。
                 pass
+
+    def _add_mod_watch_locked(self, keys: set[str], directory: Path) -> None:
+        """为当前登记增加一个去重观察引用。仅持有 ``_watch_lock``。"""
+        key = _path_key(directory)
+        if key in keys:
+            return
+        ensured = self._ensure_watch(directory)
+        if ensured is not None:
+            keys.add(ensured)
+
+    # 对账（核心）
+
+    @_configuration_io
+    def _reconcile_pair(self, pair: SyncPair) -> str | None:
+        """对账单个同步对并返回同步方向，没有变化时返回 None。
+
+        链接文件共享实际内容，仅在摘要变化时通知界面。独立副本根据共同基线判断
+        修改方向，同步完成后更新两侧基线，避免文件监控事件再次触发反向写入。
+        """
+        hd = _hash_file(pair.deployed_path)
+        if hd is None:
+            return None  # 部署副本不在（已 undeploy/未部署）→ 不动
+        # 链接已同步文件内容，此处仅根据变化通知界面。
+        if _is_linked(pair.deployed_path):
+            if hd != pair.last_hash:
+                pair.last_hash = hd
+                return "deploy->override"  # 仅用于触发 UI 通知；数据已由链接同步
+            return None
+        ho = _hash_file(pair.override_path)
+        src_hash = ho if ho is not None else pair.last_hash
+
+        if hd == src_hash:
+            pair.last_hash = hd
+            return None  # 已同步
+
+        # 部署与源不一致 —— 判断谁变了（相对 last_hash）
+        if ho is not None and ho != pair.last_hash and hd == pair.last_hash:
+            # override 被外部改、部署未变 → 源→部署
+            data = _read_bytes(pair.override_path)
+            if data is not None and _atomic_write(pair.deployed_path, data):
+                pair.last_hash = ho
+                return "override->deploy"
+            return None
+
+        # 其余（部署变了 / 两侧都变冲突）→ 部署→源（运行期回写落 override；冲突部署优先）
+        data = _read_bytes(pair.deployed_path)
+        if data is not None and _atomic_write(pair.override_path, data):
+            pair.last_hash = hd
+            return "deploy->override"
+        return None
+
+    def reconcile_all(self) -> int:
+        """对账所有已登记同步对，返回发生实际同步的对数（手动全量回退处理接口）。"""
+        with self._lock:
+            refs = [(mid, pair) for mid, pairs in self._pairs.items() for pair in pairs]
+        return self._reconcile_refs(refs)
+
+    def reconcile_paths(self, paths: Iterable[str | Path]) -> int:
+        """只对账事件路径命中的同步对；同一 pair 被多个路径命中时仅执行一次。"""
+        keys = {_path_key(path) for path in paths if path}
+        if not keys:
+            return 0
+        with self._lock:
+            refs: list[tuple[str, SyncPair]] = []
+            seen: set[tuple[str, int]] = set()
+            for key in keys:
+                for mod_id, pair in self._path_index.get(key, []):
+                    identity = (mod_id, id(pair))
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    refs.append((mod_id, pair))
+        return self._reconcile_refs(refs)
+
+    def _reconcile_refs(self, refs: Iterable[tuple[str, SyncPair]]) -> int:
+        """对账给定快照；只有按键相关 ini 变化才合并发送 UI 通知。"""
+        n = 0
+        key_changed_mods: set[str] = set()
+        for mod_id, pair in refs:
+            try:
+                # 注销前快照中的对象不拥有后续注册，即使 Mod 和路径相同。
+                with PREFS_LOCK, self._lock:
+                    if not any(current is pair for current in self._pairs.get(mod_id, ())):
+                        continue
+                    direction = self._reconcile_pair(pair)
+                    if direction:
+                        n += 1
+                        previous_has_keys = pair.has_key_bindings
+                        current_has_keys = _has_key_bindings(pair.deployed_path)
+                        if current_has_keys is not None:
+                            pair.has_key_bindings = current_has_keys
+                        if previous_has_keys is True or current_has_keys is True:
+                            key_changed_mods.add(mod_id)
+            except Exception as e:
+                logger.warning("ini 对账失败 (%s): %s", pair.rel, e)
+        for mid in key_changed_mods:
+            self._notify_synced(mid)
+        return n
+
+    def reconcile_mod(self, mod_id: str) -> int:
+        """移除部署前对账指定 Mod，保存尚未同步的运行期间修改。"""
+        with self._lock:
+            refs = [(mod_id, pair) for pair in self._pairs.get(mod_id, [])]
+        return self._reconcile_refs(refs)
+
+    def _notify_synced(self, mod_id: str) -> None:
+        """通知调用方按键相关内容已变化。
+
+        回调可能在工作线程执行，调用方须将界面操作投递到主线程。
+        """
+        cb = self.on_synced
+        if cb is None:
+            return
+        try:
+            cb(mod_id)
+        except Exception as e:
+            logger.warning("ini 同步通知回调抛错 (%s): %s", mod_id, e)
