@@ -512,3 +512,197 @@ class IniSyncManager:
             cb(mod_id)
         except Exception as e:
             logger.warning("ini 同步通知回调抛错 (%s): %s", mod_id, e)
+
+    # 文件监控事件处理。
+
+    def schedule_reconcile_paths(self, paths: Iterable[str | Path]) -> None:
+        """把 watchdog 路径加入防抖队列；静默窗口后只对账命中的 pair。
+
+        Windows 编辑器一次保存常产生 create/modify/move 多个事件。每次新事件都会重置
+        计时器，但路径集合持续合并，最终只执行一次局部对账。
+        """
+        keys = {_path_key(path) for path in paths if path}
+        if not keys:
+            return
+        timer_to_start: threading.Timer | None = None
+        with self._lock:
+            if self._stopped:
+                return
+            self._pending_paths.update(keys)
+            self._debounce_deadline = time.monotonic() + self._debounce_seconds
+            # 连续事件只延后同一定时器的截止时间，避免为每个事件创建线程。
+            if self._debounce_timer is None:
+                timer_to_start = threading.Timer(self._debounce_seconds, self._flush_scheduled_reconcile)
+                timer_to_start.daemon = True
+                self._debounce_timer = timer_to_start
+        if timer_to_start is not None:
+            timer_to_start.start()
+
+    def _flush_scheduled_reconcile(self) -> None:
+        """防抖计时器回调；静默窗口未满则单线程续期，满后执行一次局部对账。"""
+        timer_to_start: threading.Timer | None = None
+        with self._lock:
+            if self._stopped:
+                return
+            remaining = self._debounce_deadline - time.monotonic()
+            if remaining > 0:
+                timer_to_start = threading.Timer(remaining, self._flush_scheduled_reconcile)
+                timer_to_start.daemon = True
+                self._debounce_timer = timer_to_start
+                paths = []
+            else:
+                paths = list(self._pending_paths)
+                self._pending_paths.clear()
+                self._debounce_timer = None
+                self._debounce_deadline = 0.0
+        if timer_to_start is not None:
+            timer_to_start.start()
+            return
+        if paths:
+            self.reconcile_paths(paths)
+
+    # 回退处理巡检
+
+    @staticmethod
+    def _stat_sig(path: Path) -> tuple:
+        """读取大小和修改时间签名，文件不存在时返回空元组。"""
+        try:
+            st = path.stat()
+            return (st.st_size, st.st_mtime_ns)
+        except OSError:
+            return ()
+
+    def _ensure_sweep(self) -> None:
+        """存在同步对时启动周期巡检，重复调用不增加任务。"""
+        if not self._enable_watch or self._sweep_seconds <= 0:
+            return
+        timer: threading.Timer | None = None
+        with self._lock:
+            if self._stopped or self._sweep_timer is not None or not self._pairs:
+                return
+            timer = threading.Timer(self._sweep_seconds, self._sweep)
+            timer.daemon = True
+            self._sweep_timer = timer
+        timer.start()
+
+    def _sweep(self) -> None:
+        """周期巡检：stat 变了的对才 hash 对账，然后重排下一轮。"""
+        with self._lock:
+            self._sweep_timer = None
+            if self._stopped:
+                return
+            refs = [(mid, pair) for mid, pairs in self._pairs.items() for pair in pairs]
+        try:
+            changed: list[tuple[str, SyncPair]] = []
+            live: set[int] = set()
+            for mod_id, pair in refs:
+                key = id(pair)
+                live.add(key)
+                sig = (self._stat_sig(pair.deployed_path), self._stat_sig(pair.override_path))
+                if self._sweep_sigs.get(key) != sig:
+                    self._sweep_sigs[key] = sig
+                    changed.append((mod_id, pair))
+            for dead in set(self._sweep_sigs) - live:
+                self._sweep_sigs.pop(dead, None)
+            if changed:
+                self._reconcile_refs(changed)
+                # 对账会改写文件 → 重采签名，否则下一轮把自己的写当成新变化再跑一次。
+                for _, pair in changed:
+                    self._sweep_sigs[id(pair)] = (
+                        self._stat_sig(pair.deployed_path),
+                        self._stat_sig(pair.override_path),
+                    )
+        except Exception as e:
+            logger.debug("INI 补充巡检异常: %s", e)
+        self._ensure_sweep()
+
+    def _ensure_watch(self, directory: Path) -> str | None:
+        """增加观察引用，返回规范键。仅持有 ``_watch_lock``，不持有 pair 锁。"""
+        if not WATCHDOG_AVAILABLE or not self._enable_watch:
+            return None
+        key = _path_key(directory)
+        if key in self._watched:
+            self._watch_refcounts[key] = self._watch_refcounts.get(key, 0) + 1
+            return key
+        if self._observer is None:
+            if os.name == "nt":
+                from src.core.watcher_windows import create_file_observer
+
+                self._observer = create_file_observer()
+            else:
+                self._observer = Observer()
+            self._observer.daemon = True
+            self._observer.start()
+        try:
+            watch = self._observer.schedule(_IniSyncEventHandler(self), str(directory), recursive=True)
+            self._watched.add(key)
+            self._watch_handles[key] = watch
+            self._watch_refcounts[key] = 1
+            return key
+        except Exception as e:
+            logger.warning("ini 同步监测目录失败 (%s): %s", directory, e)
+            return None
+
+    def stop(self) -> None:
+        """停止 watchdog 与待执行防抖任务（应用退出调）。"""
+        with self._watch_lock:
+            with self._lock:
+                self._stopped = True
+                timer = self._debounce_timer
+                self._debounce_timer = None
+                sweep = self._sweep_timer
+                self._sweep_timer = None
+                self._sweep_sigs.clear()
+                self._debounce_deadline = 0.0
+                self._pending_paths.clear()
+                observer = self._observer
+                self._observer = None
+                self._watched.clear()
+                self._watch_handles.clear()
+                self._watch_refcounts.clear()
+                self._mod_watch_keys.clear()
+                self._pairs.clear()
+                self._path_index.clear()
+        if timer is not None:
+            timer.cancel()
+        if sweep is not None:
+            sweep.cancel()
+        if observer is not None:
+            try:
+                observer.stop()
+                observer.join(timeout=3)
+            except Exception:
+                pass
+
+
+if WATCHDOG_AVAILABLE:
+
+    class _IniSyncEventHandler(FileSystemEventHandler):
+        """watchdog 事件 → 路由到具体 ini pair，并由 manager 防抖合并。"""
+
+        def __init__(self, manager: IniSyncManager):
+            """绑定同步管理器，供文件系统事件安排局部配置核对。"""
+            super().__init__()
+            self._mgr = manager
+
+        def on_any_event(self, event) -> None:
+            """收集文件事件两端的 INI 路径并提交防抖核对，忽略目录事件。"""
+            if getattr(event, "is_directory", False):
+                return
+            src = getattr(event, "src_path", "") or ""
+            dst = getattr(event, "dest_path", "") or ""
+            paths = []
+            if src.lower().endswith(".ini"):
+                paths.append(src)
+            if dst.lower().endswith(".ini"):
+                paths.append(dst)
+            if paths:
+                self._mgr.schedule_reconcile_paths(paths)
+else:
+
+    class _IniSyncEventHandler:  # type: ignore[no-redef]
+        """在监听依赖不可用时提供可构造的事件处理器占位类型。"""
+
+        def __init__(self, manager):
+            """接受管理器参数以维持构造接口；无监听依赖时不建立监听行为。"""
+            pass
