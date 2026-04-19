@@ -209,3 +209,82 @@ class ModVariantManager:
     def prefs_file(self, game_id: str = "") -> Path | None:
         """按游戏资源目录定位私有工作状态文件，不在此处创建或加载文件。"""
         return prefs.prefs_path(self._manager._res_dir(self._game_id(game_id)), get_data_dir())
+
+    def has_deployed_mods(self, game_id: str = "") -> bool:
+        """检查索引中是否有启用且记录部署路径的 Mod，不执行部署目录扫描。"""
+        return any(
+            m.is_enabled and m.deployed_path for m in self._manager._index.get_enabled_mods(self._game_id(game_id))
+        )
+
+    def _get_mod(self, mod_id):
+        """按 ID 获取当前游戏条目，缺失或属于其他游戏时抛出 ValueError。"""
+        mods = self._manager._index.get_mods_by_ids([mod_id])
+        mod = next(iter(mods), None)
+        if mod is None or mod.game_id != self._game_id():
+            raise ValueError(tr("Mod 不存在或不属于当前游戏"))
+        return mod
+
+    def _capture_mods(self, game_id):
+        """筛选指定游戏中启用且部署目录实际存在的 Mod，作为运行时采集范围。"""
+        return [
+            mod
+            for mod in self._manager._index.get_enabled_mods(game_id)
+            if mod.deployed_path and fs.is_dir(mod.deployed_path)
+        ]
+
+    def _deploy_root_prefix(self, game_id: str) -> str:
+        """计算部署目录相对加载器根目录的规范化命名空间前缀，不在根目录内时返回空串。"""
+        root = self._migoto_root(game_id)
+        deployment = self._manager._storage.get_deploy_dir()
+        if root is None or deployment is None:
+            return ""
+        try:
+            relative = Path(fs.normal_path(deployment)).relative_to(root)
+        except ValueError:
+            return ""
+        return str(relative).replace("/", "\\").strip("\\").casefold()
+
+    def _runtime_mapping_issue(self, game_id: str) -> str:
+        """检查加载器和部署目录的相对关系，返回无法映射偏好的原因，无问题时返回空串。"""
+        game = self._manager._game_service.get_game(game_id)
+        if game is None or not game.migoto_path:
+            return tr("未配置 3DMigoto 目录，无法定位外观偏好")
+        if self._migoto_root(game_id) is None:
+            return tr("3DMigoto 目录不存在或无法访问：{migoto_path}", migoto_path=game.migoto_path)
+        if not self._deploy_root_prefix(game_id):
+            deployment = self._manager._storage.get_deploy_dir()
+            return tr(
+                "部署目录 {deployment} 无法相对于 3DMigoto 目录 {migoto_path} 定位外观偏好",
+                deployment=deployment,
+                migoto_path=game.migoto_path,
+            )
+        return ""
+
+    @staticmethod
+    def _implicit_prefix(mod, deploy_root_prefix: str) -> str:
+        """根据实际活动目录名构造隐式变量命名空间，停放目录先还原名称，无有效名称时返回空串。"""
+        if not deploy_root_prefix:
+            return ""
+        raw = mod.folder_name or Path(fs.normal_path(mod.path)).stem
+        if mod.deployed_path:
+            from src.core.mod_storage import ModStorage
+
+            actual = Path(fs.normal_path(mod.deployed_path))
+            raw = (
+                ModStorage.active_name_from_parked(actual, mod.mod_id)
+                if actual.name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper())
+                else actual.name
+            )
+        name = str(raw).strip()
+        if not name or name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper()):
+            return ""
+        return f"{deploy_root_prefix}\\{name}".casefold()
+
+    def _deployment_generation(self, mod) -> str:
+        """摘要会话、资源内容及部署位置，标识采集状态所对应的精确部署身份。"""
+        location = self._implicit_prefix(mod, self._deploy_root_prefix(mod.game_id))
+        return digest(f"{self._session}|{mod.game_id}|{mod.mod_id}|{mod.content_hash}|{location}".encode())
+
+    def _source_signature(self, mod):
+        """组合资源哈希与有效 INI 清单版本，作为声明缓存复用的校验依据。"""
+        return (mod.content_hash, inspect_effective_inis(mod.path))
