@@ -703,3 +703,281 @@ class ModVariantManager:
         )
         with scope:
             return self._execute_files(mod_ids, changes, metadata=metadata, preset_operation_id=preset_operation_id)
+
+    def _execute_files(self, mod_ids, changes, *, metadata=None, preset_operation_id=""):
+        """准备日志并应用文件变更，失败时回滚；组合事务延迟最终提交，独立命令立即提交并通知。"""
+        path = self.prefs_file()
+        if path is None:
+            raise ValueError(tr("未配置游戏资源目录"))
+        operation = VariantOperation(
+            path.parent / "variant_operations", self._game_id(), mod_ids, changes, metadata=metadata
+        )
+        operation.prepare()
+        if preset_operation_id:
+            patch = RuntimePatch(file_operation_id=operation.operation_id, applied=True)
+            try:
+                self._save_patch(preset_operation_id, patch)
+            except Exception:
+                operation.rollback()
+                raise
+            self._operations[preset_operation_id] = operation
+        try:
+            # 首次写入配置前丢弃已经排队的采集回调。
+            self._epoch = uuid.uuid4().hex
+            self._watch_context = None
+            operation.apply()
+            self._publish_references()
+            if not preset_operation_id:
+                operation.commit()
+        except Exception:
+            if operation.journal_path.exists():
+                operation.rollback()
+            self._publish_references()
+            raise
+        finally:
+            if self._watcher is not None:
+                self._refresh_watch_context()
+        if not preset_operation_id:
+            self._notify(mod_ids)
+        return operation
+
+    def save_variant(self, mod_id, name, *, variant_id=None, use_defaults=False):
+        """从已启用 Mod 的完整有效采集值创建或覆盖变体，冲突、缺值或重名时拒绝事务。"""
+        with self._command([mod_id]):
+            mod = self._get_mod(mod_id)
+            if not mod.is_enabled:
+                raise ValueError(tr("请先启用 Mod，再保存或更新变体"))
+            path = self.user_ini_path()
+            if path is None:
+                raise ValueError(tr("未配置 Mod 加载器的用户配置文件，请检查当前游戏的加载器设置"))
+            snapshot = user_ini.read_stable(path)
+            if snapshot is None:
+                raise ValueError(tr("尚未读取到游戏内配置，请先在游戏中保存配置后重试"))
+            mods = self._capture_mods(mod.game_id)
+            index = self.build_index(mod.game_id, mods=mods, force=True)
+            store = self.load_prefs()
+            report = self._capture_snapshot(snapshot, index, store, mods, mod.game_id)
+            values = dict(report.attributed.get(mod_id, {}))
+            fingerprint = declaration_fingerprint(index, mod_id)
+            keys = set(index.keys_of(mod_id))
+            if keys.intersection(report.conflicted):
+                raise ValueError(tr("游戏内配置存在重复或冲突，无法保存变体"))
+            if keys.intersection(report.invalid):
+                raise ValueError(tr("游戏内配置含有无效数值，无法保存变体"))
+            if use_defaults:
+                values = dict(self._target_values(mod, None, index), **values)
+            missing = keys.difference(values)
+            if missing:
+                logger.warning("保存变体时缺少配置值 (%s)：%s", mod_id, "、".join(sorted(missing)))
+                raise ValueError(tr("未能读取完整的游戏内配置，请先在游戏中保存配置后重试"))
+            variables = snapshot_variables(index, mod_id, values)
+            if not variables:
+                raise ValueError(tr("此 Mod 没有可保存的游戏内配置"))
+            disk = ModVariantStore(mod.path)
+            old, before = disk.get_snapshot(variant_id) if variant_id else (None, None)
+            now = datetime.now(timezone.utc).isoformat()
+            variant = ModVariant(
+                variant_id=variant_id or disk.new_id(),
+                name=name,
+                variables=variables,
+                created_at=old.created_at if old else now,
+                updated_at=now,
+                source_content_hash=mod.content_hash,
+                declaration_fingerprint=fingerprint,
+            )
+            for item in disk.list():
+                if item.variant_id != variant.variant_id and item.name.casefold() == variant.name.casefold():
+                    raise ValueError(tr("同一 Mod 已存在该名称的变体"))
+            target = disk.path_for(variant.variant_id)
+            state = store.state_for(mod_id)
+            captured_sources = copy.deepcopy(state.sources)
+            state_change = self._state_change(
+                store, {mod_id: mod}, {mod_id: values}, {mod_id: variant.variant_id}, index, source="game"
+            )
+            for key in values:
+                if key in report.attributed.get(mod_id, {}):
+                    state.sources[key] = captured_sources[key]
+                else:
+                    state.sources[key]["source"] = "literal_default"
+            state_change = replace(
+                state_change, after=json.dumps(store.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+            )
+            capture_bytes = snapshot.text.encode(snapshot.encoding, errors="surrogateescape")
+            changes = [
+                FileChange(snapshot.path, capture_bytes, capture_bytes),
+                FileChange(target, before, json.dumps(variant.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")),
+                state_change,
+            ]
+            changes += self._reference_change(self._reference_updates({mod_id: mod}, {mod_id: variant.variant_id}))
+            self._execute([mod_id], changes)
+            return variant
+
+    def rename_variant(self, mod_id, variant_id, name):
+        """检查同一 Mod 内名称唯一后，以原件校验事务替换变体名称并返回新对象。"""
+        with self._command([mod_id]):
+            disk = ModVariantStore(self._get_mod(mod_id).path)
+            original, before = disk.get_snapshot(variant_id)
+            variant = replace(original, name=name)
+            if any(
+                item.variant_id != variant_id and item.name.casefold() == variant.name.casefold()
+                for item in disk.list()
+            ):
+                raise ValueError(tr("同一 Mod 已存在该名称的变体"))
+            path = disk.path_for(variant_id)
+            self._execute(
+                [mod_id],
+                [FileChange(path, before, json.dumps(variant.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"))],
+            )
+            return variant
+
+    def copy_variant(self, mod_id, variant_id, name=None):
+        """复制变体并分配新身份及时间，自动生成或校验唯一名称，事务同时核对源文件未变。"""
+        with self._command([mod_id]):
+            disk = ModVariantStore(self._get_mod(mod_id).path)
+            original, before = disk.get_snapshot(variant_id)
+            now = datetime.now(timezone.utc).isoformat()
+            variant = replace(
+                original,
+                variant_id=disk.new_id(),
+                name=name or disk.unique_name(original.name + tr(" 副本")),
+                created_at=now,
+                updated_at=now,
+            )
+            if any(item.name.casefold() == variant.name.casefold() for item in disk.list()):
+                raise ValueError(tr("同一 Mod 已存在该名称的变体"))
+            path = disk.path_for(variant.variant_id)
+            self._execute(
+                [mod_id],
+                [
+                    FileChange(disk.path_for(variant_id), before, before),
+                    FileChange(path, None, json.dumps(variant.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")),
+                ],
+            )
+            return variant
+
+    def _plan_targets(
+        self, mods, selections, *, preset_id="", prepared=None, extra_changes=(), references=None, add_members=None
+    ):
+        """校验目标声明及变体原件，生成源配置、运行时文件、偏好和引用的统一变更计划及恢复结果。"""
+        store = self.load_prefs()
+        context = dict(mods)
+        index = self.build_index(mods=context.values(), force=True)
+        if not preset_id and any(index.keys_of(mid) for mid in mods):
+            # 活动 Mod 共用变量命名空间；无持久化变量的目标不会与其他 Mod 冲突。
+            # 保留自身资源校验，无需读取所有活动 Mod。
+            if any(mod.is_enabled for mod in mods.values()):
+                context.update({m.mod_id: m for m in self._capture_mods(self._game_id()) if m.mod_id not in context})
+                if len(context) > len(mods):
+                    index = self.build_index(mods=context.values())
+        target_checks = []
+        if prepared is None:
+            targets = {}
+            for mid, mod in mods.items():
+                selected = selections[mid]
+                if selected is None:
+                    targets[mid] = {}
+                else:
+                    disk = ModVariantStore(mod.path)
+                    variant, before = disk.get_snapshot(selected)
+                    targets[mid] = resolve_variant_values(index, mid, variant)
+                    target_checks.append(FileChange(disk.path_for(selected), before, before))
+        else:
+            targets = prepared
+        # 针对冻结的完整声明集合重新校验全部目标。
+        defaults = {mid for mid, selected in selections.items() if selected is None}
+        for mid, values in targets.items():
+            if mid in defaults:
+                declaration_fingerprint(index, mid)
+            else:
+                snapshot_variables(index, mid, values)
+        active = {mid for mid, mod in mods.items() if mod.is_enabled}
+        path = self.user_ini_path() if active else None
+        snapshot = user_ini.read_stable(path) if path is not None else None
+        changes, removed = configuration_changes(
+            mods,
+            index,
+            targets,
+            snapshot,
+            active,
+            runtime_path=path,
+            default_ids=defaults,
+            source_checks=index.source_checks,
+        )
+        runtime = None
+        if path is not None:
+            user_change = next((change for change in changes if change.path == path), None)
+            if user_change is not None:
+                runtime = prefs.RuntimeFileInfo(str(path), digest(user_change.after))
+        changes.append(self._state_change(store, mods, targets, selections, index, runtime=runtime))
+        updates = (
+            references if references is not None else self._reference_updates(mods, selections, preset_id=preset_id)
+        )
+        changes.extend(self._reference_change(updates, add_members))
+        changes.extend(extra_changes)
+        changes.extend(target_checks)
+        return changes, RestoreOutcome(
+            applied=tuple(targets),
+            removed_keys=removed,
+            needs_reload_hint=bool(active and (any(targets.values()) or removed)),
+        )
+
+    def _apply_targets(self, mods, selections, *, preset_id="", extra_changes=(), references=None, add_members=None):
+        """执行目标配置计划并清空声明缓存，返回触及成员、移除键和刷新提示。"""
+        changes, outcome = self._plan_targets(
+            mods,
+            selections,
+            preset_id=preset_id,
+            extra_changes=extra_changes,
+            references=references,
+            add_members=add_members,
+        )
+        self._execute(mods, changes)
+        self._ini_cache.clear()
+        return outcome
+
+    def apply_variant(self, mod_id, variant_id):
+        """在命令保护内同步并采集启用条目的现状，再事务化应用选定变体或默认配置。"""
+        with self._command([mod_id]):
+            mod = self._get_mod(mod_id)
+            if mod.is_enabled:
+                sync = getattr(self._manager, "_ini_sync", None)
+                if sync is not None:
+                    sync.reconcile_mod(mod_id)
+                self.collect(trigger="variant_apply")
+            return self._apply_targets({mod_id: mod}, {mod_id: variant_id})
+
+    def delete_variant(self, mod_id, variant_id):
+        """删除变体并清除组合引用；当前选中该变体时先在同一事务中恢复默认配置。"""
+        with self._command([mod_id]):
+            mod = self._get_mod(mod_id)
+            disk = ModVariantStore(mod.path)
+            _, before = disk.get_snapshot(variant_id)
+            path = disk.path_for(variant_id)
+            deletion = FileChange(path, before, None)
+            store = self.load_prefs()
+            selected = self._selected(mod, store)
+            state = store.state_for(mod_id)
+            references = {p.id: {mod_id: None} for p in self.references(mod_id, variant_id)}
+            if selected == variant_id:
+                if mod.is_enabled:
+                    sync = getattr(self._manager, "_ini_sync", None)
+                    if sync is not None:
+                        sync.reconcile_mod(mod_id)
+                    self.collect(trigger="variant_delete")
+                return self._apply_targets(
+                    {mod_id: mod}, {mod_id: None}, extra_changes=[deletion], references=references
+                )
+            changes = [deletion]
+            if state.selected_variant_id == variant_id:
+                state.selected_variant_id = None
+                prefs_path = self.prefs_file()
+                changes.append(
+                    FileChange(
+                        prefs_path,
+                        store.before_image(prefs_path),
+                        json.dumps(store.to_dict(), ensure_ascii=False, indent=2).encode("utf-8"),
+                    )
+                )
+            changes += self._reference_change(references)
+            self._execute([mod_id], changes)
+            return RestoreOutcome()
