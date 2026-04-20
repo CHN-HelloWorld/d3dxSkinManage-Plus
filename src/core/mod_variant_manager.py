@@ -382,3 +382,172 @@ class ModVariantManager:
         if callable(emit):
             for mod_id in dict.fromkeys(mod_ids):
                 emit("variant_state_changed", mod_id=mod_id, game_id=self._game_id(game_id))
+
+    def collect(self, *, trigger: str, game_id: str = "", only_if_changed=False, event=None, allow_preset=False):
+        """在偏好锁内采集稳定配置并校验事件世代；过期、未变化或事务阻塞时返回 None。"""
+        gid = self._game_id(game_id)
+        with prefs.PREFS_LOCK:
+            if event is not None:
+                if (
+                    event.get("game_id") != gid
+                    or event.get("deployment_generation") != self._epoch
+                    or event.get("capture_generation", 0) <= self._last_event_sequence
+                ):
+                    return None
+            pending = getattr(self._manager._preset_manager, "has_pending_apply", None)
+            if not allow_preset and callable(pending) and pending(gid):
+                return None
+            if self.recover_pending(gid):
+                return None
+            mods = self._capture_mods(gid)
+            if event is not None:
+                expected = {m.mod_id: self._deployment_generation(m) for m in mods}
+                contexts = event.get("mods", ())
+                observed = {
+                    m.get("mod_id"): m.get("deployment_generation") for m in contexts if m.get("game_id") == gid
+                }
+                if observed != expected or len(contexts) != len(expected):
+                    return None
+            path = self.user_ini_path(gid)
+            store = self.load_prefs(gid)
+            if path is None or store is None:
+                return None
+            try:
+                snapshot = user_ini.read_stable(path)
+            except user_ini.UserIniUnstableError as error:
+                logger.warning("本次工作状态未采集 [%s]：%s", trigger, error)
+                return None
+            if snapshot is None:
+                return None
+            if (
+                only_if_changed
+                and store.runtime_file.path == str(path)
+                and store.runtime_file.last_seen_hash == snapshot.sha256
+            ):
+                if event is not None:
+                    self._last_event_sequence = event["capture_generation"]
+                return None
+            # 监控回调不得在界面线程打开尚未准备覆盖文件的归档。
+            if only_if_changed:
+                mods = [m for m in mods if overrides_seeded(m.path)]
+            index = self.build_index(gid, mods=mods, force=not only_if_changed)
+            report = self._capture_snapshot(snapshot, index, store, mods, gid)
+            if event is not None:
+                self._last_event_sequence = event["capture_generation"]
+            if report.changed:
+                self._notify((mod.mod_id for mod in mods), gid)
+            return report
+
+    def _capture_snapshot(self, snapshot, index, store, mods, gid):
+        """将稳定快照归属到启用成员并记录部署世代，变化持久化失败时抛出 OSError。"""
+        sequence = max((s.capture_generation for s in store.mods.values()), default=0) + 1
+        report = collect(snapshot, index, store, enabled_mod_ids=[m.mod_id for m in mods], capture_generation=sequence)
+        for mod in mods:
+            state = store.mods.get(mod.mod_id)
+            if state is None:
+                continue
+            generation = self._deployment_generation(mod)
+            state.deployment_generation = generation
+            for key in state.confirmed_keys:
+                state.sources[key]["deployment_generation"] = generation
+        if report.changed and not self.save_prefs(store, gid):
+            raise OSError(tr("工作状态保存失败，旧记录保持不变"))
+        return report
+
+    def list_variants(self, mod_id):
+        """列出当前游戏指定 Mod 的磁盘变体，条目身份或变体文件错误由下层报告。"""
+        mod = self._get_mod(mod_id)
+        return ModVariantStore(mod.path).list()
+
+    def prepare_task(self, mod_id, **options):
+        """在所有者线程采集投影，供独立预览或命令使用。"""
+        from src.core.variant_task import VariantTask
+
+        return VariantTask(self._manager, mod_id, **options)
+
+    def references(self, mod_id, variant_id):
+        """查询当前游戏中选用指定变体的组合预设，优先使用管理器的引用索引。"""
+        pm = self._manager._preset_manager
+        getter = getattr(pm, "variant_references", None)
+        if callable(getter):
+            return getter(mod_id, variant_id)
+        return [p for p in pm.get_all_presets(self._game_id()) if p.mod_variants.get(mod_id) == variant_id]
+
+    def _selected(self, mod, store):
+        """启用成员优先采用当前组合的变体选择，其余情况读取私有工作状态中的选择。"""
+        if mod.is_enabled:
+            preset = self._manager._preset_manager.get_preset(self._current_preset_id(mod.game_id))
+            if preset is not None and mod.mod_id in preset.enabled_mod_ids:
+                return preset.mod_variants.get(mod.mod_id)
+        state = store.mods.get(mod.mod_id)
+        return state.selected_variant_id if state is not None else None
+
+    def _target_values(self, mod, variant_id, index):
+        """将命名变体映射为当前声明的目标值；选择为 None 时解析可用的默认值。"""
+        if variant_id is None:
+            return default_values(mod, index, self._default_cache)
+        variant = ModVariantStore(mod.path).get(variant_id)
+        return resolve_variant_values(index, mod.mod_id, variant)
+
+    def get_state(self, mod_id):
+        """生成变体展示状态和可保存原因，核对声明、采集及部署身份，并将预期读取异常转为原因文本。"""
+        mod = self._get_mod(mod_id)
+        state = prefs.ModWorkingState()
+        result = {
+            "mod_id": mod_id,
+            "enabled": bool(mod.is_enabled),
+            "selected_variant_id": None,
+            "status": "unconfirmed",
+            "can_save": False,
+            "reason": "",
+            "captured_at": "",
+            "variable_count": 0,
+            "confirmed_count": 0,
+            "source_changed": False,
+        }
+        try:
+            store = self.load_prefs(mod.game_id)
+            if store is None:
+                raise ValueError(tr("未配置游戏资源目录"))
+            state = store.mods.get(mod_id, state)
+            selected = self._selected(mod, store)
+            result["selected_variant_id"] = selected
+            index = self._index_for(mod)
+            keys = set(index.keys_of(mod_id))
+            fingerprint = declaration_fingerprint(index, mod_id)
+            result.update(
+                variable_count=len(keys),
+                confirmed_count=len(keys & set(state.confirmed_keys)),
+                captured_at=state.captured_at,
+            )
+            complete = (
+                bool(keys)
+                and keys == set(state.confirmed_keys)
+                and fingerprint == state.declaration_fingerprint
+                and state.deployment_generation == self._deployment_generation(mod)
+            )
+            result["can_save"] = bool(mod.is_enabled and complete)
+            if not keys:
+                result["reason"] = tr("此 Mod 没有可保存的持久化数值变量")
+            elif not complete:
+                result["reason"] = tr("工作状态尚未完整确认；请先在加载器中刷新保存并等待落盘")
+            elif selected is None:
+                # 加载器采集确认当前值，不能推导任意初始化命令的原始基线。
+                result["status"] = "captured"
+            else:
+                expected = self._target_values(mod, selected, index)
+                result["status"] = (
+                    "clean"
+                    if all(user_ini.values_equal(state.values[k], v) for k, v in expected.items())
+                    else "modified"
+                )
+            if selected:
+                variant = ModVariantStore(mod.path).get(selected)
+                result["source_changed"] = bool(
+                    variant.source_content_hash and variant.source_content_hash != mod.content_hash
+                )
+                if result["source_changed"]:
+                    result["reason"] = tr("资源本体已更新，应用时会重新校验全部变量声明")
+        except (ValueError, OSError, RuntimeError) as error:
+            result["reason"] = str(error)
+        return result
