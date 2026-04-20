@@ -1171,3 +1171,128 @@ class ModVariantManager:
         self._ini_cache.clear()
         outcome.missing = missing
         return outcome
+
+    def verify_preset_configuration(self, plan):
+        """在组合提交前校验关联文件事务的已应用内容，没有关联事务时不操作。"""
+        operation = self._operations.get(plan.operation_id)
+        if operation is not None:
+            operation.verify_applied()
+
+    def on_preset_apply_after_commit(self, plan):
+        """完成关联配置事务并刷新引用及监控身份，通知缺失变体，最终释放资源保护。"""
+        try:
+            operation = self._operations.pop(plan.operation_id, None)
+            if operation is not None:
+                try:
+                    operation.commit(verify=False)
+                except OSError as error:
+                    logger.warning("组合已提交，变体恢复记录将在启动时清理：%s", error)
+            prepared = self._prepared.pop(plan.operation_id, None)
+            self.invalidate()
+            self._publish_references()
+            self._notify(self._preset_members(plan.game_id, plan.to_preset_id), plan.game_id)
+            if prepared and prepared[3]:
+                emit = getattr(self._manager, "_emit", None)
+                if callable(emit):
+                    missing = tuple(prepared[3])
+                    names = {
+                        m.mod_id: getattr(m, "name", m.folder_name)
+                        for m in self._manager._index.get_mods_by_ids(missing)
+                    }
+                    emit(
+                        "variant_references_missing",
+                        game_id=plan.game_id,
+                        preset_id=plan.to_preset_id,
+                        mod_ids=missing,
+                        names=tuple(names.get(mid, mid) for mid in missing),
+                    )
+        finally:
+            self.release_preset_operation(plan)
+
+    def on_preset_apply_rollback(self, plan):
+        """从内存或数据库补丁恢复关联文件事务并回滚，返回回滚错误；保护由外层收尾释放。"""
+        self._prepared.pop(plan.operation_id, None)
+        patch = self._load_patch(plan.operation_id)
+        operation = self._operations.pop(plan.operation_id, None)
+        if operation is None and patch is not None and patch.file_operation_id:
+            path = self.prefs_file(plan.game_id).parent / "variant_operations" / (patch.file_operation_id + ".json")
+            if path.exists():
+                operation = VariantOperation.load(path, allowed_roots=self._allowed_roots(plan.game_id))
+        if operation is not None:
+            errors = operation.rollback()
+            self._publish_references()
+            self.invalidate()
+            return errors
+        return ()
+
+    def _save_patch(self, operation_id, patch):
+        """将关联文件事务的恢复补丁写入组合操作数据库日志。"""
+        self._manager._index.update_journal_runtime_patch(operation_id, patch.to_json())
+
+    def _load_patch(self, operation_id):
+        """从指定组合日志解析运行时恢复补丁，没有对应日志时返回 None。"""
+        for journal in self._manager._index.get_journals():
+            if journal.operation_id == operation_id:
+                return RuntimePatch.from_json(journal.runtime_patch_json)
+        return None
+
+    def _allowed_roots(self, gid):
+        """列出恢复事务允许访问的数据、运行时配置、部署及源库路径边界。"""
+        roots = [get_data_dir()]
+        path = self.user_ini_path(gid)
+        if path is not None:
+            roots.append(path)
+        deployment = self._manager._storage.get_deploy_dir()
+        if deployment is not None:
+            roots.append(deployment)
+        source_root = getattr(self._manager, "_get_library_root", None)
+        if callable(source_root):
+            roots.append(source_root(gid))
+        return roots
+
+    def recover_pending(self, game_id=""):
+        """校验并恢复孤立文件事务，跳过仍由组合日志持有的操作，返回未解决问题且防止递归恢复。"""
+        if self._recovering:
+            return ()
+        path = self.prefs_file(game_id)
+        if path is None or not (path.parent / "variant_operations").exists():
+            return ()
+        self._recovering = True
+        problems = []
+        try:
+            gid = self._game_id(game_id)
+            journals = {j.operation_id for j in self._manager._index.get_journals()}
+            for record in (path.parent / "variant_operations").glob("*.json"):
+                try:
+                    operation = VariantOperation.load(record, allowed_roots=self._allowed_roots(gid))
+                    if operation.game_id != gid:
+                        raise ValueError(tr("恢复记录游戏身份不一致"))
+                    owner = operation.metadata.get("preset_operation_id")
+                    if owner in journals:
+                        continue
+                    if operation.phase == "committed":
+                        fs.unlink(record, missing_ok=True)
+                    elif (
+                        owner
+                        and operation.phase == "applied"
+                        and self._current_preset_id(gid) == operation.metadata.get("to_preset_id")
+                    ):
+                        operation.commit(verify=False)
+                    else:
+                        problems.extend(operation.rollback())
+                except (ValueError, OSError, RuntimeError) as error:
+                    problems.append(str(error))
+            if not problems:
+                self._publish_references()
+        finally:
+            self._recovering = False
+        return tuple(problems)
+
+    def on_mod_removed(self, mod_id, game_id=""):
+        """在偏好锁内移除已删除 Mod 的工作状态并使缓存失效，保存失败时抛出 OSError。"""
+        with prefs.PREFS_LOCK:
+            store = self.load_prefs(game_id)
+            if store is not None and store.drop_deployment(mod_id):
+                if not self.save_prefs(store, game_id):
+                    raise OSError(tr("无法移除已删除 Mod 的工作状态"))
+        self.invalidate(mod_id)
