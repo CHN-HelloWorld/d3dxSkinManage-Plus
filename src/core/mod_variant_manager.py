@@ -551,3 +551,155 @@ class ModVariantManager:
         except (ValueError, OSError, RuntimeError) as error:
             result["reason"] = str(error)
         return result
+
+    @contextmanager
+    def _command(self, mod_ids, *, allow_preset=False, operation_token="", owner_token=""):
+        """在资源保护及文件锁内执行命令，先恢复事务并固定条目访问凭据，冲突时阻止写入。"""
+        gid = self._game_id()
+        pm = self._manager._preset_manager
+        pending = getattr(pm, "has_pending_apply", None)
+        if not allow_preset and callable(pending) and pending(gid):
+            raise RuntimeError(tr("组合预设正在切换，请等待完成"))
+        with (
+            self._variant_scope(mod_ids, excluding=(operation_token, owner_token)),
+            prefs.PREFS_LOCK,
+            VARIANT_STORE_LOCK,
+        ):
+            problems = self.recover_pending(gid)
+            if problems:
+                raise RuntimeError(tr("存在待恢复的变体操作：") + "；".join(problems))
+            if not allow_preset and callable(pending) and pending(gid):
+                raise RuntimeError(tr("组合预设正在切换，请等待完成"))
+            checker = getattr(self._manager, "require_mod_operation", None)
+            with ExitStack() as stack:
+                for mid in mod_ids:
+                    if callable(checker):
+                        # 变体编辑不修改 info.json。
+                        from src.core.operation_preflight import access_file
+
+                        receipt = checker(mid, deployment=True)
+                        stack.enter_context(access_file(receipt.path, pin=True))
+                        receipt.recheck()
+                yield
+
+    def _variant_scope(self, mod_ids, *, paths=(), excluding=()):
+        """为源容器、部署、偏好及组合文件创建操作保护上下文，允许排除调用者已持有的令牌。"""
+        protection = getattr(self._manager, "_library_protection", None)
+        if protection is None:
+            return nullcontext()
+        mods = [self._get_mod(mid) for mid in mod_ids]
+        targets = [path for mod in mods for path in (Path(mod.path).parent, mod.deployed_path)]
+        targets.extend(
+            (
+                self.prefs_file(),
+                self.user_ini_path(),
+                getattr(self._manager._preset_manager, "_presets_file", ""),
+                *paths,
+            )
+        )
+        return protection.variant_operation(
+            "variant:" + uuid.uuid4().hex, paths=targets, mod_ids=mod_ids, excluding=excluding
+        )
+
+    def _reference_updates(self, mods, selections, *, preset_id=""):
+        """生成指定或当前组合中应更新的成员选择，未启用成员仅在显式预设操作中纳入。"""
+        pm = self._manager._preset_manager
+        current = pm.get_preset(preset_id or self._current_preset_id(self._game_id()))
+        if current is None:
+            return {}
+        updates = {
+            mid: selected
+            for mid, selected in selections.items()
+            if mid in current.enabled_mod_ids and (mods[mid].is_enabled or preset_id)
+        }
+        return {current.id: updates} if updates else {}
+
+    def _reference_change(self, updates, add_members=None, *, require_unselected=False):
+        """基于组合文件原件构造引用变更，成员或预设已变动时拒绝提交；此处不写磁盘。"""
+        if not updates:
+            return []
+        pm = self._manager._preset_manager
+        path = getattr(pm, "_presets_file", get_data_dir() / "presets.json")
+        before = read_bytes(path)
+        if before is None:
+            raise OSError(tr("组合预设文件不存在，无法提交变体引用"))
+        data = json.loads(before.decode("utf-8-sig"))
+        seen = set()
+        for record in data["presets"]:
+            change = updates.get(record["id"])
+            if change is None:
+                continue
+            references = record.setdefault("mod_variants", {})
+            if require_unselected and any(references.get(mid) is not None for mid in change):
+                raise ValueError(tr("组合已有命名变体选择，无法跳过外观偏好；原组合已保留：{path}", path=path))
+            for mid, node_id in (add_members or {}).get(record["id"], {}).items():
+                bucket = record["character_mods"].setdefault(node_id, [])
+                if mid not in bucket:
+                    bucket.append(mid)
+            members = {mid for mids in record["character_mods"].values() for mid in mids}
+            if not set(change) <= members:
+                raise ValueError(tr("组合成员在变体操作期间发生变化"))
+            references.update(change)
+            record["updated_at"] = datetime.now(timezone.utc).isoformat()
+            seen.add(record["id"])
+        if seen != set(updates):
+            raise ValueError(tr("组合预设在变体操作期间被删除"))
+        return [FileChange(path, before, json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))]
+
+    def _publish_references(self):
+        """将磁盘已落盘的选择和成员引用同步到预设内存对象，不生成新的持久化写入。"""
+        pm = self._manager._preset_manager
+        path = getattr(pm, "_presets_file", get_data_dir() / "presets.json")
+        raw = read_bytes(path)
+        if raw is None:
+            return
+        for record in json.loads(raw.decode("utf-8-sig")).get("presets", []):
+            preset = pm.get_preset(record["id"])
+            if preset is not None:
+                preset.mod_variants = dict(record.get("mod_variants", {}))
+                preset.updated_at = record.get("updated_at", preset.updated_at)
+                durable = getattr(pm, "_durable_refs", None)
+                if durable is not None and durable.get(preset.id) != record["character_mods"]:
+                    durable[preset.id] = copy.deepcopy(record["character_mods"])
+                    pm._resolve_references(preset)
+
+    def _state_change(self, store, mods, targets, selections, index, *, source="applied", runtime=None):
+        """更新内存工作状态的目标值及来源世代，并以保存前原件构造偏好文件变更。"""
+        now = datetime.now(timezone.utc).isoformat()
+        for mid, values in targets.items():
+            state = store.state_for(mid)
+            state.values = dict(values)
+            state.selected_variant_id = selections[mid]
+            state.declaration_fingerprint = declaration_fingerprint(index, mid)
+            state.deployment_generation = self._deployment_generation(mods[mid])
+            state.capture_generation += 1
+            state.confirmed_keys = tuple(sorted(values))
+            state.captured_at = now
+            state.sources = {
+                key: {
+                    "source": source,
+                    "captured_at": now,
+                    "deployment_generation": state.deployment_generation,
+                    "declaration_fingerprint": state.declaration_fingerprint,
+                    "capture_generation": state.capture_generation,
+                }
+                for key in values
+            }
+        if runtime is not None:
+            store.runtime_file = runtime
+        path = self.prefs_file()
+        return FileChange(
+            path, store.before_image(path), json.dumps(store.to_dict(), ensure_ascii=False, indent=2).encode("utf-8")
+        )
+
+    def _execute(self, mod_ids, changes, *, metadata=None, preset_operation_id=""):
+        """为组合事务补充变体资源保护，然后执行带原件校验的文件变更。"""
+        scope = (
+            self._variant_scope(
+                mod_ids, paths=[c.path for c in changes], excluding=("preset-apply", "preset:" + preset_operation_id)
+            )
+            if preset_operation_id
+            else nullcontext()
+        )
+        with scope:
+            return self._execute_files(mod_ids, changes, metadata=metadata, preset_operation_id=preset_operation_id)
