@@ -981,3 +981,193 @@ class ModVariantManager:
             changes += self._reference_change(references)
             self._execute([mod_id], changes)
             return RestoreOutcome()
+
+    def restore(
+        self,
+        mod_ids: Iterable[str],
+        *,
+        preset_id="",
+        game_id="",
+        patch=None,
+        operation_token="",
+        owner_token="",
+        include_members=False,
+    ):
+        """按组合或私有选择恢复目标配置，可同时加入组合成员；映射不可用且已有偏好时拒绝覆盖。"""
+        wanted = tuple(dict.fromkeys(mod_ids))
+        if not wanted or self.prefs_file(game_id) is None:
+            return RestoreOutcome()
+        with self._command(
+            wanted, allow_preset=bool(preset_id), operation_token=operation_token, owner_token=owner_token
+        ):
+            mods = {mid: self._get_mod(mid) for mid in wanted}
+            store = self.load_prefs(game_id)
+            preset = self._manager._preset_manager.get_preset(preset_id) if preset_id else None
+            selections = {
+                mid: preset.mod_variants.get(mid) if preset is not None else store.state_for(mid).selected_variant_id
+                for mid in mods
+            }
+            if include_members:
+                gid = self._game_id(game_id)
+                current_id = self._current_preset_id(gid)
+                issue = self._runtime_mapping_issue(gid)
+                if issue:
+                    current = self._manager._preset_manager.get_preset(current_id)
+                    if any(
+                        selections[mid] is not None
+                        or store.state_for(mid).values
+                        or store.state_for(mid).confirmed_keys
+                        or store.state_for(mid).sources
+                        or (current is not None and current.mod_variants.get(mid) is not None)
+                        for mid in mods
+                    ):
+                        raise ValueError(
+                            tr("{issue}；此 Mod 已有外观偏好，请修正加载器路径后再启用；原偏好已保留", issue=issue)
+                        )
+                    # 首次部署可不使用运行时偏好，但仍保留资源校验与私有状态原件，防止并发采集被静默重置。
+                    references = self._reference_change(
+                        {current_id: selections},
+                        {current_id: {mid: mod.node_id for mid, mod in mods.items()}},
+                        require_unselected=True,
+                    )
+                    # 读取 INI 前核对磁盘选择并保留原始内容，避免使用过期的预设快照。
+                    index = self.build_index(gid, mods=mods.values(), force=True)
+                    path = self.prefs_file(gid)
+                    before = store.before_image(path)
+                    changes = [*index.source_checks, FileChange(path, before, before)]
+                    changes.extend(references)
+                    self._execute(mods, changes)
+                    self._ini_cache.clear()
+                    return RestoreOutcome(skipped=tuple(mods))
+                return self._apply_targets(
+                    mods,
+                    selections,
+                    references={current_id: selections},
+                    add_members={current_id: {mid: mod.node_id for mid, mod in mods.items()}},
+                )
+            return self._apply_targets(mods, selections, preset_id=preset_id)
+
+    def _plan_mods(self, plan):
+        """将目标组合成员投影为计划执行后的部署状态，成员无法全部定位时抛出 ValueError。"""
+        members = self._preset_members(plan.game_id, plan.to_preset_id)
+        actions = {action.mod_id: action for action in plan.actions}
+        mods = {}
+        for mod in self._manager._index.get_mods_by_ids(members):
+            action = actions.get(mod.mod_id)
+            path = action.active_path if action is not None else mod.deployed_path
+            mods[mod.mod_id] = SimpleNamespace(
+                mod_id=mod.mod_id,
+                game_id=mod.game_id,
+                path=mod.path,
+                content_hash=mod.content_hash,
+                node_id=mod.node_id,
+                folder_name=mod.folder_name,
+                deployed_path=path,
+                is_enabled=True,
+            )
+        if set(mods) != members:
+            raise ValueError(tr("组合中存在无法定位的 Mod"))
+        return mods
+
+    def _prepare_plan(self, plan):
+        """冻结组合目标值、变体原件和源签名，缺失变体退回默认选择并记录待提示成员。"""
+        mods = self._plan_mods(plan)
+        index = self.build_index(plan.game_id, mods=mods.values(), force=True)
+        preset = self._manager._preset_manager.get_preset(plan.to_preset_id)
+        selections, targets, missing, checks, signatures = {}, {}, [], [], {}
+        for mid, mod in mods.items():
+            selected = preset.mod_variants.get(mid)
+            if selected is None:
+                targets[mid] = {}
+                declaration_fingerprint(index, mid)
+            else:
+                disk = ModVariantStore(mod.path)
+                try:
+                    variant, before = disk.get_snapshot(selected)
+                except FileNotFoundError:
+                    missing.append(mid)
+                    selected = None
+                    targets[mid] = {}
+                    declaration_fingerprint(index, mid)
+                else:
+                    targets[mid] = resolve_variant_values(index, mid, variant)
+                    checks.append((disk.path_for(selected), before))
+            selections[mid] = selected
+            signatures[mid] = self._ini_cache[mid][0]
+        prepared = (mods, selections, targets, tuple(missing), checks, signatures)
+        self._prepared[plan.operation_id] = prepared
+        return prepared
+
+    def reserve_preset_operation(self, plan):
+        """为组合切换独占保护源目录、部署路径及配置文件，排除外层组合操作自身的保护令牌。"""
+        registry = getattr(self._manager, "_library_protection", None)
+        if registry is None:
+            return
+        paths = [
+            p
+            for action in plan.actions
+            for p in (Path(action.source_path).parent, action.active_path, action.disabled_path, action.partial_path)
+        ]
+        paths.extend(
+            (
+                self.prefs_file(plan.game_id),
+                self.user_ini_path(plan.game_id),
+                getattr(self._manager._preset_manager, "_presets_file", ""),
+            )
+        )
+        registry.protect(
+            "preset:" + plan.operation_id,
+            paths=paths,
+            mod_ids=[a.mod_id for a in plan.actions],
+            exclusive=True,
+            excluding=("preset-apply",),
+        )
+
+    def release_preset_operation(self, plan):
+        """释放指定组合操作持有的变体资源保护，供成功或回滚后的外层收尾调用。"""
+        registry = getattr(self._manager, "_library_protection", None)
+        if registry is not None:
+            registry.release("preset:" + plan.operation_id)
+
+    def on_preset_apply_before_io(self, plan):
+        """预留资源、采集当前配置并同步 INI 后冻结目标计划，准备失败时释放预留并继续抛出。"""
+        self.reserve_preset_operation(plan)
+        try:
+            self.collect(trigger="preset_apply_before_io", game_id=plan.game_id, allow_preset=True)
+            sync = getattr(self._manager, "_ini_sync", None)
+            if sync is not None:
+                for mod in self._capture_mods(plan.game_id):
+                    sync.reconcile_mod(mod.mod_id)
+            self._prepare_plan(plan)
+        except Exception:
+            self.release_preset_operation(plan)
+            raise
+
+    def on_preset_apply_before_commit(self, plan):
+        """重验冻结原件并应用配置事务，写数据库日志前释放文件锁，返回含缺失引用的恢复结果。"""
+        with prefs.PREFS_LOCK, VARIANT_STORE_LOCK:
+            prepared = self._prepared.get(plan.operation_id) or self._prepare_plan(plan)
+            mods, selections, targets, missing, checks, signatures = prepared
+            for path, before in checks:
+                if read_bytes(path) != before:
+                    raise ValueError(tr("目标变体在组合切换期间发生变化"))
+            for mid, mod in mods.items():
+                if self._source_signature(mod) != signatures[mid]:
+                    raise ValueError(tr("有效 INI 或资源在组合切换期间发生变化"))
+            changes, outcome = self._plan_targets(
+                mods,
+                selections,
+                preset_id=plan.to_preset_id,
+                prepared=targets,
+                extra_changes=[FileChange(p, b, b) for p, b in checks],
+            )
+        # 等待数据库所有者写入日志时释放文件和存储锁，避免与所有者读取形成死锁。
+        self._execute(
+            mods,
+            changes,
+            preset_operation_id=plan.operation_id,
+            metadata={"preset_operation_id": plan.operation_id, "to_preset_id": plan.to_preset_id},
+        )
+        self._ini_cache.clear()
+        outcome.missing = missing
+        return outcome
