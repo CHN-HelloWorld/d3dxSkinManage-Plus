@@ -207,3 +207,117 @@ def read_package_variants(*candidate_dirs: Path) -> tuple[ModVariant, ...]:
                 raise
             raise InvalidVariantPackageError(tr("变体文件无法完整读取：{error}", error=error)) from error
     return found or ()
+
+
+def validate_folder_variant_roots(body: Path) -> None:
+    """嵌套分享元数据不能被静默当作普通 Mod 内容。"""
+
+    def unreadable(error):
+        """将目录遍历失败继续抛出，防止不完整的变体根检查被接受。"""
+        raise error
+
+    for root, directories, _files in os.walk(fs.native_path(body), onerror=unreadable):
+        metadata = [name for name in directories if name.casefold() == META_DIR]
+        if not metadata:
+            continue
+        directories[:] = [name for name in directories if name not in metadata]
+        folder = Path(fs.normal_path(root))
+        if folder != body and read_package_variants(folder):
+            raise InvalidVariantPackageError(tr("文件夹变体所在目录不是唯一 Mod 资源根目录"))
+
+
+def _original_ini_paths(body: Path) -> list[str]:
+    """枚举失败不能视为完整的空快照。"""
+    if fs.is_file(body) and is_resident_archive(body):
+        from src.services.archive import ArchiveService
+
+        names = [name.replace("\\", "/") for name in ArchiveService().list_contents(body)]
+        if not names:
+            raise ValueError(tr("无法完整读取同包归档的成员清单"))
+        content_names = [name for name in names if META_DIR not in name.casefold().split("/")]
+        top = _detect_single_top(set(content_names))
+        paths = [
+            name[len(top) + 1 :] if top and name.startswith(top + "/") else name
+            for name in content_names
+            if name.casefold().endswith(".ini")
+        ]
+    else:
+        if not fs.is_dir(body):
+            raise ValueError(tr("同包资源本体不存在"))
+        paths = []
+
+        def unreadable(error):
+            """传播原始 INI 目录遍历错误，确保返回的文件集合完整。"""
+            raise error
+
+        for root, directories, files in os.walk(fs.native_path(body), onerror=unreadable):
+            directories[:] = [name for name in directories if name.casefold() != META_DIR]
+            paths.extend(
+                (Path(fs.normal_path(root)) / name).relative_to(body).as_posix()
+                for name in files
+                if name.casefold().endswith(".ini")
+            )
+    normalized = [normalize_ini_path(path).casefold() for path in paths]
+    if len(normalized) != len(set(normalized)):
+        raise ValueError(tr("同包资源存在重复或大小写冲突的 INI 路径"))
+    return normalized
+
+
+def validate_package_variants(body: str | Path, variants: tuple[ModVariant, ...]) -> None:
+    """仅绑定包内原始 INI，不依赖部署目录。"""
+    if not variants:
+        return
+    from src.core.variant_configuration import original_inis
+
+    try:
+        expected = _original_ini_paths(Path(fs.normal_path(body)))
+        inis = original_inis(str(body))
+        actual = [name.casefold() for name, _text in inis]
+        if len(actual) != len(set(actual)) or sorted(expected) != sorted(actual):
+            raise ValueError(tr("无法完整读取同包资源的 INI 声明"))
+        identity = "portable-variant-owner"
+        index = build_attribution_index((ModIniSource(identity, inis, r"mods\__portable__"),))
+        for variant in variants:
+            resolve_variant_values(index, identity, variant)
+    except (OSError, ValueError) as error:
+        raise InvalidVariantPackageError(tr("变体与同包 Mod 资源不兼容：{error}", error=error)) from error
+
+
+def stage_imported_variants(
+    mod_path: str | Path, variants: tuple[ModVariant, ...], *, occupied: tuple[ModVariant, ...] = ()
+) -> tuple[ModVariant, ...]:
+    """在新建或临时容器中追加已验证副本，并核对每次写入。"""
+    if not variants:
+        return ()
+    store = ModVariantStore(mod_path)
+    with VARIANT_STORE_LOCK:
+        existing = tuple(store.list()) + tuple(occupied)
+        used_ids = {variant.variant_id.casefold() for variant in (*existing, *variants)}
+        used_names = {variant.name.casefold() for variant in existing}
+        imported = []
+        for variant in variants:
+            for _ in range(64):
+                identity = store.new_id()
+                if identity.casefold() not in used_ids:
+                    break
+            else:
+                raise InvalidVariantPackageError(tr("无法为导入变体分配新的本地身份"))
+            name, number = variant.name, 2
+            while name.casefold() in used_names:
+                name = f"{variant.name} ({number})"
+                number += 1
+            clone = replace(variant, variant_id=identity, name=name)
+            store.save(clone)
+            if store.get(identity) != clone:
+                raise InvalidVariantPackageError(tr("导入变体写入后校验失败"))
+            imported.append(clone)
+            used_ids.add(identity.casefold())
+            used_names.add(name.casefold())
+        return tuple(imported)
+
+
+def verify_variant_files(mod_path: str | Path, expected: tuple[ModVariant, ...]) -> None:
+    """准备的变体集合发生变化时禁止发布导入或更新。"""
+    actual = {variant.variant_id: variant for variant in ModVariantStore(mod_path).list()}
+    if actual != {variant.variant_id: variant for variant in expected}:
+        raise InvalidVariantPackageError(tr("已准备的变体文件发生变化或缺失，已取消提交"))
