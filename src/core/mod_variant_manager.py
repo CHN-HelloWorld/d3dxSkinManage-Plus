@@ -288,3 +288,97 @@ class ModVariantManager:
     def _source_signature(self, mod):
         """组合资源哈希与有效 INI 清单版本，作为声明缓存复用的校验依据。"""
         return (mod.content_hash, inspect_effective_inis(mod.path))
+
+    def build_index(self, game_id: str = "", *, mods=None, force=False) -> AttributionIndex:
+        """构建变量归属索引及源文件校验原件；读取期间内容变化或重复路径校验冲突时抛出异常。"""
+        gid = self._game_id(game_id)
+        mods = self._capture_mods(gid) if mods is None else list(mods)
+        prefix = self._deploy_root_prefix(gid)
+        sources, checks = [], []
+        for mod in mods:
+            signature = self._source_signature(mod)
+            cached = self._ini_cache.get(mod.mod_id)
+            if force or cached is None or cached[0] != signature:
+                inventory = signature[1]
+                archive = (
+                    read_bytes(inventory.path)
+                    if not stat.S_ISDIR(inventory.body_version[0]) and inventory.seed_version is None
+                    else None
+                )
+                inis = signature[1].read()
+                guards = [IniInventoryGuard.source(inventory)]
+                overridden = {rel for rel, _ in inventory.overrides}
+                for rel, text in inis:
+                    raw = text.encode("utf-8", errors="surrogateescape")
+                    if rel in overridden:
+                        guards.append(FileChange(inventory.override_root / rel, raw, raw))
+                    else:
+                        if stat.S_ISDIR(inventory.body_version[0]):
+                            guards.append(FileChange(inventory.path / rel, raw, raw))
+                        override = override_path_for(mod.path, rel)
+                        if override is not None:
+                            guards.append(FileChange(override, None, None))
+                if archive is not None:
+                    guards.append(FileChange(inventory.path, archive, archive))
+                # 等长修改可能具有相同时间戳，缓存前核对实际内容；
+                # 再次读取仅用于比较，不替换已有基线。
+                for guard in guards:
+                    if isinstance(guard, FileChange) and read_bytes(guard.path) != guard.before:
+                        raise OSError(tr("有效 INI 在读取期间发生变化，请重试：{path}", path=guard.path))
+                if self._source_signature(mod) != signature:
+                    raise OSError(tr("有效 INI 在索引读取期间发生变化"))
+                self._ini_cache[mod.mod_id] = (signature, inis, tuple(guards))
+            else:
+                inis = cached[1]
+            checks.extend(self._ini_cache[mod.mod_id][2])
+            if mod.is_enabled and mod.deployed_path:
+                # 成员范围来自原始声明输入，避免后续扫描错误接纳部署侧新增内容。
+                checks.append(IniInventoryGuard.deployed(mod.deployed_path, (rel for rel, _ in inis)))
+                for rel, text in inis:
+                    raw = text.encode("utf-8", errors="surrogateescape")
+                    checks.append(FileChange(Path(mod.deployed_path) / rel, raw, raw))
+            sources.append(ModIniSource(mod.mod_id, inis, self._implicit_prefix(mod, prefix)))
+        index = build_attribution_index(sources)
+        unique = {}
+        for check in checks:
+            key = (type(check), os.path.normcase(os.path.abspath(check.path)))
+            if key in unique and unique[key] != check:
+                raise ValueError(tr("声明源文件存在冲突的读取结果"))
+            unique[key] = check
+        return ConfigurationIndex(**vars(index), source_checks=tuple(unique.values()))
+
+    def _index_for(self, mod, *, force=False):
+        """为目标构建声明索引；目标已启用时纳入其他有效部署，以识别共享命名空间冲突。"""
+        mods = self._capture_mods(mod.game_id) if mod.is_enabled else [mod]
+        if mod.mod_id not in {item.mod_id for item in mods}:
+            mods.append(mod)
+        return self.build_index(mod.game_id, mods=mods, force=force)
+
+    def load_prefs(self, game_id: str = ""):
+        """读取指定游戏的工作状态；无法定位存储路径时返回 None，格式及读取错误由存储层报告。"""
+        path = self.prefs_file(game_id)
+        return prefs.load(path) if path is not None else None
+
+    def save_prefs(self, store, game_id: str = "") -> bool:
+        """将工作状态交给偏好存储持久化，路径不可用或保存失败时返回 False。"""
+        path = self.prefs_file(game_id)
+        return path is not None and prefs.save(path, store)
+
+    def _current_preset_id(self, game_id):
+        """优先读取索引中的当前预设 ID，缺失时由预设管理器取得当前预设。"""
+        current = self._manager._index.get_current_preset_id(game_id)
+        if current:
+            return current
+        return self._manager._preset_manager.get_current(game_id).id
+
+    def _preset_members(self, game_id, preset_id):
+        """取得指定游戏预设的启用成员集合，预设不存在或游戏不符时返回空集合。"""
+        preset = self._manager._preset_manager.get_preset(preset_id)
+        return set(preset.enabled_mod_ids) if preset is not None and preset.game_id == game_id else set()
+
+    def _notify(self, mod_ids, game_id=""):
+        """对去重后的 Mod ID 发布变体状态事件，事件携带明确的游戏身份。"""
+        emit = getattr(self._manager, "_emit", None)
+        if callable(emit):
+            for mod_id in dict.fromkeys(mod_ids):
+                emit("variant_state_changed", mod_id=mod_id, game_id=self._game_id(game_id))
