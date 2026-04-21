@@ -495,3 +495,244 @@ class PresetManager(QObject):
         self.preset_list_changed.emit()
         logger.info("预设已创建: %s (%s)", clean_name, preset_id)
         return p
+
+    @library_mutation
+    def delete_preset(self, preset_id: str) -> bool:
+        """删除预设；默认预设拒绝删除"""
+        p = self._presets.get(preset_id)
+        if not p:
+            return False
+        if p.is_default:
+            logger.warning("拒绝删除默认预设: %s", preset_id)
+            return False
+        del self._presets[preset_id]
+        self._durable_refs.pop(preset_id, None)
+        self._resolved_refs.pop(preset_id, None)
+        self._save()
+        self.garbage_collect_deployments(p.game_id)
+        self.preset_list_changed.emit()
+        logger.info("预设已删除: %s", preset_id)
+        return True
+
+    def prepare_preset_metadata(self, game_id, operation, *, preset_id="", name=None, description=None):
+        """冻结元数据修改，交给独立的文件暂存操作。"""
+        from types import SimpleNamespace
+
+        from src.core.preset_delete import PreparedPresetDelete, StalePresetDelete, file_version
+
+        if not game_id or self.has_pending_apply(game_id):
+            raise ValueError(tr("宿主正在处理其他 Mod 任务，请稍后重试"))
+        token, version = self._cascade_delete_token(), file_version(self._presets_file)
+        source = self.get_preset(preset_id) if preset_id else None
+        if operation != "create" and (source is None or source.game_id != game_id):
+            raise ValueError(tr("预设不存在或不属于当前游戏"))
+        if operation == "duplicate" and name is None:
+            name = self.generate_unique_name(game_id, source.display_name + tr(" 副本"))
+        if operation in {"create", "duplicate", "rename"}:
+            name = (name or "").strip()
+            if not name:
+                raise ValueError(tr("预设名称不能为空"))
+        now = datetime.now().isoformat()
+        if operation in {"create", "duplicate"}:
+            changed = Preset(
+                id=str(uuid.uuid4())[:8],
+                game_id=game_id,
+                name=name,
+                description=(source.description if source else description or ""),
+                character_mods=copy.deepcopy(source.character_mods) if source else {},
+                mod_variants=copy.deepcopy(source.mod_variants) if source else {},
+                created_at=now,
+                updated_at=now,
+            )
+        elif operation in {"rename", "update_description"}:
+            changed = copy.deepcopy(source)
+            if operation == "rename":
+                changed.name = name
+            else:
+                changed.description = description
+            changed.updated_at = now
+        else:
+            raise ValueError(tr("未知操作: {operation}", operation=operation))
+        shadow = SimpleNamespace(
+            _durable_refs=copy.deepcopy(self._durable_refs), _resolved_refs=copy.deepcopy(self._resolved_refs)
+        )
+        snapshots = dict(self._presets)
+        snapshots[changed.id] = changed
+        records = []
+        for pid, preset in snapshots.items():
+            if (
+                pid not in shadow._durable_refs
+                or pid not in shadow._resolved_refs
+                or preset.character_mods != shadow._resolved_refs[pid]
+            ):
+                PresetManager._capture_references(shadow, preset)
+            record = preset.to_dict()
+            record["character_mods"] = shadow._durable_refs[pid]
+            record["mod_variants"] = {
+                mid: preset.mod_variants.get(mid) for mids in shadow._durable_refs[pid].values() for mid in mids
+            }
+            records.append(record)
+        if self._cascade_delete_token() != token or file_version(self._presets_file) != version:
+            raise StalePresetDelete(tr("预设已经变化，请重试"))
+        temporary = self._presets_file.with_name(f".{self._presets_file.name}.metadata-{uuid.uuid4().hex}.tmp")
+        return PreparedPresetDelete(
+            id(self),
+            "",
+            game_id,
+            self._presets_file,
+            temporary,
+            token,
+            version,
+            {"version": SCHEMA_VERSION, "presets": records},
+            {changed.id: changed},
+            {},
+            shadow._durable_refs,
+            shadow._resolved_refs,
+        )
+
+    @library_mutation
+    def commit_preset_metadata(self, candidate, *, copied_from=""):
+        """原子安装暂存内容，再发布发生变化的模型。"""
+        from src.core.preset_delete import StalePresetDelete, discard_prepared_preset_delete, file_version
+
+        try:
+            if (
+                candidate.owner_id != id(self)
+                or candidate.committed
+                or candidate.cancelled.is_set()
+                or self._cascade_delete_token() != candidate.token
+                or self.has_pending_apply(candidate.game_id)
+                or file_version(self._presets_file) != candidate.target_version
+                or not candidate.written.is_set()
+                or candidate.staged_version is None
+                or file_version(candidate.temporary) != candidate.staged_version
+            ):
+                raise StalePresetDelete(tr("预设已经变化，请重试"))
+            (changed,) = candidate.runtime.values()
+            os.replace(candidate.temporary, candidate.target)
+            live = self._presets.get(changed.id)
+            if live is None:
+                self._presets[changed.id] = changed
+            else:
+                live.name, live.description, live.updated_at = changed.name, changed.description, changed.updated_at
+            self._durable_refs, self._resolved_refs = candidate.durable, candidate.resolved
+            candidate.committed = True
+        except BaseException:
+            discard_prepared_preset_delete(candidate)
+            raise
+        self.preset_list_changed.emit()
+        return changed.id
+
+    def prepare_delete_presets(self, preset_ids, game_id):
+        """冻结批量删除候选，不修改活动预设或扫描文件。"""
+        from types import SimpleNamespace
+
+        from src.core.preset_delete import PreparedPresetDelete, StalePresetDelete, file_version
+
+        ids = tuple(dict.fromkeys(preset_ids))
+        if not ids:
+            raise ValueError(tr("请先选择要删除的预设"))
+        for pid in ids:
+            preset = self.get_preset(pid)
+            if preset is None or preset.game_id != game_id or preset.is_default:
+                raise ValueError(tr("所选预设已变化，默认预设不能删除"))
+        if self.get_current(game_id).id in ids or self.has_pending_apply(game_id):
+            raise ValueError(tr("请先完成默认预设的切换，再删除当前预设"))
+        token = self._cascade_delete_token()
+        version = file_version(self._presets_file)
+        shadow = SimpleNamespace(
+            _durable_refs=copy.deepcopy(self._durable_refs), _resolved_refs=copy.deepcopy(self._resolved_refs)
+        )
+        records = []
+        for pid, live in self._presets.items():
+            if pid in ids:
+                shadow._durable_refs.pop(pid, None)
+                shadow._resolved_refs.pop(pid, None)
+                continue
+            preset = copy.deepcopy(live)
+            if (
+                pid not in shadow._durable_refs
+                or pid not in shadow._resolved_refs
+                or preset.character_mods != shadow._resolved_refs[pid]
+            ):
+                PresetManager._capture_references(shadow, preset)
+            record = preset.to_dict()
+            record["character_mods"] = shadow._durable_refs[pid]
+            record["mod_variants"] = {
+                mid: preset.mod_variants.get(mid) for mids in shadow._durable_refs[pid].values() for mid in mids
+            }
+            records.append(record)
+        referenced = {
+            mid
+            for record in records
+            if record["game_id"] == game_id
+            for mids in record["character_mods"].values()
+            for mid in mids
+        }
+        cleanup = tuple(
+            record
+            for record in self._get_index().get_deployments(game_id)
+            if record.state == DeploymentState.DISABLED and record.actual_path and record.mod_id not in referenced
+        )
+        if self._cascade_delete_token() != token or file_version(self._presets_file) != version:
+            raise StalePresetDelete(tr("准备删除时预设已发生变化，请重试"))
+        temporary = self._presets_file.with_name(f".{self._presets_file.name}.delete-{uuid.uuid4().hex}.tmp")
+        return PreparedPresetDelete(
+            id(self),
+            "",
+            game_id,
+            self._presets_file,
+            temporary,
+            token,
+            version,
+            {"version": SCHEMA_VERSION, "presets": records},
+            {},
+            {},
+            shadow._durable_refs,
+            shadow._resolved_refs,
+            removed_presets=ids,
+            cleanup_records=cleanup,
+        )
+
+    @library_mutation
+    def commit_delete_presets(self, candidate):
+        """核对候选所有者、取消状态、文件版本和当前预设后发布删除结果。
+
+        原子替换已写完的暂存文件后同步内存集合；提交前任一条件不符时丢弃候选并抛出异常。"""
+        from src.core.preset_delete import StalePresetDelete, discard_prepared_preset_delete, file_version
+
+        try:
+            if (
+                candidate.owner_id != id(self)
+                or candidate.committed
+                or candidate.cancelled.is_set()
+                or self._cascade_delete_token() != candidate.token
+                or file_version(self._presets_file) != candidate.target_version
+                or self.get_current(candidate.game_id).id in candidate.removed_presets
+            ):
+                raise StalePresetDelete(tr("预设已经变化，本次未删除，请重试"))
+            if (
+                not candidate.written.is_set()
+                or candidate.staged_version is None
+                or file_version(candidate.temporary) != candidate.staged_version
+            ):
+                raise StalePresetDelete(tr("预设文件尚未写入完成"))
+            os.replace(candidate.temporary, candidate.target)
+            for pid in candidate.removed_presets:
+                self._presets.pop(pid, None)
+            self._durable_refs, self._resolved_refs = candidate.durable, candidate.resolved
+            candidate.committed = True
+        except BaseException:
+            discard_prepared_preset_delete(candidate)
+            raise
+        self.preset_list_changed.emit()
+
+    @library_mutation
+    def publish_deleted_preset_deployments(self, records, game_id):
+        """仅对仍与清理快照一致的部署记录写入缺失状态，避免覆盖并发变化。"""
+        index = self._get_index()
+        current = {record.mod_id: record for record in index.get_deployments(game_id)}
+        with index.transaction():
+            for record in records:
+                if current.get(record.mod_id) == record:
+                    index.upsert_deployment(DeploymentRecord(record.mod_id), commit=False)
