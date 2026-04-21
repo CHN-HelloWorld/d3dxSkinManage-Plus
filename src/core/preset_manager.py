@@ -736,3 +736,94 @@ class PresetManager(QObject):
             for record in records:
                 if current.get(record.mod_id) == record:
                     index.upsert_deployment(DeploymentRecord(record.mod_id), commit=False)
+
+    @library_mutation
+    def update_preset_meta(
+        self,
+        preset_id: str,
+        name: str | None = None,
+        description: str | None = None,
+    ) -> bool:
+        """更新预设的 name/description（不动 character_mods）"""
+        p = self._presets.get(preset_id)
+        if not p:
+            return False
+        if name is not None:
+            clean = name.strip()
+            if not clean:
+                return False
+            p.name = clean
+        if description is not None:
+            p.description = description
+        p.updated_at = datetime.now().isoformat()
+        self._save()
+        self.preset_list_changed.emit()
+        return True
+
+    def generate_unique_name(self, game_id: str, base: str) -> str:
+        """生成不与同游戏现有预设重名的名称。
+
+        优先返回 base；冲突时尝试 "base 2"、"base 3"...
+        若 base 末尾是 " N" 形式则递增 N。
+        """
+        existing = {p.name for p in self.get_all_presets(game_id)}
+        if base not in existing:
+            return base
+        # 提取尾部数字（如 "新建预设 2" 提取出 2）
+        import re
+
+        m = re.match(r"^(.*?)\s*(\d+)$", base)
+        if m:
+            root = m.group(1).rstrip() or base
+            n = int(m.group(2)) + 1
+        else:
+            root = base
+            n = 2
+        while f"{root} {n}" in existing:
+            n += 1
+        return f"{root} {n}"
+
+    # 自动同步
+
+    def variant_references(self, mod_id: str, variant_id: str) -> list[Preset]:
+        """列出引用指定 Mod 变体的全部预设。"""
+        return [p for p in self._presets.values() if p.mod_variants.get(mod_id) == variant_id]
+
+    @library_mutation
+    def set_mod_variant(self, preset_id: str, mod_id: str, variant_id: str | None) -> None:
+        """为预设已启用成员设置变体引用，保存失败时恢复旧映射。"""
+        preset = self._presets[preset_id]
+        if mod_id not in preset.enabled_mod_ids:
+            raise ValueError(tr("只能为组合中的启用 Mod 设置变体引用"))
+        before = dict(preset.mod_variants)
+        preset.mod_variants[mod_id] = variant_id
+        try:
+            self._save()
+        except Exception:
+            preset.mod_variants = before
+            raise
+
+    @library_mutation
+    def sync_mod_state(self, mod: Mod, game_id: str) -> None:
+        """根据 mod.status 更新当前预设；无 character_id 则跳过"""
+        if not mod or not mod.node_id:
+            return
+        if self.has_pending_apply(game_id):
+            logger.debug("预设切换事务期间忽略自动状态回写: %s", mod.mod_id)
+            return
+        cur = self.get_current(game_id)
+        if mod.is_enabled:
+            cur.add_mod_for_character(mod.node_id, mod.mod_id)
+        else:
+            cur.remove_mod(mod.mod_id)
+        self._save()
+
+    @library_mutation
+    def strip_mod_ids(self, mod_ids: list[str], game_id: str) -> None:
+        """从当前预设批量移除 mod_id（用于 enforce_single_mod 副作用）"""
+        if not mod_ids:
+            return
+        cur = self.get_current(game_id)
+        for mid in mod_ids:
+            cur.remove_mod(mid)
+        self._save()
