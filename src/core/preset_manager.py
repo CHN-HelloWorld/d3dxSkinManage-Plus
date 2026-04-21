@@ -402,3 +402,96 @@ class PresetManager(QObject):
         self.preset_list_changed.emit()
         logger.info("默认预设已创建: %s", game_id)
         return p
+
+    # 查询
+
+    def get_preset(self, preset_id: str) -> Preset | None:
+        """按预设编号返回内存对象，不存在时返回 None。"""
+        return self._presets.get(preset_id)
+
+    def get_all_presets(self, game_id: str) -> list[Preset]:
+        """返回该游戏的预设列表；默认预设排第一"""
+        ps = [p for p in self._presets.values() if p.game_id == game_id]
+        ps.sort(key=lambda p: (0 if p.is_default else 1, p.created_at))
+        return ps
+
+    def get_unresolved_mod_ids(self, preset_id: str) -> tuple[str, ...]:
+        """返回尚未解析的持久引用，不将未保存的成员移除误判为资源缺失。"""
+        preset = self._presets.get(preset_id)
+        if preset is None:
+            return ()
+        represented = {mid for mids in self._resolved_refs.get(preset_id, {}).values() for mid in mids}
+        represented.update(preset.enabled_mod_ids)
+        return tuple(
+            dict.fromkeys(
+                mid for mids in self._durable_refs.get(preset_id, {}).values() for mid in mids if mid not in represented
+            )
+        )
+
+    @library_mutation
+    def purge_game(self, game_id: str) -> int:
+        """删除某游戏的**全部**预设（含默认预设）。删除游戏时用，返回删除条数。
+
+        与 :meth:`delete_preset` 的差别：那条路刻意拒绝删默认预设（默认预设是运行期
+        不变量），而游戏本身都要消失了，默认预设留着就是垃圾。
+        """
+        victims = [pid for pid, p in self._presets.items() if p.game_id == game_id]
+        for pid in victims:
+            self._presets.pop(pid, None)
+            self._durable_refs.pop(pid, None)
+            self._resolved_refs.pop(pid, None)
+        if victims:
+            self._save()
+            logger.info("已删除游戏 %s 的 %d 个预设", game_id, len(victims))
+        return len(victims)
+
+    def get_current(self, game_id: str) -> Preset:
+        """读取当前激活预设；若未设或指向不存在的 preset，回落到默认"""
+        cur_id = self._game_store.get_current_preset_id(game_id)
+        if cur_id and cur_id in self._presets:
+            return self._presets[cur_id]
+        default = self.ensure_default(game_id)
+        self._game_store.set_current_preset_id(game_id, default.id)
+        return default
+
+    # 预设增删改查。
+
+    @library_mutation
+    def create_preset(
+        self,
+        game_id: str,
+        name: str,
+        snapshot: dict[str, list[str]] | None = None,
+        description: str = "",
+        copied_from: str = "",
+    ) -> Preset:
+        """创建非默认预设，并深拷贝 snapshot 中的启用集合。
+
+        copied_from 指向已有预设时，复制所选 Mod 的命名变体引用；其余引用使用默认配置。
+        """
+        if not game_id:
+            raise ValueError(tr("game_id 必填"))
+        clean_name = (name or "").strip()
+        if not clean_name:
+            raise ValueError(tr("name 不能为空"))
+        preset_id = str(uuid.uuid4())[:8]
+        cm = copy.deepcopy(snapshot) if snapshot else {}
+        now = datetime.now().isoformat()
+        p = Preset(
+            id=preset_id,
+            name=clean_name,
+            description=description,
+            game_id=game_id,
+            is_default=False,
+            character_mods=cm,
+            mod_variants={mid: self._presets[copied_from].mod_variants.get(mid) for mids in cm.values() for mid in mids}
+            if copied_from in self._presets
+            else {mid: None for mids in cm.values() for mid in mids},
+            created_at=now,
+            updated_at=now,
+        )
+        self._presets[preset_id] = p
+        self._save()
+        self.preset_list_changed.emit()
+        logger.info("预设已创建: %s (%s)", clean_name, preset_id)
+        return p
