@@ -277,3 +277,128 @@ class PresetManager(QObject):
             except OSError:
                 pass
             raise
+
+    def _capture_references(self, preset: Preset, mods=None) -> None:
+        """保存运行时修改，同时保留空索引暂时无法解析的引用。"""
+        represented = {mid for mids in self._resolved_refs.get(preset.id, {}).values() for mid in mids}
+        durable = {
+            cid: [identity for identity in identities if identity not in represented]
+            for cid, identities in self._durable_refs.get(preset.id, {}).items()
+        }
+        for cid, mids in preset.character_mods.items():
+            bucket = durable.setdefault(cid, [])
+            included = set(bucket)
+            for mid in mids:
+                validate_mod_id(mid)
+                if mid not in included:
+                    bucket.append(mid)
+                    included.add(mid)
+        self._durable_refs[preset.id] = {cid: refs for cid, refs in durable.items() if refs}
+        self._resolved_refs[preset.id] = {cid: list(mids) for cid, mids in preset.character_mods.items()}
+
+    def _resolve_references(self, preset: Preset, mods=None) -> None:
+        """按当前 Mod 身份与分类重新解析持久引用，更新预设成员及解析快照。"""
+        if mods is None:
+            mods = self._read_plan_mods(preset.game_id)
+        by_identity = {mod.mod_id: mod for mod in mods}
+        resolved: dict[str, list[str]] = {}
+        for identities in self._durable_refs.get(preset.id, {}).values():
+            for identity in identities:
+                mod = by_identity.get(identity)
+                if mod is not None:
+                    bucket = resolved.setdefault(mod.node_id or "", [])
+                    if mod.mod_id not in bucket:
+                        bucket.append(mod.mod_id)
+        preset.character_mods = resolved
+        self._resolved_refs[preset.id] = copy.deepcopy(resolved)
+
+    def refresh_references(self, game_id: str, mod_ids) -> None:
+        """投影重建后刷新可用性，不重写用户选择。"""
+        from types import SimpleNamespace
+
+        changed = set(mod_ids)
+        if not changed:
+            return
+        current = {}
+        index = self._get_index()
+        ids = tuple(changed)
+        for offset in range(0, len(ids), 500):
+            batch = ids[offset : offset + 500]
+            marks = ",".join("?" for _ in batch)
+            for identity, node_id in index._db().execute(
+                f"SELECT mod_id,node_id FROM mods WHERE game_id=? AND mod_id IN ({marks})", (game_id, *batch)
+            ):
+                current[identity] = SimpleNamespace(mod_id=identity, node_id=node_id)
+        for preset in self.get_all_presets(game_id):
+            references = self._durable_refs.get(preset.id, {})
+            if not any(changed.intersection(values) for values in references.values()):
+                continue
+            available = {
+                identity: SimpleNamespace(mod_id=identity, node_id=node_id)
+                for node_id, values in preset.character_mods.items()
+                for identity in values
+                if identity not in changed
+            }
+            available.update(current)
+            self._resolve_references(preset, tuple(available.values()))
+
+    def _read_plan_mods(self, game_id: str) -> tuple[_PresetMod, ...]:
+        """规划字段独立且不可变，使用时才解析资源路径。"""
+        try:
+            index = self._get_index()
+            cursor = index._db().execute(
+                "SELECT m.mod_id,m.node_id,m.folder_name,COALESCE(d.state,'absent') "
+                "FROM mods m LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+                "WHERE m.game_id=? ORDER BY m.name",
+                (game_id,),
+            )
+            try:
+                return tuple(
+                    _PresetMod(
+                        row[0],
+                        row[1],
+                        row[2],
+                        ModStatus.ENABLED if row[3] == "active" else ModStatus.DISABLED,
+                        index.paths.body_path,
+                    )
+                    for row in cursor.fetchall()
+                )
+            finally:
+                cursor.close()
+        except sqlite3.Error as e:
+            # 索引尚待恢复时保留未解析的持久引用，避免加载预设提前失败。
+            logger.error("获取预设 Mod 投影失败: %s", e)
+            return ()
+
+    # 默认预设
+
+    def ensure_default(self, game_id: str) -> Preset:
+        """幂等创建该游戏的默认预设"""
+        if not game_id:
+            raise ValueError(tr("game_id 必填"))
+        default_id = f"default_{game_id}"
+        existing = self._presets.get(default_id)
+        if existing:
+            return existing
+        return self._create_default(game_id)
+
+    @library_mutation
+    def _create_default(self, game_id: str) -> Preset:
+        """为游戏创建固定身份的默认预设，保存后发送列表变化通知。"""
+        default_id = f"default_{game_id}"
+        now = datetime.now().isoformat()
+        p = Preset(
+            id=default_id,
+            name=DEFAULT_PRESET_NAME,
+            description="",
+            game_id=game_id,
+            is_default=True,
+            character_mods={},
+            created_at=now,
+            updated_at=now,
+        )
+        self._presets[default_id] = p
+        self._save()
+        self.preset_list_changed.emit()
+        logger.info("默认预设已创建: %s", game_id)
+        return p
