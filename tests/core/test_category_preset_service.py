@@ -408,3 +408,539 @@ def test_publication_failure_after_one_directory_rolls_back_all(manager, tmp_pat
     assert not snapshot(manager)
     service.discard(plan)
     assert not plan.staging.exists()
+
+
+def test_prepare_failure_cleans_only_operation_staging_and_allows_retry(manager, tmp_path, monkeypatch):
+    image = tmp_path / "image.png"
+    Image.new("RGB", (2, 2), "red").save(image)
+    import hashlib
+
+    import src.core.category_preset_service as module
+
+    image_id = hashlib.sha256(image.read_bytes()).hexdigest()
+    source = preset(tmp_path, [node("重试", image_id=image_id)], {image_id: image})
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(source, "game_a")
+    original = module.copy_category_preset_image
+
+    def fail(*args, **kwargs):
+        raise OSError("image copy disk full")
+
+    monkeypatch.setattr(module, "copy_category_preset_image", fail)
+    with pytest.raises(OSError):
+        service.execute_import(plan)
+    monkeypatch.setattr(module, "copy_category_preset_image", original)
+    assert service.execute_import(service.recompare(plan)).new_count == 1
+
+
+def test_export_cleanup_exception_after_publish_still_returns_real_success(manager, tmp_path, monkeypatch):
+    manager.add_character(name="已导出")
+    service = CategoryPresetService(manager)
+    plan = service.preview_export("game_a")
+
+    def fail(*args):
+        raise OSError("cleanup busy")
+
+    monkeypatch.setattr(service, "discard", fail)
+    result = service.execute_export(plan, tmp_path, "成功")
+    assert read_category_preset(result.path).nodes[0].path == "已导出"
+
+
+def test_export_picture_roundtrip_deduplicates_bytes_and_rejects_later_changes(manager, tmp_path):
+    image = tmp_path / "image.png"
+    Image.new("RGB", (2, 2), "green").save(image)
+    first = manager.add_character(name="一")
+    second = manager.add_character(name="二")
+    assert manager.update_character_thumbnail(first.id, str(image))
+    assert manager.update_character_thumbnail(second.id, str(image))
+    service = CategoryPresetService(manager)
+    plan = service.preview_export("game_a")
+    assert plan.image_count == 1 and plan.image_bytes == len(image.read_bytes())
+    result = service.execute_export(plan, tmp_path, "带图")
+    document = read_category_preset(result.path)
+    assert len(document.images) == 1 and len(document.nodes) == 2
+    target = service.preview_import(result.path, "other")
+    assert target.new_image_count == 2
+    service.execute_import(target)
+    plan = service.preview_export("game_a")
+    Path(plan.image_sources[0][0]).write_bytes(b"changed")
+    with pytest.raises(CategoryPresetError):
+        service.execute_export(plan, tmp_path, "不发布")
+    assert not (tmp_path / "不发布.d3dxcp").exists()
+
+
+def test_staging_rejected_when_data_directory_becomes_a_deployment_root(manager, tmp_path):
+    source = preset(tmp_path, [node("拒绝")])
+    games = manager._game_service._store.get_games()
+    games[0]["mods_path"] = str(manager._index._db_path.parent)
+    manager._game_service._store.set_games(games)
+    with pytest.raises(CategoryPresetError):
+        CategoryPresetService(manager).preview_import(source, "game_a")
+
+
+def test_unresolved_startup_recovery_is_reported_and_keeps_protection(manager, tmp_path, monkeypatch):
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("外部")]), "game_a")
+
+    def crash(*args):
+        raise SimulatedCrash()
+
+    monkeypatch.setattr(service, "_commit_import", crash)
+    with pytest.raises(SimulatedCrash):
+        service.execute_import(plan)
+    marker = plan.target.root / "外部" / CATEGORY_MARKER_FILE
+    marker.write_text("external")
+    manager._index.close()
+    ModManager._instance = None
+    restarted = ModManager()
+    assert str(marker) in restarted.category_preset_recovery_errors
+    assert restarted.is_library_path_protected(marker)
+    assert restarted._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 1
+    restarted._index.close()
+
+
+def test_collision_publication_does_not_replace_competing_process_file(manager, tmp_path, monkeypatch):
+    manager.add_character(name="分类")
+    import src.core.category_preset_service as module
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_export("game_a")
+    publish = module.rename_exclusive
+
+    def compete(source, target):
+        if target.name == "竞争.d3dxcp":
+            target.write_bytes(b"other process")
+        return publish(source, target)
+
+    monkeypatch.setattr(module, "rename_exclusive", compete)
+    result = service.execute_export(plan, tmp_path, "竞争")
+    assert (tmp_path / "竞争.d3dxcp").read_bytes() == b"other process"
+    assert result.path.name == "竞争 (1).d3dxcp"
+
+
+@pytest.mark.parametrize("cancel", [False, True])
+def test_live_import_completion_keeps_fixed_preview_for_repeat_or_cancel_retry(manager, tmp_path, cancel):
+    from src.core.category_preset import CategoryPresetCancelled
+
+    service = CategoryPresetService(manager)
+    source = preset(tmp_path, [node("再次")])
+    plan = service.preview_import(source, "game_a")
+    stop = False
+
+    def progress(phase, percent):
+        nonlocal stop
+        if cancel and phase == "导入分类":
+            stop = True
+
+    if cancel:
+        with pytest.raises(CategoryPresetCancelled):
+            service.execute_import(plan, cancelled=lambda: stop, progress=progress)
+    else:
+        service.execute_import(plan)
+    source.unlink()
+    again = service.recompare(plan)
+    assert again.can_import == cancel
+    assert again.new_count == (1 if cancel else 0)
+    service.discard(again)
+    assert not plan.staging.exists()
+
+
+@pytest.mark.parametrize("side", ["input", "target", "output"])
+def test_junction_ancestors_rejected_for_input_target_and_output(manager, tmp_path, side):
+    import os
+
+    real = tmp_path / "real"
+    real.mkdir()
+    source = preset(real, [node("分类")])
+    linked = tmp_path / "linked"
+    if os.name == "nt":
+        import _winapi
+
+        _winapi.CreateJunction(str(real), str(linked))
+    else:
+        linked.symlink_to(real, target_is_directory=True)
+    service = CategoryPresetService(manager)
+    if side == "input":
+        with pytest.raises(CategoryPresetError, match="链接|联接"):
+            service.preview_import(linked / source.name, "game_a")
+    elif side == "target":
+        root = manager._index.paths.roots["game_a"]
+        root.parent.mkdir(parents=True, exist_ok=True)
+        if os.name == "nt":
+            _winapi.CreateJunction(str(real), str(root))
+        else:
+            root.symlink_to(real, target_is_directory=True)
+        with pytest.raises(CategoryPresetError, match="链接|联接"):
+            service.preview_import(source, "game_a")
+    else:
+        manager.add_character(name="分类")
+        plan = service.preview_export("game_a")
+        with pytest.raises(CategoryPresetError, match="链接|联接"):
+            service.execute_export(plan, linked, "拒绝")
+
+
+def test_commit_success_then_notification_and_cleanup_errors_report_real_success(manager, tmp_path, monkeypatch):
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("已提交")]), "game_a")
+    commit = service._commit_import
+
+    def after_commit(*args):
+        commit(*args)
+        raise OSError("driver error after successful commit")
+
+    monkeypatch.setattr(service, "_commit_import", after_commit)
+
+    def progress(phase, percent):
+        if phase == "已提交":
+            raise RuntimeError("UI callback failed")
+
+    result = service.execute_import(plan, progress=progress)
+    assert result.new_count == 1
+    assert len(snapshot(manager)) == 1
+
+
+def test_committed_cleanup_pending_is_retained_until_recovery_and_discard_does_not_delete(
+    manager, tmp_path, monkeypatch
+):
+    import src.core.category_preset_service as module
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("清理待重试")]), "game_a")
+    original = module.remove_inventory
+    monkeypatch.setattr(module, "remove_inventory", lambda *args: [str(plan.staging)])
+    result = service.execute_import(plan)
+    assert result.new_count == 1 and result.recovery_paths == (str(plan.staging),)
+    service.discard(plan)
+    assert plan.document.source_path.is_file()
+    assert manager.is_library_path_protected(plan.target.root / "清理待重试")
+    monkeypatch.setattr(module, "remove_inventory", original)
+    assert service.recover_pending() == ()
+    assert len(snapshot(manager)) == 1
+
+
+def test_export_cancel_before_publish_leaves_no_half_file_and_after_publish_succeeds(manager, tmp_path):
+    from src.core.category_preset import CategoryPresetCancelled
+
+    manager.add_character(name="取消导出")
+    service = CategoryPresetService(manager)
+    plan = service.preview_export("game_a")
+    stop = False
+
+    def before(phase, percent):
+        nonlocal stop
+        if phase == "写入完成":
+            stop = True
+
+    with pytest.raises(CategoryPresetCancelled):
+        service.execute_export(plan, tmp_path, "取消", cancelled=lambda: stop, progress=before)
+    assert not list(tmp_path.glob("*.d3dxcp"))
+    stop = False
+
+    def after(phase, percent):
+        nonlocal stop
+        if phase == "已提交":
+            stop = True
+
+    result = service.execute_export(plan, tmp_path, "提交", cancelled=lambda: stop, progress=after)
+    assert result.path.exists() and stop
+
+
+def test_source_rejected_in_current_runtime_deployment_root(manager, tmp_path):
+    deployed = tmp_path / "runtime-deployment"
+    deployed.mkdir()
+    manager._storage.set_migoto_mods_dir(str(deployed))
+    source = preset(deployed, [node("不能纳管")])
+    with pytest.raises(CategoryPresetError):
+        CategoryPresetService(manager).preview_import(source, "game_a")
+
+
+def test_preview_thumbnail_file_is_immutable_and_checked_before_recompare(manager, tmp_path):
+    image = tmp_path / "image.png"
+    Image.new("RGB", (2, 2), "red").save(image)
+    import hashlib
+
+    image_id = hashlib.sha256(image.read_bytes()).hexdigest()
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("图片", image_id=image_id)], {image_id: image}), "game_a")
+    from pathlib import Path
+
+    Path(plan.rows[0].image_path).write_bytes(b"external modification")
+    with pytest.raises(CategoryPresetError):
+        service.recompare(plan)
+
+
+@pytest.mark.parametrize("scope", ["existing_root", "new_root", "existing_parent"])
+def test_physical_directory_replacement_during_publication_blocks_commit_and_keeps_evidence(manager, tmp_path, scope):
+    service = CategoryPresetService(manager)
+    if scope == "existing_parent":
+        manager.add_character(name="Parent", node_type="category")
+        source = preset(tmp_path, [node("Parent"), node("Parent/A"), node("Parent/B")])
+    else:
+        source = preset(tmp_path, [node("A"), node("B")])
+    if scope == "existing_root":
+        manager._get_library_root("game_a")
+    plan = service.preview_import(source, "game_a")
+    before = snapshot(manager)
+    replaced = plan.target.root / "Parent" if scope == "existing_parent" else plan.target.root
+    displaced = replaced.with_name("moved-" + replaced.name)
+    changed = False
+
+    def progress(phase, percent):
+        nonlocal changed
+        if phase == "导入分类" and not changed:
+            replaced.rename(displaced)
+            replaced.mkdir()
+            changed = True
+
+    with pytest.raises(CategoryPresetError, match="待恢复|发生变化"):
+        service.execute_import(plan, progress=progress)
+    assert snapshot(manager) == before
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 1
+    assert displaced.exists()
+    service.discard(plan)
+    assert plan.staging.exists()
+    assert manager.is_library_path_protected(replaced)
+    assert manager.is_library_path_protected(displaced)
+    assert service.recover_pending()
+    replaced.rmdir()
+    displaced.rename(replaced)
+    assert service.recover_pending() == ()
+    assert snapshot(manager) == before
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 0
+
+
+def test_last_publication_callback_cannot_change_marker_before_database_commit(manager, tmp_path):
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A")]), "game_a")
+    marker = plan.target.root / "A" / CATEGORY_MARKER_FILE
+
+    def progress(phase, percent):
+        if phase == "导入分类":
+            marker.write_text("external modification")
+
+    with pytest.raises(CategoryPresetError):
+        service.execute_import(plan, progress=progress)
+    assert snapshot(manager) == []
+    assert marker.read_text() == "external modification"
+    assert manager.is_library_path_protected(marker)
+
+
+def test_cancel_before_journal_does_not_adopt_external_file_in_operation_staging(manager, tmp_path):
+    from pathlib import Path
+
+    from src.core.category_preset import CategoryPresetCancelled
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A")]), "game_a")
+    external = None
+
+    def cancelled():
+        nonlocal external
+        folders = list(plan.staging.glob("publication-*"))
+        if folders:
+            external = Path(folders[0]) / "external-user-file.txt"
+            external.write_text("external user data")
+            return True
+        return False
+
+    with pytest.raises((CategoryPresetCancelled, CategoryPresetError)):
+        service.execute_import(plan, cancelled=cancelled)
+    assert external is not None and external.read_text() == "external user data"
+    with pytest.raises(CategoryPresetError, match="暂存|清理"):
+        service.discard(plan)
+    assert external.read_text() == "external user data"
+    assert snapshot(manager) == []
+
+
+@pytest.mark.parametrize("kind", ["import", "export"])
+def test_preview_failure_does_not_adopt_external_staging_file(manager, tmp_path, monkeypatch, kind):
+    service = CategoryPresetService(manager)
+    manager.add_character(name="A")
+    external = None
+    original = service._new_stage
+
+    def create_stage():
+        nonlocal external
+        stage = original()
+        external = stage / "external-user-file.txt"
+        external.write_text("external user data")
+        return stage
+
+    monkeypatch.setattr(service, "_new_stage", create_stage)
+
+    def fail(phase, percent):
+        if external is not None:
+            raise RuntimeError("preview failed")
+
+    with pytest.raises((RuntimeError, CategoryPresetError)):
+        if kind == "import":
+            service.preview_import(preset(tmp_path, [node("A")]), "game_a", progress=fail)
+        else:
+            service.preview_export("game_a", progress=fail)
+    assert external.read_text() == "external user data"
+
+
+def test_discard_reports_changed_preview_file_and_retains_evidence(manager, tmp_path):
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A")]), "game_a")
+    plan.document.source_path.write_bytes(b"external modification")
+    with pytest.raises(CategoryPresetError, match="input.d3dxcp"):
+        service.discard(plan)
+    assert plan.document.source_path.read_bytes() == b"external modification"
+
+
+def test_cancel_during_final_published_receipt_verification_stops_before_commit(manager, tmp_path, monkeypatch):
+    import src.core.category_preset_service as module
+    from src.core.category_preset import CategoryPresetCancelled
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A")]), "game_a")
+    check = module.published_errors
+    stop = False
+
+    def verify(*args, **kwargs):
+        nonlocal stop
+        result = check(*args, **kwargs)
+        stop = True
+        return result
+
+    monkeypatch.setattr(module, "published_errors", verify)
+    with pytest.raises(CategoryPresetCancelled):
+        service.execute_import(plan, cancelled=lambda: stop)
+    assert snapshot(manager) == []
+
+
+def test_rolled_back_import_can_retry_staging_cleanup_without_false_displacement(manager, tmp_path, monkeypatch):
+    import src.core.category_preset_service as module
+
+    manager._get_library_root("game_a")
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A")]), "game_a")
+    original = module.remove_inventory
+    monkeypatch.setattr(module, "remove_inventory", lambda *args: [str(plan.staging)])
+    stop = False
+
+    def progress(phase, percent):
+        nonlocal stop
+        if phase == "导入分类":
+            stop = True
+
+    with pytest.raises(CategoryPresetError, match="待恢复"):
+        service.execute_import(plan, cancelled=lambda: stop, progress=progress)
+    assert snapshot(manager) == []
+    assert not (plan.target.root / "A").exists()
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 1
+    persisted = manager._index._db().execute("SELECT plan_json FROM category_import_journal").fetchone()[0]
+    assert json.loads(persisted)["rollback_done"] is True
+    monkeypatch.setattr(module, "remove_inventory", original)
+    assert service.recover_pending() == ()
+    assert service.recover_pending() == ()
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 0
+    assert manager._library_protection.snapshot() == (set(), set())
+
+
+def test_crash_midway_through_multi_tree_rollback_is_resumable(manager, tmp_path, monkeypatch):
+    import src.core.category_preset_journal as journal_module
+
+    manager._get_library_root("game_a")
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A"), node("B")]), "game_a")
+
+    def fail_commit(*args):
+        raise OSError("database commit failed")
+
+    monkeypatch.setattr(service, "_commit_import", fail_commit)
+    remove = journal_module.remove_inventory
+    rename = journal_module.rename_exclusive
+    interrupted = False
+
+    def crash_after_removal(root, entries):
+        nonlocal interrupted
+        result = remove(root, entries)
+        if str(root).startswith(str(plan.target.root)) and not interrupted:
+            interrupted = True
+            raise SimulatedCrash()
+        return result
+
+    def crash_after_inverse_rename(source, target):
+        nonlocal interrupted
+        result = rename(source, target)
+        if str(source).startswith(str(plan.target.root)) and not interrupted:
+            interrupted = True
+            raise SimulatedCrash()
+        return result
+
+    monkeypatch.setattr(journal_module, "remove_inventory", crash_after_removal)
+    monkeypatch.setattr(journal_module, "rename_exclusive", crash_after_inverse_rename)
+    with pytest.raises(SimulatedCrash):
+        service.execute_import(plan)
+    assert interrupted
+    monkeypatch.setattr(journal_module, "remove_inventory", remove)
+    monkeypatch.setattr(journal_module, "rename_exclusive", rename)
+    assert service.recover_pending() == ()
+    assert snapshot(manager) == []
+    assert not (plan.target.root / "A").exists() and not (plan.target.root / "B").exists()
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 0
+
+
+def test_crash_during_post_rollback_staging_cleanup_resumes_without_touching_library(manager, tmp_path, monkeypatch):
+    import src.core.category_preset_service as module
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node("A"), node("B")]), "game_a")
+    original = module.remove_inventory
+
+    def fail_commit(*args):
+        raise OSError("commit failed")
+
+    monkeypatch.setattr(service, "_commit_import", fail_commit)
+
+    def crash_cleanup(root, entries):
+        original(root, entries)
+        raise SimulatedCrash()
+
+    monkeypatch.setattr(module, "remove_inventory", crash_cleanup)
+    with pytest.raises(SimulatedCrash):
+        service.execute_import(plan)
+    assert not (plan.target.root / "A").exists() and not (plan.target.root / "B").exists()
+    monkeypatch.setattr(module, "remove_inventory", original)
+    assert service.recover_pending() == ()
+    assert snapshot(manager) == []
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 0
+
+
+@pytest.mark.parametrize("cancel_preparation", [False, True])
+def test_directory_preparation_reports_throttled_real_progress_and_can_cancel(manager, tmp_path, cancel_preparation):
+    from src.core.category_preset import CategoryPresetCancelled
+
+    service = CategoryPresetService(manager)
+    plan = service.preview_import(preset(tmp_path, [node(f"N{index:03}") for index in range(200)]), "game_a")
+    percentages = []
+    stop = False
+
+    def progress(phase, percent):
+        nonlocal stop
+        if phase != "准备目录":
+            return
+        percentages.append(percent)
+        # 准备结果对应真实暂存文件，此时尚未发布类别。
+        assert not plan.target.root.exists()
+        if 0 < percent < 100:
+            markers = list(plan.staging.glob("publication-*/**/" + CATEGORY_MARKER_FILE))
+            assert len(markers) >= percent * 200 // 100
+        if cancel_preparation and percent >= 10:
+            stop = True
+
+    if cancel_preparation:
+        with pytest.raises(CategoryPresetCancelled):
+            service.execute_import(plan, cancelled=lambda: stop, progress=progress)
+        assert snapshot(manager) == []
+        assert service.recompare(plan).can_import
+    else:
+        assert service.execute_import(plan, progress=progress).new_count == 200
+        assert percentages[-1] == 100
+    assert percentages[0] == 0
+    assert percentages == sorted(set(percentages))
+    assert 2 <= len(percentages) <= 101
+    assert manager._index._db().execute("SELECT count(*) FROM category_import_journal").fetchone()[0] == 0
+    service.discard(plan)
