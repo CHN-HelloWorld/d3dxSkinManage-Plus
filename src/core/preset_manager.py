@@ -1102,3 +1102,160 @@ class PresetManager(QObject):
             dirty = True
         if dirty:
             self._save()
+
+    @library_mutation
+    def refresh_after_rebuild(self, game_id: str) -> int:
+        """刷新节点分组，保持 Mod 身份稳定。"""
+        mods = self._read_plan_mods(game_id)
+        changed = 0
+        save_needed = False
+        for preset in self.get_all_presets(game_id):
+            before = copy.deepcopy(preset.character_mods)
+            durable_before = copy.deepcopy(self._durable_refs.get(preset.id, {}))
+            self._capture_references(preset)
+            self._resolve_references(preset, mods)
+            self._capture_references(preset)
+            if before != preset.character_mods:
+                changed += 1
+            save_needed |= durable_before != self._durable_refs[preset.id]
+        if save_needed:
+            self._save()
+        return changed
+
+    def _refresh_deployments(self, game_id: str, *, locations=None, rows=None, records=None) -> None:
+        """通过宿主钩子或默认对账服务刷新部署状态，可复用已采集的位置和记录。"""
+        if self._before_reconcile is not None:
+            if locations is None:
+                self._before_reconcile(game_id)
+            else:
+                self._before_reconcile(game_id, locations=locations, rows=rows, records=records)
+        else:
+            from src.core.deployment_reconcile import reconcile_deployment_records
+
+            reconcile_deployment_records(
+                self._get_index(),
+                self._get_storage(),
+                game_id,
+                force=True,
+                locations=locations,
+                rows=rows,
+                records=records,
+            )
+
+    @library_mutation
+    def prepare_preset_apply(self, preset_id: str, *, preparation=None):
+        """在主线程创建、校验并记录不可变计划。
+
+        没有部署目录时允许不涉及文件的状态切换，需要部署文件时拒绝执行并说明原因。
+        """
+        from src.core.preset_deployment_plan import (
+            build_preset_deployment_plan,
+            validate_plan_filesystem,
+        )
+
+        target = self._presets.get(preset_id)
+        if target is None:
+            raise ValueError(f"preset does not exist: {preset_id}")
+        if preparation is not None and target.game_id != preparation.game_id:
+            raise ValueError(tr("预设不存在或不属于当前游戏"))
+        idx = self._get_index()
+        if self.has_pending_apply(target.game_id):
+            raise RuntimeError(tr("另一个预设切换事务尚未完成"))
+        storage = preparation.storage if preparation is not None else self._get_storage()
+        records = {r.mod_id: r for r in idx.get_deployments(target.game_id)} if preparation is not None else None
+        # 用户操作核对计划中的精确路径，位置修复和重新对账由后台审计负责。
+        root = storage.get_deploy_dir()
+        state_only = root is None
+        if state_only:
+            # 占位根目录：零文件操作的计划不会用到它；一旦发现有动作就在下面拒绝。
+            root = get_data_dir()
+        mods = preparation.mods if preparation is not None else self._read_plan_mods(target.game_id)
+        if records is None:
+            records = {r.mod_id: r for r in idx.get_deployments(target.game_id)}
+        self._capture_references(target, mods)
+        self._resolve_references(target, mods)
+        resolved = {mod.mod_id for mod in mods}
+        unresolved = {
+            identity
+            for identities in self._durable_refs.get(target.id, {}).values()
+            for identity in identities
+            if identity not in resolved
+        }
+        if unresolved:
+            raise IdentityConflict(tr("预设引用的源 Mod 暂未恢复：") + ", ".join(sorted(unresolved)))
+        if state_only and (target.enabled_mod_ids or any(mod.is_enabled for mod in mods)):
+            raise RuntimeError(tr("未配置「Mod 文件夹」，无法切换需要部署的预设"))
+        current_id = idx.get_current_preset_id(target.game_id)
+        if not current_id:
+            current_id = self._game_store.get_current_preset_id(target.game_id) or ""
+        plan = build_preset_deployment_plan(
+            game_id=target.game_id,
+            from_preset_id=current_id,
+            to_preset_id=preset_id,
+            mods=mods,
+            target_mod_ids=set(target.enabled_mod_ids),
+            deployments=list(records.values()),
+            deploy_root=root,
+        )
+        if state_only and plan.actions:
+            raise RuntimeError(
+                tr(
+                    "未配置「Mod 文件夹」，无法部署该预设中的 Mod。"
+                    "请先在「游戏」页设置「Mod 文件夹」，或先禁用当前已启用的 Mod。"
+                )
+            )
+        if preparation is None:
+            validate_plan_filesystem(plan)
+        journal = PresetApplyJournal(
+            operation_id=plan.operation_id,
+            game_id=plan.game_id,
+            from_preset_id=plan.from_preset_id,
+            to_preset_id=plan.to_preset_id,
+            phase="planned",
+            plan_json=plan.to_json(),
+        )
+        idx.save_journal(journal)
+        try:
+            if preparation is None and self._before_plan_io is not None:
+                self._before_plan_io(plan)
+        except Exception:
+            idx.delete_journal(plan.operation_id)
+            raise
+        return plan
+
+    @library_mutation
+    def mark_preset_apply_executing(self, operation_id: str) -> None:
+        """将预设恢复日志推进到执行阶段，并初始化已完成步骤列表。"""
+        self._get_index().update_journal(operation_id, phase="executing", completed_steps_json="[]")
+
+    @library_mutation
+    def record_preset_apply_steps(self, operation_id: str, completed) -> None:
+        """序列化已完成部署步骤并更新执行阶段日志，供失败或重启时恢复。"""
+        idx = self._get_index()
+        idx.update_journal(
+            operation_id,
+            phase="executing",
+            completed_steps_json=json.dumps([asdict(step) for step in completed], ensure_ascii=False),
+        )
+
+    @library_mutation
+    def commit_preset_apply(self, plan, completed, *, preparation=None) -> list[str]:
+        """持有偏好和变体锁，核对并固定全部源对象后提交预设切换状态。"""
+        from contextlib import ExitStack
+
+        from src.core.mod_runtime_prefs import PREFS_LOCK
+        from src.core.mod_variant_store import VARIANT_STORE_LOCK
+        from src.core.operation_preflight import OperationPreflightError, access_file, confirm_source
+
+        with PREFS_LOCK, VARIANT_STORE_LOCK, ExitStack() as stack:
+            for action in plan.actions:
+                mod = self._get_index().get_mod(action.mod_id)
+                if mod is None or mod.path != action.source_path:
+                    raise OperationPreflightError(action.mod_id, action.source_path, tr("预设源位置已变化"))
+                previous = preparation.receipts.get(action.mod_id) if preparation is not None else None
+                receipt = confirm_source(
+                    action.source_path, action.mod_id, mod.content_hash, full=previous is None, expected=previous
+                )
+                stack.enter_context(access_file(receipt.path, pin=True))
+                receipt.recheck()
+            return self._commit_preset_apply(plan, completed, preparation=preparation)
