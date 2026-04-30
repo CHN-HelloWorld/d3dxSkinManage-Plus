@@ -827,3 +827,278 @@ class PresetManager(QObject):
         for mid in mod_ids:
             cur.remove_mod(mid)
         self._save()
+
+    # 级联清理
+
+    def _cascade_delete_token(self):
+        """包含尚未保存的原地修改，不仅比较方法调用计数。"""
+
+        def mapping(value):
+            """将成员映射冻结为元组，供级联删除候选比较内存版本。"""
+            return tuple((key, tuple(ids)) for key, ids in value.items())
+
+        records = tuple(
+            (
+                pid,
+                id(preset),
+                tuple(
+                    (
+                        item.name,
+                        mapping(preset.character_mods)
+                        if item.name == "character_mods"
+                        else tuple(sorted(preset.mod_variants.items()))
+                        if item.name == "mod_variants"
+                        else getattr(preset, item.name),
+                    )
+                    for item in fields(Preset)
+                ),
+            )
+            for pid, preset in self._presets.items()
+        )
+        return (
+            str(self._presets_file),
+            records,
+            tuple((pid, mapping(value)) for pid, value in self._durable_refs.items()),
+            tuple((pid, mapping(value)) for pid, value in self._resolved_refs.items()),
+        )
+
+    def prepare_cascade_delete(self, mod_id: str, game_id: str):
+        """在所有者线程采集独立候选，不修改活动选择。"""
+        from types import SimpleNamespace
+
+        from src.core.preset_delete import PreparedPresetDelete, StalePresetDelete, file_version
+
+        if not mod_id:
+            return None
+        if not any(
+            preset.game_id == game_id
+            and (
+                any(mod_id in ids for ids in preset.character_mods.values())
+                or any(mod_id in ids for ids in self._durable_refs.get(pid, {}).values())
+            )
+            for pid, preset in self._presets.items()
+        ):
+            return None
+        token = self._cascade_delete_token()
+        version = file_version(self._presets_file)
+
+        def clone(mapping):
+            """复制成员映射及各成员列表，隔离待提交候选与当前预设。"""
+            return {key: list(ids) for key, ids in mapping.items()}
+
+        shadow = SimpleNamespace(
+            _durable_refs={pid: clone(value) for pid, value in self._durable_refs.items()},
+            _resolved_refs={pid: clone(value) for pid, value in self._resolved_refs.items()},
+        )
+        runtime, updated, records = {}, {}, []
+        dirty = False
+        for pid, live in self._presets.items():
+            preset = copy.copy(live)
+            preset.character_mods = clone(live.character_mods)
+            preset.mod_variants = dict(live.mod_variants)
+            if preset.game_id == game_id:
+                durable = shadow._durable_refs.get(pid, {})
+                captured = (
+                    pid in shadow._durable_refs
+                    and pid in shadow._resolved_refs
+                    and preset.character_mods == shadow._resolved_refs[pid]
+                )
+                in_runtime = any(mod_id in ids for ids in preset.character_mods.values())
+                in_durable = any(mod_id in ids for ids in durable.values())
+
+                def remove(mapping):
+                    """从候选成员映射剔除目标 Mod，并移除因此变空的分类条目。"""
+                    return {
+                        key: kept for key, ids in mapping.items() if (kept := [mid for mid in ids if mid != mod_id])
+                    }
+
+                if in_runtime:
+                    preset.character_mods = remove(preset.character_mods)
+                    preset.updated_at = datetime.now().isoformat()
+                    runtime[pid] = preset.character_mods
+                    updated[pid] = preset.updated_at
+                if in_durable:
+                    shadow._durable_refs[pid] = remove(durable)
+                if captured and (in_runtime or in_durable):
+                    shadow._resolved_refs[pid] = clone(preset.character_mods)
+                dirty |= in_runtime or in_durable
+                if in_runtime or in_durable:
+                    preset.mod_variants.pop(mod_id, None)
+            if (
+                pid not in shadow._durable_refs
+                or pid not in shadow._resolved_refs
+                or preset.character_mods != shadow._resolved_refs[pid]
+            ):
+                PresetManager._capture_references(shadow, preset)
+            record = {item.name: getattr(preset, item.name) for item in fields(Preset) if item.name != "character_mods"}
+            # 保持原有 JSON 键顺序。
+            record = {
+                key: (shadow._durable_refs[pid] if key == "character_mods" else record[key])
+                for key in (
+                    "id",
+                    "name",
+                    "description",
+                    "game_id",
+                    "is_default",
+                    "character_mods",
+                    "mod_variants",
+                    "created_at",
+                    "updated_at",
+                )
+            }
+            record["mod_variants"] = {
+                mid: preset.mod_variants.get(mid) for mids in shadow._durable_refs[pid].values() for mid in mids
+            }
+            records.append(record)
+        if not dirty:
+            return None
+        if self._cascade_delete_token() != token or file_version(self._presets_file) != version:
+            raise StalePresetDelete("Preset changed while preparing deletion")
+        temporary = self._presets_file.with_name(f".{self._presets_file.name}.delete-{uuid.uuid4().hex}.tmp")
+        return PreparedPresetDelete(
+            id(self),
+            mod_id,
+            game_id,
+            self._presets_file,
+            temporary,
+            token,
+            version,
+            {"version": SCHEMA_VERSION, "presets": records},
+            runtime,
+            updated,
+            shadow._durable_refs,
+            shadow._resolved_refs,
+        )
+
+    @library_mutation
+    def commit_cascade_delete(self, candidate) -> None:
+        """仅发布与已刷新到磁盘的候选完全一致的预设选择。"""
+        from src.core.preset_delete import StalePresetDelete, discard_prepared_preset_delete, file_version
+
+        if candidate.committed:
+            raise StalePresetDelete("Preset deletion candidate was already committed")
+        try:
+            if (
+                candidate.owner_id != id(self)
+                or candidate.cancelled.is_set()
+                or self._cascade_delete_token() != candidate.token
+                or file_version(self._presets_file) != candidate.target_version
+            ):
+                raise StalePresetDelete("Preset changed before deletion publication")
+            if (
+                not candidate.written.is_set()
+                or candidate.staged_version is None
+                or file_version(candidate.temporary) != candidate.staged_version
+            ):
+                raise StalePresetDelete("Preset deletion candidate is not durably staged")
+            os.replace(candidate.temporary, candidate.target)
+            for pid, runtime in candidate.runtime.items():
+                self._presets[pid].character_mods = runtime
+                self._presets[pid].updated_at = candidate.updated_at[pid]
+            for preset in self._presets.values():
+                if preset.game_id == candidate.game_id:
+                    preset.mod_variants.pop(candidate.mod_id, None)
+            self._durable_refs = candidate.durable
+            self._resolved_refs = candidate.resolved
+            candidate.committed = True
+        except BaseException:
+            discard_prepared_preset_delete(candidate)
+            raise
+
+    @library_mutation
+    def cascade_delete_mod(self, mod_id: str, game_id: str) -> None:
+        """删除某 mod 时清理该游戏所有预设的引用"""
+        if not mod_id:
+            return
+        durable_before = self._durable_refs.copy()
+        resolved_before = self._resolved_refs.copy()
+        changed = []
+        try:
+            for preset in self._presets.values():
+                if preset.game_id != game_id:
+                    continue
+                runtime = preset.character_mods
+                durable = self._durable_refs.get(preset.id, {})
+                captured = (
+                    preset.id in self._durable_refs
+                    and preset.id in self._resolved_refs
+                    and runtime == self._resolved_refs[preset.id]
+                )
+                in_runtime = any(mod_id in ids for ids in runtime.values())
+                in_durable = any(mod_id in ids for ids in durable.values())
+                if not in_runtime and not in_durable:
+                    continue
+                changed.append((preset, runtime, preset.updated_at, dict(preset.mod_variants)))
+                preset.mod_variants.pop(mod_id, None)
+
+                def remove(mapping):
+                    """删除各分类中的目标成员，并仅保留仍有成员的分类映射。"""
+                    return {
+                        cid: remaining
+                        for cid, ids in mapping.items()
+                        if (remaining := [mid for mid in ids if mid != mod_id])
+                    }
+
+                if in_runtime:
+                    preset.character_mods = remove(runtime)
+                    preset.updated_at = datetime.now().isoformat()
+                if in_durable:
+                    self._durable_refs[preset.id] = remove(durable)
+                if captured:
+                    self._resolved_refs[preset.id] = {cid: list(ids) for cid, ids in preset.character_mods.items()}
+            if changed:
+                self._save()
+        except Exception:
+            for preset, runtime, updated_at, variants in changed:
+                preset.character_mods = runtime
+                preset.updated_at = updated_at
+                preset.mod_variants = variants
+            self._durable_refs = durable_before
+            self._resolved_refs = resolved_before
+            raise
+
+    @library_mutation
+    def cascade_delete_character(self, character_id: str, game_id: str) -> None:
+        """删除某角色时清理该游戏所有预设的对应 key"""
+        if not character_id:
+            return
+        dirty = False
+        for p in self._presets.values():
+            if p.game_id != game_id:
+                continue
+            if self._durable_refs.get(p.id, {}).pop(character_id, None) is not None:
+                dirty = True
+            if character_id in p.character_mods:
+                p.remove_character(character_id)
+                dirty = True
+        if dirty:
+            self._save()
+
+    @library_mutation
+    def cascade_move_mod(
+        self,
+        mod_id: str,
+        old_character_id: str,
+        new_character_id: str,
+        game_id: str,
+    ) -> None:
+        """move_mod 后同步预设：从旧角色 list 移除并加入新角色 list"""
+        if not mod_id or old_character_id == new_character_id:
+            return
+        dirty = False
+        for p in self._presets.values():
+            if p.game_id != game_id:
+                continue
+            bucket = p.character_mods.get(old_character_id, [])
+            if mod_id not in bucket:
+                continue
+            bucket.remove(mod_id)
+            if not bucket:
+                del p.character_mods[old_character_id]
+            new_bucket = p.character_mods.setdefault(new_character_id, [])
+            if mod_id not in new_bucket:
+                new_bucket.append(mod_id)
+            p.updated_at = datetime.now().isoformat()
+            dirty = True
+        if dirty:
+            self._save()
