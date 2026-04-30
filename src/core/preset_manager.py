@@ -1259,3 +1259,254 @@ class PresetManager(QObject):
                 stack.enter_context(access_file(receipt.path, pin=True))
                 receipt.recheck()
             return self._commit_preset_apply(plan, completed, preparation=preparation)
+
+    def _commit_preset_apply(self, plan, completed, *, preparation=None) -> list[str]:
+        """原子提交部署状态、受影响 Mod 状态和当前预设。"""
+        if preparation is not None and preparation.validated_operation_id != plan.operation_id:
+            raise RuntimeError(tr("预设部署尚未完成提交前校验"))
+        for action in plan.actions if preparation is None else ():
+            actual = action.disabled_path if action.action == "park" else action.active_path
+            marker = read_deployment_identity(actual)
+            if marker is None or marker["mod_id"] != action.mod_id:
+                raise IdentityConflict(tr("提交前部署身份已变更：{actual}", actual=actual))
+        # 差量部署已完成、DB 还没提交：此刻写回运行时变体（写容器 override 初始值 + 从
+        # d3dx_user.ini 删键），改动与写前/写后哈希记进 journal 的 runtime_patch_json，
+        # 崩溃或回滚时可反向还原。配置未完成必须阻止提交。
+        if preparation is None and self._before_plan_commit is not None:
+            self._before_plan_commit(plan)
+        if preparation is not None:
+            preparation.variants.verify_preset_configuration(plan)
+        elif self._verify_configuration is not None:
+            self._verify_configuration(plan)
+        idx = self._get_index()
+        if preparation is not None:
+            for operation_id, patch_json in preparation.patches.items():
+                idx.update_journal_runtime_patch(operation_id, patch_json)
+        affected: list[str] = []
+        now = datetime.now().isoformat()
+        with idx.transaction() as conn:
+            for action in plan.actions:
+                active = action.action != "park"
+                actual = action.active_path if active else action.disabled_path
+                state = "active" if active else "disabled"
+                old = conn.execute(
+                    "SELECT COALESCE(d.state,'absent') FROM mods m "
+                    "LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+                    "WHERE m.mod_id=? AND m.game_id=?",
+                    (action.mod_id, plan.game_id),
+                ).fetchone()
+                if old is None:
+                    raise IdentityConflict(tr("预设提交源身份已消失或游戏已变更: {mod_id}", mod_id=action.mod_id))
+                if (old[0] == "active") != active:
+                    affected.append(action.mod_id)
+                conn.execute(
+                    """INSERT INTO deployment_records
+                       (mod_id,state,actual_path) VALUES (?,?,?)
+                       ON CONFLICT(mod_id) DO UPDATE SET state=excluded.state,
+                         actual_path=excluded.actual_path""",
+                    (action.mod_id, state, actual),
+                )
+            conn.execute(
+                """INSERT INTO game_deployment_state(game_id,current_preset_id,updated_at)
+                   VALUES (?,?,?) ON CONFLICT(game_id) DO UPDATE SET
+                   current_preset_id=excluded.current_preset_id,updated_at=excluded.updated_at""",
+                (plan.game_id, plan.to_preset_id, now),
+            )
+            conn.execute(
+                "UPDATE preset_apply_journal SET phase='committed',updated_at=? WHERE operation_id=?",
+                (now, plan.operation_id),
+            )
+            conn.execute("DELETE FROM preset_apply_journal WHERE operation_id=?", (plan.operation_id,))
+        # 事务已提交，配置指针写入失败时仅记录错误，不撤销已完成的部署。
+        # 抛出去会变成新的部署回滚触发器，把一次已经写入磁盘成功的部署倒回去。
+        self._game_store.set_current_preset_id(plan.game_id, plan.to_preset_id)
+        if preparation is None:
+            if self._after_plan_commit is not None:
+                try:
+                    self._after_plan_commit(plan)
+                except Exception as error:
+                    logger.error("预设已提交，后续同步或通知失败：%s", error)
+            self.preset_changed.emit(plan.game_id)
+            self.preset_applied.emit(affected)
+        return affected
+
+    def finish_prepared_apply(self, plan, affected, preparation) -> None:
+        """后台完成 INI 和变体处理后，在所有者线程发布。"""
+        self.preset_changed.emit(plan.game_id)
+        self.preset_applied.emit(affected)
+
+    @library_mutation
+    def fail_preset_apply(self, plan, error, *, preparation=None) -> None:
+        """执行器回滚后完成日志处理，回滚不完整时保留恢复记录。"""
+        logger.error(
+            "预设切换失败 game=%s op=%s mods=%s paths=%s: %s",
+            plan.game_id,
+            plan.operation_id,
+            [a.mod_id for a in plan.actions],
+            [a.active_path for a in plan.actions],
+            error,
+        )
+        rollback_errors = tuple(getattr(error, "rollback_errors", ()))
+        # 部署步骤已由 executor 反向回滚；这里把运行时补丁也反向执行（容器 override 原文 +
+        # d3dx_user.ini 写回前值）。反向失败并入 rollback_errors → journal 留作 recovery_required。
+        if preparation is None:
+            rollback_errors += self._reverse_runtime_patch(plan)
+        else:
+            for operation_id, patch_json in preparation.patches.items():
+                self._get_index().update_journal_runtime_patch(operation_id, patch_json)
+        if rollback_errors:
+            self._get_index().update_journal(
+                plan.operation_id,
+                phase="recovery_required",
+                completed_steps_json=json.dumps(
+                    [asdict(step) for step in getattr(error, "completed", ())], ensure_ascii=False
+                ),
+            )
+        else:
+            self._get_index().delete_journal(plan.operation_id)
+            if preparation is None and self._after_plan_rollback is not None:
+                self._after_plan_rollback(plan)
+
+    def _reverse_runtime_patch(self, plan) -> tuple[str, ...]:
+        """反向执行运行时变体补丁，返回未能还原的原因；空字符串表示成功。
+
+        补丁记录保存在事务日志的 runtime_patch_json 中，必须在 delete_journal 前恢复。
+        """
+        if self._on_runtime_rollback is None:
+            return ()
+        try:
+            return tuple(self._on_runtime_rollback(plan) or ())
+        except Exception as e:
+            return (tr("变体补丁回滚异常: {e}", e=e),)
+
+    @library_mutation
+    def recover_incomplete_applies(self, game_id: str = "") -> list[str]:
+        """部署根可用后回滚未提交事务。"""
+        from src.core.preset_apply_service import CompletedStep, PresetPlanExecutor
+        from src.core.preset_deployment_plan import PresetDeploymentPlan
+
+        idx = self._get_index()
+        errors: list[str] = []
+        for journal in idx.get_journals(game_id):
+            try:
+                plan = PresetDeploymentPlan.from_json(journal.plan_json)
+                raw_steps = json.loads(journal.completed_steps_json or "[]")
+                completed = tuple(CompletedStep(**item) for item in raw_steps)
+                if journal.phase == "planned" and not completed and not journal.runtime_patch_json:
+                    idx.delete_journal(journal.operation_id)
+                    continue
+                if journal.phase == "committed":
+                    if self._after_plan_commit is not None:
+                        self._after_plan_commit(plan)
+                    idx.delete_journal(journal.operation_id)
+                    continue
+                if journal.phase == "executing" and not completed:
+                    inferred: list[CompletedStep] = []
+                    for action in plan.actions:
+                        active_exists = self._get_storage()._deploy_path_exists(Path(action.active_path))
+                        disabled_exists = self._get_storage()._deploy_path_exists(Path(action.disabled_path))
+                        if active_exists and disabled_exists:
+                            raise FileExistsError(
+                                f"active and disabled both exist: {action.active_path}; {action.disabled_path}"
+                            )
+                        if action.action == "park" and disabled_exists and not active_exists:
+                            inferred.append(
+                                CompletedStep(action.mod_id, "park", action.active_path, action.disabled_path)
+                            )
+                        elif action.action == "restore" and active_exists and not disabled_exists:
+                            inferred.append(
+                                CompletedStep(action.mod_id, "restore", action.disabled_path, action.active_path)
+                            )
+                        elif action.action == "materialize_active" and active_exists and not disabled_exists:
+                            inferred.append(
+                                CompletedStep(
+                                    action.mod_id, "materialize_active", action.partial_path, action.active_path
+                                )
+                            )
+                    completed = tuple(inferred)
+                rollback_errors = self._reverse_runtime_patch(plan)
+                if not rollback_errors:
+                    rollback_errors = PresetPlanExecutor(self._get_storage()).rollback(completed)
+                for action in plan.actions:
+                    partial = Path(action.partial_path)
+                    if partial.exists():
+                        # 解压中断可能尚未写 marker；一旦已有身份，事务只能清理自己的副本。
+                        marker = read_deployment_identity(partial)
+                        if marker is not None and marker["mod_id"] != action.mod_id:
+                            raise IdentityConflict(tr("恢复事务的 partial 身份不符：{partial}", partial=partial))
+                        if not self._get_storage().remove_deploy_path(partial):
+                            rollback_errors += (f"cannot remove partial: {partial}",)
+                # 删除事务日志前先恢复其中记录的运行时补丁。
+                if rollback_errors:
+                    idx.update_journal(
+                        journal.operation_id,
+                        phase="recovery_required",
+                        completed_steps_json=journal.completed_steps_json,
+                    )
+                    errors.extend(rollback_errors)
+                else:
+                    idx.delete_journal(journal.operation_id)
+                    if self._after_plan_rollback is not None:
+                        self._after_plan_rollback(plan)
+            except Exception as exc:
+                errors.append(f"{journal.operation_id}: {exc}")
+                idx.update_journal(
+                    journal.operation_id,
+                    phase="recovery_required",
+                    completed_steps_json=journal.completed_steps_json,
+                )
+        return errors
+
+    @library_mutation
+    def garbage_collect_deployments(self, game_id: str) -> list[str]:
+        """只移除没有预设引用且身份吻合的精确禁用路径。"""
+        idx = self._get_index()
+        storage = self._get_storage()
+        if idx.get_journals(game_id) or storage.get_deploy_dir() is None:
+            return []
+        try:
+            self._refresh_deployments(game_id)
+        except (OSError, IdentityConflict) as error:
+            logger.warning("无法确认部署身份，暂缓清理：%s", error)
+            return []
+        for preset in self.get_all_presets(game_id):
+            self._capture_references(preset)
+        referenced = {
+            identity
+            for preset in self.get_all_presets(game_id)
+            for identities in self._durable_refs.get(preset.id, {}).values()
+            for identity in identities
+        }
+        removed: list[str] = []
+        for record in idx.get_deployments(game_id):
+            if record.state != DeploymentState.DISABLED or record.mod_id in referenced:
+                continue
+            try:
+                if not record.actual_path:
+                    continue
+                marker = read_deployment_identity(record.actual_path)
+                if marker is None or marker["mod_id"] != record.mod_id:
+                    continue
+                if not storage.remove_deploy_path(record.actual_path):
+                    logger.warning(
+                        "清理部署失败 game=%s mod=%s path=%s: remove_deploy_path returned false",
+                        game_id,
+                        record.mod_id,
+                        record.actual_path,
+                    )
+                    continue
+                with idx.transaction():
+                    idx.upsert_deployment(
+                        DeploymentRecord(
+                            mod_id=record.mod_id,
+                            state=DeploymentState.ABSENT,
+                            actual_path="",
+                        ),
+                        commit=False,
+                    )
+                removed.append(record.mod_id)
+            except Exception as exc:
+                logger.warning(
+                    "清理零引用部署失败 game=%s mod=%s path=%s: %s", game_id, record.mod_id, record.actual_path, exc
+                )
+        return removed
