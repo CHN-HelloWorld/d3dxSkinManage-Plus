@@ -237,3 +237,116 @@ class ModVariantController(QObject):
             self._worker.stop()
         else:
             self.stopped.emit()
+
+    def resume(self):
+        """解除关闭标记，并刷新当前选中 Mod 的变体状态。"""
+        self._closing = False
+        if self._context[1]:
+            self.refresh(self._context[1])
+
+    def _set_context(self, mod_id):
+        """切换 Mod 时增加上下文代次、关闭旧对话框并清空状态，再读取新选择。"""
+        context = (str(self.manager.current_game_id or ""), mod_id)
+        if context != self._context:
+            self._generation += 1
+            self.panel.set_switch_progress()
+            self._close_dialog()
+            self._state, self._variants = {}, []
+            self._context = context
+        if mod_id:
+            self.refresh(mod_id)
+
+    def _valid(self, mod_id):
+        """核验控制器空闲、当前游戏和选中 Mod 与面板上下文一致。"""
+        selected = self.page._selected_mod
+        return (
+            not self._busy
+            and not self._closing
+            and bool(mod_id)
+            and self._context == (self.manager.current_game_id, mod_id)
+            and self.page._panel_mode == "mod"
+            and selected is not None
+            and selected.mod_id == mod_id
+        )
+
+    def refresh(self, mod_id, *, game_id=None):
+        """为当前 Mod 准备后台读取；已有任务时合并一次后续刷新，读取准备失败时保留错误状态。"""
+        current_game, selected = self._context
+        if (
+            self._closing
+            or not mod_id
+            or mod_id != selected
+            or current_game != self.manager.current_game_id
+            or (game_id is not None and game_id != current_game)
+        ):
+            return
+        if self._worker is not None:
+            self._refresh_pending = True
+            self.panel.set_busy(True)
+            return
+        try:
+            task = self.manager.variants.prepare_task(mod_id)
+        except (ValueError, OSError, RuntimeError) as error:
+            self._show_error(str(error), read_failure=True)
+            return
+        self._start_task(task)
+
+    def handle_core_event(self, event, **payload):
+        """游戏切换时清空上下文，变体或部署状态变化时局部刷新，忽略自身发布的变体通知。"""
+        if event == "game_changed":
+            self._generation += 1
+            self._context = ("", "")
+            self._close_dialog()
+            self.panel.clear_context()
+        elif event in ("variant_state_changed", "mod_enabled", "mod_disabled"):
+            if event == "variant_state_changed" and self._publishing:
+                return
+            self.refresh(payload.get("mod_id", ""), game_id=payload.get("game_id"))
+
+    def _close_dialog(self):
+        """解除当前对话框引用并拒绝窗口，避免旧选择继续提交。"""
+        dialog, self._dialog = self._dialog, None
+        if dialog is not None:
+            dialog.reject()
+
+    def _show_error(self, message, *, read_failure=False):
+        """为仍选中的 Mod 更新错误原因，读取失败时撤销保存能力，操作失败另发通知。"""
+        game_id, mod_id = self._context
+        selected = self.page._selected_mod
+        if selected is not None and selected.mod_id == mod_id and game_id == self.manager.current_game_id:
+            state = dict(
+                self._state
+                or dict(
+                    mod_id=mod_id,
+                    enabled=selected.is_enabled,
+                    selected_variant_id=None,
+                    status="unconfirmed",
+                    can_save=False,
+                    captured_at="",
+                    variable_count=0,
+                    confirmed_count=0,
+                )
+            )
+            state["reason"] = message
+            if read_failure:
+                state.update(can_save=False, status="unconfirmed")
+            self.page.set_variant_state(mod_id, state, self._variants)
+        if not read_failure:
+            self.notification.emit(message, False)
+
+    def _start_task(self, task, *, on_success=None, on_error=None):
+        """保存任务的选择代次与完成回调，托管后台线程并更新面板忙碌和切换进度。"""
+        worker = VariantWorker(task)
+        worker.context = self._context
+        worker.generation = self._generation
+        worker.on_success, worker.on_error = on_success, on_error
+        self._worker = worker
+        self._busy = True
+        self.panel.set_busy(True)
+        if task.command == "apply":
+            self.panel.set_switch_progress(task.variant_id, active=True)
+        manage_page_worker(self, worker)
+        worker.finished.connect(self._task_finished)
+        if task.mutating:
+            self.activity_changed.emit(True)
+        worker.start()
