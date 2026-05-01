@@ -350,3 +350,225 @@ class ModVariantController(QObject):
         if task.mutating:
             self.activity_changed.emit(True)
         worker.start()
+
+    def _task_finished(self):
+        """在界面线程发布并释放任务，仅向当前上下文交付结果，随后恢复面板状态并处理合并刷新。"""
+        worker = self.sender()
+        if worker is not self._worker:
+            return
+        task = worker.task
+        try:
+            self._publishing = True
+            task.publish(self.manager)
+        except (ValueError, OSError, RuntimeError) as error:
+            worker.error = worker.error or error
+        finally:
+            self._publishing = False
+            task.release()
+        self._worker = None
+        self._busy = False
+        self.panel.set_switch_progress()
+        current = (
+            not self._closing
+            and worker.context == self._context
+            and worker.generation == self._generation
+            and task.game_id == self.manager.current_game_id
+        )
+        if current:
+            if worker.error is None:
+                self._state, self._variants = dict(task.state), list(task.variants)
+                self.page.set_variant_state(task.mod_id, self._state, self._variants)
+                if worker.on_success is not None:
+                    worker.on_success(task.result)
+            elif worker.on_error is not None:
+                worker.on_error(str(worker.error))
+            elif not isinstance(worker.error, InterruptedError):
+                self._show_error(str(worker.error), read_failure=not task.mutating)
+        self.panel.set_busy(self._context[1] in self.page._deploying_frac)
+        # 生命周期管理可保留线程包装对象，完成后释放模型、异常堆栈和对话框闭包。
+        worker.task = worker.error = worker.on_success = worker.on_error = None
+        worker.deleteLater()
+        if task.mutating:
+            self.activity_changed.emit(False)
+        if self._closing:
+            self.stopped.emit()
+        elif self._refresh_pending:
+            self._refresh_pending = False
+            self.refresh(self._context[1])
+
+    def _execute(self, mod_id, command, *, on_success=None, on_error=None, **options):
+        """校验当前选择后准备指定变体命令，准备失败交给错误回调，成功则启动后台任务。"""
+        if not self._valid(mod_id):
+            return
+        try:
+            task = self.manager.variants.prepare_task(mod_id, command=command, **options)
+        except (ValueError, OSError, RuntimeError) as error:
+            (on_error or self._show_error)(str(error))
+            return
+        self._start_task(task, on_success=on_success, on_error=on_error)
+
+    def apply(self, mod_id, variant_id):
+        """应用指定变体，不额外请求启用当前 Mod。"""
+        self._apply(mod_id, variant_id, enable=False)
+
+    def enable_and_apply(self, mod_id, variant_id):
+        """应用指定变体，并在需要时继续请求启用当前 Mod。"""
+        self._apply(mod_id, variant_id, enable=True)
+
+    def _apply(self, mod_id, variant_id, *, enable):
+        """捕获当前启用状态并提交变体应用任务，成功后同步选择与后续启用动作。"""
+        if not self._valid(mod_id):
+            return
+        enabled = bool(self._state.get("enabled"))
+
+        def applied(_result):
+            """选中已应用变体，按需触发启用，并根据原启用状态提示实际配置效果。"""
+            self.panel.select_variant(variant_id)
+            if enable and not enabled:
+                self._enable(mod_id)
+            self.notification.emit(tr("用户偏好已写入。") if enabled else tr("已设为下次使用的配置。"), True)
+
+        self._execute(mod_id, "apply", variant_id=variant_id, on_success=applied, on_error=self._show_error)
+
+    def _unique_name(self, base):
+        """在四十字符限制内生成不区分大小写且不与已有变体重复的名称。"""
+        existing = {item.name.casefold() for item in self._variants}
+        candidate, index = base[:40], 2
+        while candidate.casefold() in existing:
+            suffix = f" {index}"
+            candidate = base[: 40 - len(suffix)] + suffix
+            index += 1
+        return candidate
+
+    def open_dialog(self, mode, mod_id, variant_id=None):
+        """按保存、更新、重命名、复制或删除模式验证前置状态并打开对应编辑对话框。"""
+        if not self._valid(mod_id):
+            return
+        saved = next((item for item in self._variants if item.variant_id == variant_id), None)
+        if mode != "save" and saved is None:
+            self._show_error(tr("这个变体已不存在，请刷新后重试。"))
+            return
+        if mode in ("save", "update") and not self._state.get("enabled"):
+            self._show_error(tr("请先启用这个 Mod，再保存或更新变体。"))
+            return
+        self._close_dialog()
+        config = {
+            "save": (
+                tr("保存当前状态为新变体"),
+                tr("为已读取的游戏内配置命名。保存后，当前组合将使用这个变体。"),
+                tr("保存并使用"),
+            ),
+            "rename": (tr("重命名变体"), tr("使用这个变体的组合会自动显示新名称，原有引用继续有效。"), tr("保存名称")),
+            "copy": (tr("创建变体副本"), tr("复制一份可独立调整的配置，之后可以在另一个组合中使用。"), tr("创建副本")),
+            "update": (
+                tr("更新「{value}」？", value=saved.name if saved else ""),
+                tr("将已读取的游戏内配置保存到此变体。下列组合会在下次应用时使用更新后的配置。"),
+                tr("更新并使用"),
+            ),
+            "delete": (
+                tr("删除「{value}」？", value=saved.name if saved else ""),
+                tr("删除后，所有组合中的对应选择都会改为 Mod 默认。如果正在使用此变体，当前配置也会恢复默认。"),
+                tr("删除变体"),
+            ),
+        }
+        title, description, confirm = config[mode]
+        initial = (
+            self._unique_name(tr("新的造型"))
+            if mode == "save"
+            else saved.name
+            if mode == "rename"
+            else self._unique_name(tr("{name} 副本", name=saved.name))
+            if mode == "copy"
+            else None
+        )
+        try:
+            references = (
+                [item.name for item in self.manager.variants.references(mod_id, variant_id)]
+                if mode == "update"
+                else None
+            )
+        except (ValueError, OSError, RuntimeError) as error:
+            self._show_error(str(error))
+            return
+        count = (
+            self._state.get("variable_count", 0) if mode in ("save", "update") else len(saved.variables) if saved else 0
+        )
+        summary = (
+            tr("{display_name} · {count} 项配置", display_name=self.page._selected_mod.display_name, count=count)
+            if mode != "delete"
+            else ""
+        )
+        dialog = _VariantDialog(
+            self.page.window(),
+            title,
+            description,
+            confirm,
+            name=initial,
+            references=references,
+            summary=summary,
+            destructive=mode == "delete",
+        )
+        self._dialog = dialog
+        generation = self._generation
+
+        def submit(use_defaults=False):
+            """核验对话框和上下文代次，检查名称后锁定按钮并提交变体操作。"""
+            if self._dialog is not dialog or generation != self._generation or not self._valid(mod_id):
+                return
+            name = dialog.name_input.text().strip() if dialog.name_input is not None else saved.name if saved else ""
+            if mode in ("save", "rename", "copy") and not name:
+                dialog.set_error(tr("请输入变体名称。"))
+                return
+            dialog.confirm_button.setEnabled(False)
+            dialog.defaults_button.setEnabled(False)
+
+            def failed(message):
+                """恢复当前对话框的按钮并显示错误，仅在配置不完整时允许默认值补齐。"""
+                if self._dialog is not dialog:
+                    return
+                allow_defaults = (
+                    mode in ("save", "update")
+                    and not use_defaults
+                    and message == tr("未能读取完整的游戏内配置，请先在游戏中保存配置后重试")
+                )
+                dialog.confirm_button.setEnabled(True)
+                dialog.defaults_button.setEnabled(True)
+                dialog.set_error(message, allow_defaults=allow_defaults)
+
+            def succeeded(result):
+                """关闭成功提交的对话框，按操作选择结果变体并发送对应完成通知。"""
+                if self._dialog is dialog:
+                    dialog.accept()
+                if mode in ("save", "copy", "update"):
+                    self.panel.select_variant(result.variant_id)
+                messages = {
+                    "save": tr("新变体已保存，当前组合已使用此变体。"),
+                    "update": tr("变体已更新，引用它的组合下次应用时使用新内容。"),
+                    "rename": tr("变体名称已更新，原有引用继续有效。"),
+                    "copy": tr("独立副本已创建，可点击切换。"),
+                    "delete": tr("变体已删除，对应组合引用已改为 Mod 默认。"),
+                }
+                self.notification.emit(messages[mode], True)
+
+            self._execute(
+                mod_id,
+                mode,
+                variant_id=variant_id,
+                name=name,
+                use_defaults=use_defaults,
+                on_success=succeeded,
+                on_error=failed,
+            )
+
+        dialog.confirm_button.clicked.connect(lambda: submit(False))
+        dialog.defaults_button.clicked.connect(lambda: submit(True))
+        dialog.finished.connect(lambda _result: self._dialog_finished(dialog))
+        dialog.open()
+        if dialog.name_input is not None:
+            dialog.name_input.setFocus()
+            dialog.name_input.selectAll()
+
+    def _dialog_finished(self, dialog):
+        """仅在结束的是当前对话框时清除保活引用。"""
+        if self._dialog is dialog:
+            self._dialog = None
