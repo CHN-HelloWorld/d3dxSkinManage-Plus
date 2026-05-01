@@ -262,3 +262,77 @@ class PresetProgressDialog(QDialog):
         self._bar.setRange(minimum, maximum)
         if minimum == maximum:
             self.progress_label.clear()
+
+    def setValue(self, value: int) -> None:
+        """在非恢复状态下更新进度条数值，恢复期间忽略正常任务数值。"""
+        if not self._recovering:
+            self._bar.setValue(value)
+
+    def value(self) -> int:
+        """返回内部进度条当前值，供宿主和项目计数显示使用。"""
+        return self._bar.value()
+
+    def minimum(self) -> int:
+        """返回内部进度条当前量程的下限。"""
+        return self._bar.minimum()
+
+    def maximum(self) -> int:
+        """返回内部进度条当前量程的上限。"""
+        return self._bar.maximum()
+
+    def setCancelButton(self, button) -> None:
+        """仅处理传入空值的禁用取消约定，同时隐藏按钮并禁用标题栏关闭；不安装替代按钮。"""
+        if button is None:
+            self._can_cancel = False
+            self.cancel_button.hide()
+            self._disable_caption_close()
+
+    def _disable_caption_close(self) -> None:
+        """若已安装共享窗口边框，则禁用其关闭入口并刷新边框几何。"""
+        frame = getattr(self, "_dialog_frame", None)
+        if frame is not None:
+            frame._close_allowed = False
+            frame.update_geometry()
+
+    def show_cancelling(self) -> None:
+        """进入不可重复取消的恢复提示；尚未请求且已禁止取消时保持当前状态。"""
+        if not self._can_cancel and not self._cancel_requested:
+            return
+        self._cancel_requested = True
+        self._show_recovery(
+            tr("正在取消删除") if self._deleting else tr("正在取消切换"),
+            tr("正在取消，请稍候…") if self._deleting else tr("正在恢复原状态，请稍候…"),
+        )
+
+    def show_rollback(self) -> None:
+        """显示恢复原有搭配的状态并锁定正常进度更新，等待所有者完成回滚后关闭。"""
+        self._show_recovery(tr("正在恢复原状态"), tr("切换未完成，正在还原原有搭配…"))
+
+    def _show_recovery(self, title: str, detail: str) -> None:
+        """切换为不确定恢复进度并禁用取消和标题栏关闭，防止恢复时被后续正常进度覆盖。"""
+        self._recovering = True
+        self._can_cancel = False
+        self._phase_label.setText(title)
+        self._detail_label.setText(detail)
+        self.progress_label.clear()
+        self._bar.setRange(0, 0)
+        self.cancel_button.setText(tr("正在取消") if self._cancel_requested else tr("正在恢复"))
+        self.cancel_button.setEnabled(False)
+        self._footer_label.setText(tr("恢复完成后自动关闭"))
+        self._disable_caption_close()
+
+    def _request_cancel(self) -> None:
+        """在允许取消时先更新等待恢复的界面，再至多发送一次取消信号。"""
+        if not self._can_cancel or self._cancel_requested:
+            return
+        self.show_cancelling()
+        self.canceled.emit()
+
+    def reject(self) -> None:
+        """将 Esc 等拒绝操作转换为取消请求，保留窗口等待提交或回滚结束。"""
+        self._request_cancel()
+
+    def closeEvent(self, event) -> None:
+        """把关闭操作转换为取消请求并始终忽略关闭事件，由所有者在任务结束后隐藏窗口。"""
+        self._request_cancel()
+        event.ignore()
