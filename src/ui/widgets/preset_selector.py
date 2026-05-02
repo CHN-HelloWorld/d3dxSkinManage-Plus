@@ -478,3 +478,113 @@ class PresetPopup(QFrame):
         self._update_actions()
         if rename_id:
             self._enter_rename_mode_by_id(rename_id)
+
+    def _update_actions(self) -> None:
+        """依据选择数量和默认预设保护规则启停管理按钮，并同步各行选择样式。"""
+        selected = set(self._selected_ids())
+        deletable = selected - {p.id for p in self._presets if p.is_default}
+        self._rename_btn.setEnabled(len(selected) == 1)
+        self._duplicate_btn.setEnabled(bool(selected))
+        self._del_btn.setEnabled(bool(deletable))
+        self._del_btn.setToolTip(tr("删除选中的预设，默认预设会保留") if deletable else tr("请选择可删除的预设"))
+        self._selection_label.setText(
+            (tr("已选 {count} 项", count=len(selected)) if selected else tr("选择预设以管理"))
+            + tr(" · Ctrl / Shift 多选")
+        )
+        for index in range(self._list.count()):
+            item = self._list.item(index)
+            widget = self._list.itemWidget(item)
+            if widget is not None:
+                widget.set_selected(item.isSelected())
+
+    def _on_rename_selected(self) -> None:
+        """仅在恰好选中一个预设时进入该行的重命名模式。"""
+        ids = self._selected_ids()
+        if len(ids) == 1:
+            self._enter_rename_mode_by_id(ids[0])
+
+    def _on_duplicate(self) -> None:
+        """为非空预设选择发出创建副本请求。"""
+        ids = self._selected_ids()
+        if ids:
+            self.duplicate_requested.emit(ids)
+
+    def _find_item_for_widget(self, widget: PresetItemWidget) -> QListWidgetItem | None:
+        """按控件身份查找对应列表项，控件不在列表中时返回 None。"""
+        for i in range(self._list.count()):
+            it = self._list.item(i)
+            if self._list.itemWidget(it) is widget:
+                return it
+        return None
+
+    def _on_request_select(self, widget: PresetItemWidget, modifiers) -> None:
+        """处理选择请求（实现 Windows 标准 Ctrl/Shift 选择语义）"""
+        item = self._find_item_for_widget(widget)
+        if item is None:
+            return
+        row = self._list.row(item)
+        ctrl = bool(modifiers & Qt.KeyboardModifier.ControlModifier)
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+
+        if shift and self._anchor_row >= 0:
+            # 范围选择：anchor → row 全部选中
+            lo, hi = sorted([self._anchor_row, row])
+            self._list.clearSelection()
+            for i in range(lo, hi + 1):
+                self._list.item(i).setSelected(True)
+            self._list.setCurrentItem(
+                item,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+        elif ctrl:
+            # 切换：保持其他选中，翻转当前
+            item.setSelected(not item.isSelected())
+            self._list.setCurrentItem(
+                item,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            self._anchor_row = row
+        else:
+            # 普通：清空并仅选中
+            self._list.clearSelection()
+            item.setSelected(True)
+            self._list.setCurrentItem(
+                item,
+                QItemSelectionModel.SelectionFlag.NoUpdate,
+            )
+            self._anchor_row = row
+
+        # 让 QListWidget 获取焦点，确保 Ctrl+C/V 等键盘事件能进入
+        self._list.setFocus(Qt.FocusReason.MouseFocusReason)
+
+    def _on_request_rename(self, widget: PresetItemWidget) -> None:
+        """先将目标行设为单选，再打开其名称编辑框。"""
+        self._on_request_select(widget, Qt.KeyboardModifier.NoModifier)
+        widget.enter_rename_mode()
+
+    def _enter_rename_mode_by_id(self, preset_id: str) -> None:
+        """按预设标识定位并单选目标行，更新范围选择锚点后滚动到名称编辑框。"""
+        for i in range(self._list.count()):
+            item = self._list.item(i)
+            if item.data(Qt.ItemDataRole.UserRole) == preset_id:
+                widget = self._list.itemWidget(item)
+                if widget:
+                    self._list.clearSelection()
+                    item.setSelected(True)
+                    self._list.setCurrentItem(
+                        item,
+                        QItemSelectionModel.SelectionFlag.NoUpdate,
+                    )
+                    self._anchor_row = i
+                    self._list.scrollToItem(item)
+                    widget.enter_rename_mode()
+                break
+
+    def _on_apply(self, preset_id: str) -> None:
+        """发送预设应用请求并关闭选择浮层。"""
+        self.apply_requested.emit(preset_id)
+        self.close()
+
+    def _on_rename_committed(self, preset_id: str, new_name: str) -> None:
+        """将行内确认的新名称和预设标识转发给外层处理。"""
+        self.rename_requested.emit(preset_id, new_name)
