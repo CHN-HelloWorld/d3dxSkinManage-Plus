@@ -242,3 +242,239 @@ class PresetItemWidget(QWidget):
                 self._commit_rename()
                 return False
         return super().eventFilter(obj, event)
+
+
+class PresetPopup(QFrame):
+    """下拉浮层：当前状态、预设列表与显式管理工具栏。"""
+
+    apply_requested = Signal(str)
+    rename_requested = Signal(str, str)  # preset_id, new_name
+    create_requested = Signal()
+    delete_requested = Signal(list)  # 选中的预设标识。
+    duplicate_requested = Signal(list)  # preset_ids
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """创建支持多选的预设浮层，初始化局部复制记录并在首次显示前设置透明材质。"""
+        super().__init__(parent, Qt.WindowType.Popup)
+        self.setObjectName("presetPopup")
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._presets: list = []
+        self._current_id: str = ""
+        self._clipboard_ids: list[str] = []
+        self._anchor_row: int = -1  # Shift 范围选择的锚点
+        self._setup_ui()
+        # 首次显示前设置 WA_TranslucentBackground，避免在父窗口显示过程中重建原生窗口，
+        # 引发事件重入。acrylic.py 的应用级过滤器会跳过 PresetPopup。
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        self.apply_acrylic()
+
+    def paintEvent(self, event) -> None:
+        """在透明窗口上绘制一次圆角底色，避免面板空白区域完全透出下层内容。"""
+        option = QStyleOption()
+        option.initFrom(self)
+        painter = QPainter(self)
+        self.style().drawPrimitive(QStyle.PrimitiveElement.PE_Widget, option, painter, self)
+        painter.end()
+
+    def apply_acrylic(self) -> None:
+        """按当前主题设置半透明填充，显示顶层窗口的亚克力模糊背景。
+
+        在初始化和每次弹出前调用，配合 showEvent 的 apply_acrylic_blurbehind。
+        列表及其 viewport 均需透明，避免 QAbstractScrollArea 的视口自动填充遮挡背景。
+        """
+        fill = theme.rgba("bg.card", acrylic_surface_alpha(0.72))
+        self._theme_name = theme.current_theme()
+        self.setStyleSheet(f"""
+            QFrame#presetPopup {{ background: {fill}; border: 1px solid {theme.color("stroke.card")};
+                           border-radius: 12px; }}
+            PresetPopup QLabel {{ background: transparent; border: 0; padding: 0;
+                                  color: {theme.color("text.primary")}; }}
+            QLabel#presetTitle {{ font-size: 17px; font-weight: 600; }}
+            QLabel#presetCount {{ color: {theme.color("text.secondary")}; font-size: 12px;
+                                  background: {theme.rgba("bg.subtle", 0.8)};
+                                  border-radius: 8px; padding: 2px 6px; }}
+            QLabel#presetHint, QLabel#presetSelection, QLabel#presetMeta {{
+                color: {theme.color("text.secondary")}; font-size: 12px; }}
+            QLabel#presetName {{ font-size: 14px; font-weight: 600; }}
+            PresetPopup QPushButton {{ min-width: 0; min-height: 20px; padding: 4px 9px;
+                border: 1px solid {theme.color("stroke.control")}; border-radius: 5px;
+                background: {theme.rgba("control.bg", 0.7)}; color: {theme.color("text.primary")}; }}
+            PresetPopup QPushButton:hover {{ background: {theme.color("bg.hover")}; }}
+            PresetPopup QPushButton:pressed {{ background: {theme.color("bg.pressed")}; }}
+            PresetPopup QPushButton:disabled {{ color: {theme.color("text.disabled")};
+                border-color: {theme.color("stroke.card")}; background: transparent; }}
+            QPushButton#presetCreate {{ background: {theme.color("accent")};
+                border-color: {theme.color("accent")}; color: {theme.color("text.on_accent")}; }}
+            QPushButton#presetCreate:hover {{ background: {theme.color("accent.hover")}; }}
+            QPushButton#presetDelete:hover {{ color: {theme.color("danger")};
+                background: {theme.rgba("danger", 0.09)}; border-color: {theme.rgba("danger", 0.25)}; }}
+            QWidget#presetRow {{ background: transparent; border: 1px solid transparent;
+                                  border-radius: 7px; }}
+            QWidget#presetRow:hover {{ background: {theme.rgba("bg.hover", 0.75)}; }}
+            QWidget#presetRow[presetCurrent="true"] {{ background: {theme.rgba("accent", 0.07)}; }}
+            QWidget#presetRow[presetSelected="true"] {{ background: {theme.color("accent.subtle")};
+                border-color: {theme.rgba("accent", 0.4)}; }}
+            QStackedWidget#presetNameStack {{ background: transparent; border: 0; }}
+            QPushButton#presetApply {{ min-width: 82px; max-width: 82px; min-height: 28px;
+                                      max-height: 28px; padding: 0; }}
+            QPushButton#presetApply[presetCurrent="true"]:disabled {{
+                color: {theme.color("accent")}; border: 1px solid transparent; background: transparent; }}
+            QLineEdit#presetNameEdit {{ min-height: 0; min-width: 0; padding: 1px 4px;
+                border: 1px solid {theme.color("accent")}; border-radius: 4px; }}
+            QFrame#presetFooter {{ background: transparent; border: 0;
+                border-top: 1px solid {theme.color("stroke.divider")}; }}
+        """)
+        # 清零 ::item 内边距，避免全局 padding:4px 6px 压缩行控件的可用高度，
+        # 裁切固定 24px 高的应用按钮。PresetItemWidget 已提供上下各 4px 的内边距。
+        # 透明背景与 item 规则一并设置，确保多次调用时规则完整。
+        self._list.setStyleSheet(
+            "QListWidget { background: transparent; border: none; }"
+            "QListWidget::item { padding: 0px; margin: 0px; border: none; }"
+            "QListWidget::item:selected { background: transparent; }"
+        )
+        vp = self._list.viewport()
+        vp.setObjectName("presetViewport")
+        vp.setAutoFillBackground(False)
+        vp.setStyleSheet("QWidget#presetViewport { background: transparent; }")
+        icons.retheme_icons(self)
+
+    def _apply_round_mask(self) -> None:
+        """使用窗口区域遮罩裁出圆角，同时裁切亚克力模糊背景。
+
+        QSS border-radius 仅裁切绘制背景，DWM 圆角在透明分层窗口上可能无效。
+        区域遮罩可同时约束窗口和模糊层的形状，其边缘采用离散像素裁切。
+        """
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        path = QPainterPath()
+        path.addRoundedRect(QRectF(0, 0, w, h), 12, 12)
+        self.setMask(QRegion(path.toFillPolygon().toPolygon()))
+
+    def showEvent(self, event) -> None:
+        """原生窗口显示后更新圆角裁剪区域。"""
+        super().showEvent(event)
+        self._apply_round_mask()
+
+    def resizeEvent(self, event) -> None:
+        """浮层尺寸变化后同步圆角裁剪区域。"""
+        super().resizeEvent(event)
+        self._apply_round_mask()
+
+    def _setup_ui(self) -> None:
+        """建立预设列表、数量提示及新建、重命名、复制、删除工具栏。"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(9)
+
+        heading = QHBoxLayout()
+        heading.setSpacing(7)
+        title = QLabel(tr("预设"))
+        title.setObjectName("presetTitle")
+        heading.addWidget(title)
+        self._count_label = QLabel("0")
+        self._count_label.setObjectName("presetCount")
+        heading.addWidget(self._count_label)
+        heading.addStretch()
+        self._add_btn = self._management_button(
+            tr("新建预设"), "presetCreate", "actions/add", self.create_requested.emit
+        )
+        icons.apply_icon(self._add_btn, "actions/add", "text.on_accent")
+        self._add_btn.setToolTip(tr("新建一个空预设；如需沿用现有搭配，请选中后复制"))
+        heading.addWidget(self._add_btn)
+        layout.addLayout(heading)
+        hint = QLabel(tr("一键切换整套 Mod 搭配"))
+        hint.setObjectName("presetHint")
+        layout.addWidget(hint)
+
+        self._list = QListWidget()
+        self._list.setAccessibleName(tr("预设列表，单击选择，双击重命名"))
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._list.setSpacing(2)
+        self._list.setMinimumHeight(0)
+        self._list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list.setVerticalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        layout.addWidget(self._list, 1)
+
+        footer = QFrame()
+        footer.setObjectName("presetFooter")
+        footer_layout = QVBoxLayout(footer)
+        footer_layout.setContentsMargins(0, 10, 0, 0)
+        footer_layout.setSpacing(7)
+        bottom = QHBoxLayout()
+        bottom.setSpacing(6)
+        self._rename_btn = self._management_button(
+            tr("重命名"), "presetRename", "actions/edit", self._on_rename_selected
+        )
+        self._rename_btn.setToolTip(tr("重命名选中的预设，也可双击名称"))
+        bottom.addWidget(self._rename_btn)
+        self._duplicate_btn = self._management_button(tr("复制"), "presetDuplicate", "actions/copy", self._on_duplicate)
+        self._duplicate_btn.setToolTip(tr("为选中预设创建副本，保留原来的 Mod 搭配"))
+        bottom.addWidget(self._duplicate_btn)
+        bottom.addStretch()
+        self._del_btn = self._management_button(tr("删除"), "presetDelete", "actions/remove", self._on_delete)
+        bottom.addWidget(self._del_btn)
+        footer_layout.addLayout(bottom)
+        self._selection_label = QLabel()
+        self._selection_label.setObjectName("presetSelection")
+        footer_layout.addWidget(self._selection_label)
+        layout.addWidget(footer)
+        self._list.itemSelectionChanged.connect(self._update_actions)
+        self._update_actions()
+
+    @staticmethod
+    def _management_button(text: str, name: str, icon: str, callback) -> QPushButton:
+        """创建固定高度的管理按钮，设置对象名和图标并绑定指定操作。"""
+        button = QPushButton(text)
+        button.setObjectName(name)
+        button.setAutoDefault(False)
+        button.setFixedHeight(30)
+        button.setCursor(Qt.CursorShape.PointingHandCursor)
+        icons.apply_icon(button, icon)
+        button.setIconSize(QSize(14, 14))
+        button.clicked.connect(callback)
+        return button
+
+    def set_presets(self, presets: list, current_id: str, rename_id: str | None = None) -> None:
+        """填充列表；rename_id 给出时，填充后进入该预设的重命名模式"""
+        selected_ids = set(self._selected_ids())
+        anchor = self._list.item(self._anchor_row) if self._anchor_row >= 0 else None
+        anchor_id = anchor.data(Qt.ItemDataRole.UserRole) if anchor else None
+        scroll = self._list.verticalScrollBar().value()
+        self._presets = list(presets)
+        self._current_id = current_id
+        self._list.blockSignals(True)
+        try:
+            self._list.clear()
+            self._anchor_row = -1
+            for index, p in enumerate(self._presets):
+                item = QListWidgetItem()
+                enabled_ids = getattr(p, "enabled_mod_ids", None)
+                widget = PresetItemWidget(
+                    preset_id=p.id,
+                    name=p.display_name,
+                    is_default=p.is_default,
+                    is_current=(p.id == current_id),
+                    mod_count=len(set(enabled_ids)) if enabled_ids is not None else None,
+                )
+                widget.apply_clicked.connect(self._on_apply)
+                widget.rename_committed.connect(self._on_rename_committed)
+                widget.request_select.connect(self._on_request_select)
+                widget.request_rename.connect(self._on_request_rename)
+                # 即使预设名很长，行宽仍跟随视口。
+                item.setSizeHint(QSize(0, 60))
+                item.setData(Qt.ItemDataRole.UserRole, p.id)
+                self._list.addItem(item)
+                self._list.setItemWidget(item, widget)
+                item.setSelected(p.id in selected_ids)
+                if p.id == anchor_id:
+                    self._anchor_row = index
+                    self._list.setCurrentItem(item, QItemSelectionModel.SelectionFlag.NoUpdate)
+        finally:
+            self._list.blockSignals(False)
+        self._list.verticalScrollBar().setValue(scroll)
+        self._count_label.setText(str(len(self._presets)))
+        self._update_actions()
+        if rename_id:
+            self._enter_rename_mode_by_id(rename_id)
