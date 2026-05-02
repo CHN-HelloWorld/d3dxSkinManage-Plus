@@ -347,3 +347,123 @@ class ModVariantPanel(QWidget):
             notice = f"{notice}\n{reason}" if notice else reason
         self.notice.setText(notice)
         self.notice.setVisible(enabled and bool(notice) and not unsupported)
+
+    def _on_variant_clicked(self, variant_id):
+        """在上下文有效且未忙碌时，对默认变体或已知变体发出应用请求。"""
+        if self.mod_id and not self._busy and (variant_id is None or variant_id in self._variants):
+            self.apply_requested.emit(self.mod_id, variant_id)
+
+    def select_variant(self, variant_id):
+        """更新有效变体的待选状态并刷新列表，将对应行滚动到可见区域。"""
+        if variant_id is not None and variant_id not in self._variants:
+            return
+        self._pending_id = variant_id
+        self._render_state()
+        row = self._rows.get(variant_id)
+        if row is not None:
+            self.scroll_area.ensureWidgetVisible(row, 0, 6)
+
+    def set_busy(self, busy):
+        """更新忙碌状态，关闭并禁用旧菜单后重新计算可执行操作。"""
+        self._busy = bool(busy)
+        self._close_menu()
+        self._render_state()
+
+    def set_switch_progress(self, variant_id=None, *, active=False):
+        """显示任务目标，不改变已提交的选择。"""
+        for row_id, row in self._rows.items():
+            row.set_switching(active and row_id == variant_id)
+
+    def _close_menu(self):
+        """关闭变体菜单并禁用已有动作，防止关闭后的排队触发继续执行。"""
+        self._menu.close()
+        for action in self._menu.actions():
+            action.setEnabled(False)
+
+    def clear_context(self):
+        """增加上下文代次、关闭菜单并清空当前 Mod 与待选状态，使旧操作回调失效。"""
+        self._context_generation += 1
+        self._close_menu()
+        self.mod_id = ""
+        self._state = {}
+        self._pending_id = None
+        self._busy = False
+        self.save_button.setEnabled(False)
+        self.set_switch_progress()
+
+    def _show_menu(self, variant_id, point):
+        """在当前 Mod 有效且未忙碌时构建指定变体的菜单并在给定全局位置显示。"""
+        if self.mod_id and not self._busy:
+            self.menu_for_variant(variant_id).popup(point)
+
+    def menu_for_variant(self, variant_id):
+        """两种指针入口均绑定打开菜单的记录。"""
+        self._close_menu()
+        self._menu.clear()
+        acrylic.prepare_acrylic_menu(self._menu)
+        saved = self._variants.get(variant_id)
+        if not self.mod_id or (variant_id is not None and saved is None):
+            return self._menu
+        enabled = bool(self._state.get("enabled"))
+        mid, generation = self.mod_id, self._context_generation
+
+        def add(name, text, icon, signal, *, available=True, token="text.primary"):
+            """向变体菜单添加带图标和可用性约束的动作，并绑定上下文校验后的请求回调。"""
+            action = self._menu.addAction(text)
+            action.setObjectName(name)
+            icons.apply_icon(action, icon, token)
+            action.setEnabled(bool(available) and not self._busy)
+
+            def request(_checked=False):
+                """仅在 Mod 标识、上下文代次和动作可用性仍一致时发出对应变体操作信号。"""
+                if (
+                    mid == self.mod_id
+                    and generation == self._context_generation
+                    and not self._busy
+                    and action.isEnabled()
+                ):
+                    signal.emit(mid, variant_id)
+
+            action.triggered.connect(request)
+            return action
+
+        apply_text = (tr("应用此变体") if saved else tr("应用 Mod 默认")) if enabled else tr("设为下次使用")
+        add("variantApply", apply_text, "status/enabled" if saved else "actions/refresh", self.apply_requested)
+        if not enabled:
+            add("variantEnable", tr("启用并应用"), "status/enabled", self.enable_requested)
+        if saved:
+            self._menu.addSeparator()
+            update = add(
+                "variantUpdate",
+                tr("用工作状态更新此变体"),
+                "actions/refresh",
+                self.update_requested,
+                available=enabled and bool(self._state.get("can_save") or self._state.get("variable_count")),
+            )
+            update.setToolTip(
+                tr("启用 Mod 后可用当前状态更新变体") if not enabled else str(self._state.get("reason") or "")
+            )
+            add("variantRename", tr("重命名"), "actions/edit", self.rename_requested)
+            add("variantCopy", tr("创建副本"), "actions/copy", self.copy_requested)
+            self._menu.addSeparator()
+            add("variantDelete", tr("删除此变体"), "actions/remove", self.delete_requested, token="danger")
+        return self._menu
+
+    def retheme(self):
+        """更新面板、列表说明和保存入口的主题样式，并逐行刷新变体外观。"""
+        self.setStyleSheet(
+            "#modVariantPanel, #variantScrollContent, #modVariantPanel QScrollArea,"
+            " #modVariantPanel QScrollArea > QWidget { background: transparent; border: none; }"
+            f"#variantGroupLabel {{ color: {theme.surface_text_color('text.secondary')};"
+            f" font-size: {theme.font('size_body')}px; font-weight: 600;"
+            f" border-top: 1px solid {theme.color('stroke.divider')}; padding: 8px 9px 4px; }}"
+            f"#variantWorkingNotice {{ color: {theme.color('warning')}; background: {theme.rgba('warning', 0.09)};"
+            f" border: none; border-radius: 4px; padding: 8px; font-size: {theme.font('size_secondary')}px; }}"
+            f"#variantEmpty {{ color: {theme.surface_text_color('text.secondary')};"
+            f" background: transparent; border: none; font-size: {theme.font('size_caption')}px; padding: 4px; }}"
+            "#variantEmpty { padding: 18px 3px; }"
+            f"#variantInfoLink {{ color: {theme.color('accent')}; background: transparent; border: none; }}"
+            f"#saveNewVariant {{ margin-top: 8px; font-size: {theme.font('size_body')}px; }}"
+        )
+        for row in self._rows.values():
+            row.retheme()
