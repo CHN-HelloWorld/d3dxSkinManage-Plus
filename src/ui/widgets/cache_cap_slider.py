@@ -239,3 +239,115 @@ class CacheCapSlider(QWidget):
     def range_max_mb(self) -> int:
         """返回滑块可拖动范围的最大 MB 值。"""
         return self._range_mb
+
+    def set_range_max_mb(self, mb: int) -> None:
+        """静默加载量程；调用方应先设量程，再设实际额度。"""
+        mb = max(_MIN_RANGE_MB, min(_MAX_RANGE_MB, int(mb)))
+        self._syncing = True
+        try:
+            self._range_mb = mb
+            self._value_mb = min(self._value_mb, mb)
+            self._slider.setMaximum(mb)
+            self._slider.setValue(self._value_mb)
+            self._unit = self._pick_display_unit(mb)
+            self._unit_combo.setCurrentIndex(self._unit_combo.findData(self._unit))
+            self._refresh_edit_from_range()
+        finally:
+            self._syncing = False
+        self._refresh_readouts()
+
+    def set_value_mb(self, mb: int) -> None:
+        """静默加载实际额度，并夹紧到当前量程；0 表示不限制。"""
+        self._syncing = True
+        try:
+            self._value_mb = max(0, min(self._range_mb, int(mb)))
+            self._slider.setValue(self._value_mb)
+        finally:
+            self._syncing = False
+        self._refresh_readouts()
+
+    def set_current_usage_mb(self, mb: float) -> None:
+        """将磁盘总占用交给父级指标；负数表示尚未统计。"""
+        self._usage_mb = float(mb)
+        self.usage_changed.emit(self._usage_mb)
+
+    @staticmethod
+    def _pick_display_unit(mb: int) -> str:
+        """按容量大小选择适合显示的 MB、GB 或 TB 单位。"""
+        if mb >= _UNIT_FACTORS["TB"]:
+            return "TB"
+        if mb >= _UNIT_FACTORS["GB"]:
+            return "GB"
+        return "MB"
+
+    @staticmethod
+    def _fmt(mb: int, unit: str) -> str:
+        """将 MB 容量换算到指定单位，保留最多三位小数并去掉无意义的尾零。"""
+        value = mb / _UNIT_FACTORS[unit]
+        if value == int(value):
+            return str(int(value))
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+
+    def _refresh_edit_from_range(self) -> None:
+        """按当前单位显示滑块最大值，并记录用于判定是否发生编辑的文本。"""
+        self._displayed_range = self._fmt(self._range_mb, self._unit)
+        self._edit.setText(self._displayed_range)
+
+    def _refresh_readouts(self) -> None:
+        """更新当前额度和滑块终点的容量读数，零额度显示不限制。"""
+        unit = self._pick_display_unit(self._value_mb)
+        self._readout.setText(f"{self._fmt(self._value_mb, unit)} {unit}" if self._value_mb else tr("不限制"))
+        range_unit = self._pick_display_unit(self._range_mb)
+        self._range_end.setText(f"{self._fmt(self._range_mb, range_unit)} {range_unit}")
+
+    def _on_slider_moved(self, val_mb: int) -> None:
+        """忽略程序同步引发的变化，保存用户拖动后的额度并发出 value_changed 信号。"""
+        if self._syncing:
+            return
+        self._value_mb = int(val_mb)
+        self._refresh_readouts()
+        self.value_changed.emit(self._value_mb)
+
+    def _on_edit_committed(self) -> None:
+        """解析并限制用户输入的滑块最大值，必要时同时下调当前额度。
+
+        同步控件期间屏蔽递归处理，完成后只对实际变化的范围和额度分别发出信号。
+        """
+        if self._syncing:
+            return
+        text = self._edit.text().strip()
+        # 显示单位有舍入，失焦不能把舍入结果写回配置。
+        if text == self._displayed_range:
+            return
+        # 使用与输入校验器相同的小数点和分组分隔符。
+        amount, parsed = self._edit.validator().locale().toDouble(text)
+        if not math.isfinite(amount):
+            self._refresh_edit_from_range()
+            return
+        if not parsed:
+            amount = 0.0
+        # 转换前限制数值，包括极大的有限输入。
+        amount_mb = max(_MIN_RANGE_MB, min(_MAX_RANGE_MB, amount * _UNIT_FACTORS[self._unit]))
+        mb = int(round(amount_mb))
+        old_value, old_range = self._value_mb, self._range_mb
+        self._syncing = True
+        try:
+            self._range_mb = mb
+            self._value_mb = min(self._value_mb, mb)
+            self._slider.setMaximum(mb)
+            self._slider.setValue(self._value_mb)
+            self._refresh_edit_from_range()
+        finally:
+            self._syncing = False
+        self._refresh_readouts()
+        if self._range_mb != old_range:
+            self.range_changed.emit(self._range_mb)
+        if self._value_mb != old_value:
+            self.value_changed.emit(self._value_mb)
+
+    def _on_unit_changed(self, _index: int) -> None:
+        """更新范围编辑器的显示单位并重新格式化容量，保持内部 MB 值不变。"""
+        if self._syncing:
+            return
+        self._unit = self._unit_combo.currentData() or "MB"
+        self._refresh_edit_from_range()
