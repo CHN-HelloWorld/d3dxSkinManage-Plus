@@ -161,3 +161,84 @@ class PresetItemWidget(QWidget):
         else:
             self._apply_btn.setToolTip(tr("切换到“{name}”", name=name))
         layout.addWidget(self._apply_btn)
+
+    def set_selected(self, selected: bool) -> None:
+        """仅在选择状态变化时更新动态属性并重新应用行样式。"""
+        if self.property("presetSelected") == selected:
+            return
+        self.setProperty("presetSelected", selected)
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+
+    def _on_apply_clicked(self) -> None:
+        """发送绑定预设的应用请求，实际部署由使用方执行。"""
+        self.apply_clicked.emit(self._preset_id)
+
+    def mousePressEvent(self, event) -> None:
+        """非编辑状态下转发左键选择及修饰键，消费事件以防列表重复切换多选状态。"""
+        if event.button() == Qt.MouseButton.LeftButton and not self._rename_active:
+            self.request_select.emit(self, event.modifiers())
+            # 消费事件，防止 QListWidget 的 ExtendedSelection 再次切换 Ctrl 选中状态。
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        """非编辑状态下将左键双击转换为该行的重命名请求。"""
+        if event.button() == Qt.MouseButton.LeftButton and not self._rename_active:
+            self.request_rename.emit(self)
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+    def enter_rename_mode(self) -> None:
+        """进入重命名模式并全选名称。"""
+        self._rename_active = True
+        self._name_edit.setText(self._original_name)
+        self._stack.setCurrentWidget(self._name_edit)
+        self._name_edit.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._name_edit.selectAll()
+
+    def _exit_rename_mode(self, restore: bool = False) -> None:
+        """退出重命名模式"""
+        self._rename_active = False
+        new_name = self._original_name if restore else self._name_edit.text().strip()
+        if not new_name:
+            new_name = self._original_name
+        self._original_name = new_name
+        self._name_label.setText(new_name)
+        self._stack.setCurrentWidget(self._name_label)
+
+    def _commit_rename(self) -> None:
+        """提交去除首尾空白的新名称；空名称或未变化的名称按取消处理。"""
+        if not self._rename_active:
+            return
+        new_name = self._name_edit.text().strip()
+        original = self._original_name
+        if not new_name or new_name == original:
+            self._exit_rename_mode(restore=True)
+            self.rename_cancelled.emit(self._preset_id)
+            return
+        self._exit_rename_mode(restore=False)
+        self.rename_committed.emit(self._preset_id, new_name)
+
+    def _cancel_rename(self) -> None:
+        """恢复原名称并退出编辑态，向外层报告重命名取消。"""
+        if not self._rename_active:
+            return
+        self._exit_rename_mode(restore=True)
+        self.rename_cancelled.emit(self._preset_id)
+
+    def eventFilter(self, obj, event) -> bool:
+        """在名称编辑中用 Esc 取消，失去焦点时按回车相同规则提交。"""
+        if obj is self._name_edit:
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape and self._rename_active:
+                    self._cancel_rename()
+                    return True
+            elif event.type() == QEvent.Type.FocusOut and self._rename_active:
+                # 失焦提交（与 Enter 行为一致）
+                self._commit_rename()
+                return False
+        return super().eventFilter(obj, event)
