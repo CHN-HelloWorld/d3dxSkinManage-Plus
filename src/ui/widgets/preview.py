@@ -201,3 +201,222 @@ class _ZoomableImageWidget(QWidget):
             event.accept()
         else:
             super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        """双击恢复适配窗口"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.fit_to_window()
+            event.accept()
+
+
+class ImageViewerDialog(QDialog):
+    """预览图放大查看窗口 — 支持鼠标滚轮缩放和左键拖拽平移"""
+
+    def __init__(self, image_path: str, parent=None):
+        """读取图片并按屏幕范围恢复查看窗口尺寸，布局就绪后适配图像，读取失败时显示提示。"""
+        super().__init__(parent)
+        self.setWindowTitle(Path(image_path).name)
+        self.setMinimumSize(400, 300)
+        pixmap = load_pixmap_file(image_path)
+
+        # 优先沿用已保存的窗口尺寸并限制在当前屏幕内，否则按屏幕可用区域设置默认尺寸。
+        # 关闭或隐藏时保存尺寸到 ui.image_viewer，图片本身的大小不决定窗口大小。
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen:
+            geom = screen.availableGeometry()
+            avail_w, avail_h = geom.width(), geom.height()
+        else:
+            avail_w, avail_h = 1200, 900
+
+        from src.core.config import Config
+
+        cfg = Config.instance()
+        saved_w = cfg.get("ui.image_viewer.width", 0)
+        saved_h = cfg.get("ui.image_viewer.height", 0)
+        if isinstance(saved_w, int) and isinstance(saved_h, int) and saved_w >= 400 and saved_h >= 300:
+            self.resize(min(saved_w, avail_w), min(saved_h, avail_h))
+        else:
+            def_w = max(760, min(int(avail_w * 0.72), avail_w))
+            def_h = max(560, min(int(avail_h * 0.72), avail_h))
+            self.resize(def_w, def_h)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+
+        if not pixmap.isNull():
+            self._image_widget = _ZoomableImageWidget(pixmap)
+            self._image_widget.setCursor(Qt.CursorShape.OpenHandCursor)
+            layout.addWidget(self._image_widget)
+            # 延迟一帧做 fit_to_window 以获取正确的 widget 尺寸
+            call_later(0, self._image_widget, self._image_widget.fit_to_window)
+        else:
+            label = QLabel(tr("无法加载图片"))
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setStyleSheet(
+                f"color: {theme.color('text.tertiary')}; font-size: 16px; background-color: {theme.color('bg.base')};"
+            )
+            layout.addWidget(label)
+
+    def _persist_size(self) -> None:
+        """把当前窗口尺寸落库（下次打开沿用，见 __init__ 的尺寸策略）。"""
+        try:
+            w, h = int(self.width()), int(self.height())
+            if w < 400 or h < 300:
+                return  # 最小化/异常尺寸不记忆，避免污染记忆值
+            from src.core.config import Config
+
+            Config.instance().set("ui.image_viewer", {"width": w, "height": h})
+        except Exception:
+            pass
+
+    def closeEvent(self, event):
+        """关闭查看窗口前保存当前尺寸，供下次打开时恢复。"""
+        self._persist_size()
+        super().closeEvent(event)
+
+    def hideEvent(self, event):
+        """隐藏时保存窗口尺寸，覆盖 Esc 或拒绝操作未触发关闭事件的情况。"""
+        # Esc 或 reject 可能只触发隐藏而不经过 closeEvent，因此隐藏时也保存窗口尺寸。
+        self._persist_size()
+        super().hideEvent(event)
+
+
+class PreviewWidget(QWidget):
+    """预览图显示控件
+
+    支持：
+    - 显示 Mod 预览图（适应窗口大小）
+    - 拖拽图片文件替换预览图
+    - 多预览图切换
+    - 点击放大查看
+    """
+
+    image_dropped = Signal(str)  # 拖入的图片路径
+    image_clicked = Signal(str)  # 点击图片
+    preview_changed = Signal(int)  # 当前预览图索引变更
+    delete_current_requested = Signal(int)  # 删除当前预览图（删除文件）
+    delete_all_requested = Signal()  # 删除所有预览图（删除文件）
+
+    # 面板预览先限制工作分辨率，减少边框检测、缩放及像素缓存开销。
+    # 独立图片查看器仍从源文件读取完整分辨率。
+    _WORK_MAX_EDGE = 1600
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """初始化图片列表、当前图缓存和缩放防抖定时器，创建支持拖放的预览界面。"""
+        super().__init__(parent)
+        # 预览控件保持透明，避免全局 QWidget 背景覆盖面板颜色。
+        self.setObjectName("panelPreviewArea")
+        self._images: list[str] = []
+        self._current_index = 0
+        self._single_image_mode = False  # 类别模式：仅一张预览图
+        self._empty_text = tr("拖拽图片到此处\n或点击添加预览图\n或右键粘贴剪切板图片")  # 默认提示文本
+        self._cached_pixmap: QPixmap | None = None  # 缓存已加载的原始图片
+        self._cached_path: str = ""  # 缓存对应的路径
+        # 防抖定时器：调整大小结束后用高质量重绘
+        self._resize_smooth_timer = QTimer(self)
+        self._resize_smooth_timer.setSingleShot(True)
+        self._resize_smooth_timer.setInterval(150)
+        self._resize_smooth_timer.timeout.connect(self._apply_smooth_scaled)
+        self._setup_ui()
+        self.setAcceptDrops(True)
+
+    def _setup_ui(self) -> None:
+        """初始化 UI"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+
+        # 图片显示区
+        self._image_label = QLabel(tr("拖拽图片到此处\n或点击添加预览图\n或右键粘贴剪切板图片"))
+        self._image_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._image_label.setMinimumSize(200, 200)
+        self._image_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._style_placeholder()
+        # 仅在实际图像区域显示可点击光标，完整适配产生的留白保持默认光标。
+        self._image_label.setMouseTracking(True)
+        self._image_label.installEventFilter(self)
+        layout.addWidget(self._image_label)
+
+        # 导航按钮区
+        nav_layout = QHBoxLayout()
+        nav_layout.setSpacing(8)
+
+        nav_layout.addStretch()
+
+        self._prev_btn = QPushButton()
+        icons.apply_icon(self._prev_btn, "actions/chevron-left")
+        self._prev_btn.setIconSize(QSize(16, 16))
+        self._prev_btn.setFixedSize(32, 32)
+        self._prev_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._prev_btn.setToolTip(tr("上一张预览图"))
+        self._prev_btn.setAccessibleName(tr("上一张预览图"))
+        self._prev_btn.clicked.connect(self._show_prev)
+        nav_layout.addWidget(self._prev_btn)
+
+        self._page_label = QLabel("0 / 0")
+        self._page_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        nav_layout.addWidget(self._page_label)
+
+        self._next_btn = QPushButton()
+        icons.apply_icon(self._next_btn, "actions/chevron-right")
+        self._next_btn.setIconSize(QSize(16, 16))
+        self._next_btn.setFixedSize(32, 32)
+        self._next_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._next_btn.setToolTip(tr("下一张预览图"))
+        self._next_btn.setAccessibleName(tr("下一张预览图"))
+        self._next_btn.clicked.connect(self._show_next)
+        nav_layout.addWidget(self._next_btn)
+
+        nav_layout.addStretch()
+
+        layout.addLayout(nav_layout)
+
+        # 保留正常按钮尺寸，窄预览面板按需换行。
+        mgmt_layout = TagFlowLayout(spacing=6)
+        mgmt_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        mgmt_layout.setContentsMargins(0, 8, 0, 8)  # 上下增加间距，与分割线保持距离
+
+        self._add_btn = QPushButton(tr("添加预览图"))
+        icons.apply_icon(self._add_btn, "actions/add")
+        self._add_btn.setIconSize(QSize(16, 16))
+        self._add_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._add_btn.clicked.connect(self._browse_images)
+        mgmt_layout.addWidget(self._add_btn)
+
+        self._delete_btn = QPushButton(tr("删除"))
+        icons.apply_icon(self._delete_btn, "actions/remove")
+        self._delete_btn.setIconSize(QSize(16, 16))
+        self._delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._delete_btn.setToolTip(tr("删除当前预览图（删除文件）"))
+        self._delete_btn.clicked.connect(self._on_delete_current)
+        mgmt_layout.addWidget(self._delete_btn)
+
+        self._delete_all_btn = QPushButton(tr("删除所有"))
+        icons.apply_icon(self._delete_all_btn, "actions/remove")
+        self._delete_all_btn.setIconSize(QSize(16, 16))
+        self._delete_all_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._delete_all_btn.setToolTip(tr("删除所有预览图（删除文件）"))
+        self._delete_all_btn.clicked.connect(self._on_delete_all)
+        mgmt_layout.addWidget(self._delete_all_btn)
+
+        layout.addLayout(mgmt_layout)
+
+        self._update_nav()
+
+    # 预览图区域底色
+    def _style_placeholder(self) -> None:
+        """无图态：透明底 + 虚线框，沿用所在面板的背景。"""
+        style = (
+            "QLabel { background-color: transparent; "
+            f"border: 2px dashed {theme.color('stroke.control')}; "
+            f"border-radius: {theme.radius('card')}px; "
+            f"color: {theme.color('text.tertiary')}; font-size: 14px; }}"
+        )
+        if self._image_label.styleSheet() != style:
+            self._image_label.setStyleSheet(style)
+
+    def _style_image(self) -> None:
+        """显示图片时移除占位背景和虚线边框，使圆角区域透出面板本身。"""
+        style = "QLabel { background: transparent; border: none; }"
+        if self._image_label.styleSheet() != style:
+            self._image_label.setStyleSheet(style)
