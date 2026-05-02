@@ -600,3 +600,104 @@ class PreviewWidget(QWidget):
             self._image_label.clear()
             self._image_label.setPixmap(scaled)
             self._style_image()
+
+    def current_image_path(self) -> str:
+        """当前显示的图片路径（无图返回 ""）。
+
+        对外的稳定标识：预览图顺序是实时落库的，DB 里的排列随时会变，而本控件的
+        ``_images`` 保持加载时的顺序不动，所以调用方只能按路径而不是索引对账。
+        """
+        if self._images and 0 <= self._current_index < len(self._images):
+            return self._images[self._current_index]
+        return ""
+
+    def _show_prev(self) -> None:
+        """显示上一张"""
+        if self._images and self._current_index > 0:
+            self._current_index -= 1
+            self._show_current()
+            self._update_nav()
+            self.preview_changed.emit(self._current_index)
+
+    def _show_next(self) -> None:
+        """显示下一张"""
+        if self._images and self._current_index < len(self._images) - 1:
+            self._current_index += 1
+            self._show_current()
+            self._update_nav()
+            self.preview_changed.emit(self._current_index)
+
+    def _on_delete_current(self) -> None:
+        """删除当前预览图（删除文件）"""
+        if self._images and 0 <= self._current_index < len(self._images):
+            self.delete_current_requested.emit(self._current_index)
+
+    def _on_delete_all(self) -> None:
+        """删除所有预览图（删除文件）"""
+        if self._images:
+            self.delete_all_requested.emit()
+
+    def _update_nav(self) -> None:
+        """更新导航状态"""
+        total = len(self._images)
+        current = self._current_index + 1 if total > 0 else 0
+        self._page_label.setText(f"{current} / {total}")
+        self._prev_btn.setEnabled(self._current_index > 0)
+        self._next_btn.setEnabled(self._current_index < total - 1)
+        self._prev_btn.setVisible(total > 1)
+        self._next_btn.setVisible(total > 1)
+        self._page_label.setVisible(total > 1)
+        # 管理按钮可见性
+        has_images = total > 0
+        # 单图模式（类别 / 游戏预览栏）只保留当前图片的删除操作。
+        single = self._single_image_mode
+        self._delete_btn.setVisible(has_images)
+        self._delete_all_btn.setVisible(total > 1 and not single)
+
+    # 拖拽支持
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
+        """仅检查是否提供 URL 格式并显示拖入提示，实际文件数据留到投放时读取。"""
+        # 仅检查格式可用性，不读取实际 URL 数据，避免 COM IPC 卡顿
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._image_label.setStyleSheet(
+                f"QLabel {{ background-color: {theme.color('accent.subtle')}; "
+                f"border: 2px dashed {theme.color('accent')}; "
+                f"border-radius: {theme.radius('card')}px; color: {theme.color('accent')}; }}"
+            )
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event) -> None:
+        """拖动离开预览区时恢复普通显示样式。"""
+        self._restore_label_style()
+
+    def dropEvent(self, event: QDropEvent) -> None:
+        """接收本地图片并通知外层处理；单图模式只取首张，多图模式依次加入预览列表。"""
+        self._restore_label_style()
+        if event.mimeData().hasUrls():
+            from src.utils.paths import is_image
+
+            accepted = False
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    path = url.toLocalFile()
+                    if is_image(path):
+                        if self._single_image_mode:
+                            # 类别模式：替换为唯一一张
+                            self._images = [path]
+                            self._current_index = 0
+                            self._show_current()
+                            self._update_nav()
+                            self.image_dropped.emit(path)
+                            event.acceptProposedAction()
+                            return  # 单图模式只取第一张
+                        else:
+                            self.add_image(path)
+                            self.image_dropped.emit(path)
+                            accepted = True
+            if accepted:
+                event.acceptProposedAction()
+                return
+        event.ignore()
