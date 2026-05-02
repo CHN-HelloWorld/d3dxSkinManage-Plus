@@ -420,3 +420,183 @@ class PreviewWidget(QWidget):
         style = "QLabel { background: transparent; border: none; }"
         if self._image_label.styleSheet() != style:
             self._image_label.setStyleSheet(style)
+
+    def _restore_label_style(self) -> None:
+        """据当前是否有图恢复底色（拖拽结束 / 取消时调用）。"""
+        if self._images:
+            self._style_image()
+        else:
+            self._style_placeholder()
+
+    def set_images(self, images: list[str], initial_index: int = 0) -> None:
+        """设置预览图列表"""
+        self._images = [img for img in images if fs.exists(img)]
+        self._current_index = min(initial_index, max(0, len(self._images) - 1))
+        self._show_current()
+        self._update_nav()
+
+    @staticmethod
+    def _same_image_path(left: str, right: str) -> bool:
+        """按规范化后的绝对路径比较非空图片路径，避免路径写法差异导致重复加载。"""
+        if not left or not right:
+            return False
+        return Path(fs.normal_path(left)).absolute() == Path(fs.normal_path(right)).absolute()
+
+    def set_images_deferred(
+        self,
+        images: list[str],
+        initial_index: int = 0,
+        *,
+        cached_path: str = "",
+        cached_pixmap: QPixmap | None = None,
+    ) -> bool:
+        """先更新预览状态，图片由调用方后台解码后再回填。
+
+        可见卡片已有的低分辨率缓存足够覆盖侧栏尺寸时会立即复用，从而让 Mod
+        选中反馈不再等待磁盘读取。返回本次是否成功复用了缓存。
+        """
+        self._images = [img for img in images if img]
+        self._current_index = min(initial_index, max(0, len(self._images) - 1))
+        if not self._images:
+            self.clear()
+            return False
+
+        current_path = self._images[self._current_index]
+        existing_matches = (
+            self._cached_pixmap is not None
+            and not self._cached_pixmap.isNull()
+            and self._same_image_path(self._cached_path, current_path)
+        )
+        card_cache_matches = (
+            cached_pixmap is not None
+            and not cached_pixmap.isNull()
+            and self._same_image_path(cached_path, current_path)
+        )
+        can_reuse = False
+        if existing_matches:
+            # 右栏自己的缓存通常已按面板尺寸解码，优先级高于卡片缩略图。
+            self._show_current()
+            can_reuse = True
+        elif card_cache_matches:
+            self._cached_pixmap = trim_uniform_border(cached_pixmap)
+            self._cached_path = current_path
+            self._show_current()
+            can_reuse = True
+        elif not self._same_image_path(self._cached_path, current_path):
+            self._cached_pixmap = None
+            self._cached_path = ""
+            self._image_label.clear()
+            self._image_label.setText(tr("正在加载预览..."))
+            self._image_label.setStyleSheet(
+                f"QLabel {{ background-color: {theme.surface_color('bg.subtle', 'placeholder')}; "
+                f"border: none; border-radius: {theme.radius('card')}px; "
+                f"color: {theme.color('text.tertiary')}; font-size: 12px; }}"
+            )
+        else:
+            self._show_current()
+            can_reuse = self._cached_pixmap is not None and not self._cached_pixmap.isNull()
+        self._update_nav()
+        return can_reuse
+
+    def cached_pixmap_needs_upgrade(
+        self,
+        image_path: str,
+        target_width: int,
+        target_height: int,
+    ) -> bool:
+        """当前缓存若需明显放大才能装入目标边界，就应加载更高清的版本。"""
+        pixmap = self._cached_pixmap
+        if pixmap is None or pixmap.isNull() or not self._same_image_path(self._cached_path, image_path):
+            return True
+        if pixmap.width() <= 0 or pixmap.height() <= 0:
+            return True
+        contain_scale = min(
+            max(1, target_width) / pixmap.width(),
+            max(1, target_height) / pixmap.height(),
+        )
+        # 给黑边裁切和格式解码尺寸取整留少量余量，避免重复升级同一张图。
+        return contain_scale > 1.12
+
+    def apply_deferred_pixmap(self, image_path: str, pixmap: QPixmap | None) -> bool:
+        """仅当后台结果仍对应当前图片时应用，防止快速切换 Mod 后串图。"""
+        if not self._images or self._current_index >= len(self._images):
+            return False
+        current_path = self._images[self._current_index]
+        if not self._same_image_path(current_path, image_path):
+            return False
+        if pixmap is None or pixmap.isNull():
+            self._cached_pixmap = None
+            self._cached_path = ""
+            self._image_label.clear()
+            self._image_label.setText(tr("预览图无法加载"))
+            self._style_placeholder()
+            return False
+
+        self._cached_pixmap = trim_uniform_border(pixmap)
+        self._cached_path = current_path
+        self._show_current()
+        return True
+
+    def add_image(self, path: str) -> None:
+        """添加预览图"""
+        if fs.exists(path):
+            self._images.append(path)
+            self._current_index = len(self._images) - 1
+            self._show_current()
+            self._update_nav()
+
+    def clear(self) -> None:
+        """清空预览图"""
+        self._images.clear()
+        self._current_index = 0
+        self._cached_pixmap = None
+        self._cached_path = ""
+        self._image_label.clear()
+        self._image_label.setText(self._empty_text)
+        self._style_placeholder()
+        self._update_nav()
+
+    def set_empty_text(self, text: str) -> None:
+        """设置无预览图时的提示文本"""
+        self._empty_text = text
+        if not self._images:
+            self._image_label.setText(text)
+
+    def _show_current(self, smooth: bool = True) -> None:
+        """显示当前预览图"""
+        if not self._images or self._current_index >= len(self._images):
+            return
+
+        path = self._images[self._current_index]
+        # 仅在路径变化时重新加载图片，避免重复磁盘读取
+        if path != self._cached_path or self._cached_pixmap is None:
+            # 从完整路径读字节再解码：同一 Mod 内常有多个不同目录下同名 preview.png；
+            # 不让 Qt 的文件名缓存参与，确保每个索引对应自己的真实图片内容。
+            pm = load_pixmap_file(path)
+            if not pm.isNull():
+                # 先缩小超大图片，限制边框检测和后续缩放的时间及内存开销。
+                if max(pm.width(), pm.height()) > self._WORK_MAX_EDGE:
+                    pm = pm.scaled(
+                        self._WORK_MAX_EDGE,
+                        self._WORK_MAX_EDGE,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                # 部分预览图的像素包含近黑或透明边框，完整适配时会一并显示。
+                # 裁除连续的纯色边框以保留有效画面；无此类边框的图像保持不变。
+                pm = trim_uniform_border(pm)
+            self._cached_pixmap = pm
+            self._cached_path = path
+        if self._cached_pixmap is not None and not self._cached_pixmap.isNull():
+            # 等比适配并居中显示完整图像，留白透出面板背景。
+            size = self._image_label.size()
+            scaled = fit_contain_rounded(
+                self._cached_pixmap,
+                size.width(),
+                size.height(),
+                radius=8,
+                smooth=smooth,
+            )
+            self._image_label.clear()
+            self._image_label.setPixmap(scaled)
+            self._style_image()
