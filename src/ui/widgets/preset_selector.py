@@ -588,3 +588,137 @@ class PresetPopup(QFrame):
     def _on_rename_committed(self, preset_id: str, new_name: str) -> None:
         """将行内确认的新名称和预设标识转发给外层处理。"""
         self.rename_requested.emit(preset_id, new_name)
+
+    def _selected_ids(self) -> list[str]:
+        """返回当前选中列表项保存的预设标识。"""
+        return [it.data(Qt.ItemDataRole.UserRole) for it in self._list.selectedItems()]
+
+    def _on_delete(self) -> None:
+        """从选择中排除默认预设，仅为剩余预设发送删除请求。"""
+        defaults = {p.id for p in self._presets if p.is_default}
+        ids = [ident for ident in self._selected_ids() if ident not in defaults]
+        if ids:
+            self.delete_requested.emit(ids)
+
+    def _on_copy(self) -> None:
+        """将非空选择的预设标识保存到浮层内部复制记录。"""
+        ids = self._selected_ids()
+        if ids:
+            self._clipboard_ids = ids
+
+    def _on_paste(self) -> None:
+        """根据内部复制记录请求创建预设副本，并复制标识列表避免共享可变容器。"""
+        if self._clipboard_ids:
+            self.duplicate_requested.emit(list(self._clipboard_ids))
+
+
+class PresetSelector(QWidget):
+    """以按钮显示当前预设，并通过选择浮层转发应用和管理请求。"""
+
+    apply_requested = Signal(str)
+    rename_requested = Signal(str, str)
+    create_requested = Signal()
+    delete_requested = Signal(list)
+    duplicate_requested = Signal(list)
+
+    def install_shortcuts(self, dispatcher) -> None:
+        """将复制、粘贴和全选命令注册到预设列表的快捷键上下文。"""
+        dispatcher.register_context(
+            self._popup._list,
+            "preset",
+            {
+                "edit.copy": self._popup._on_copy,
+                "edit.paste": self._popup._on_paste,
+                "edit.select_all": self._popup._list.selectAll,
+            },
+        )
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """创建当前预设按钮和浮层，并向使用方转发浮层的管理信号。"""
+        super().__init__(parent)
+        self._presets: list = []
+        self._current_id: str = ""
+        self._setup_ui()
+        self._popup = PresetPopup(self)
+        self._popup.apply_requested.connect(self.apply_requested.emit)
+        self._popup.rename_requested.connect(self.rename_requested.emit)
+        self._popup.create_requested.connect(self.create_requested.emit)
+        self._popup.delete_requested.connect(self.delete_requested.emit)
+        self._popup.duplicate_requested.connect(self.duplicate_requested.emit)
+
+    def _setup_ui(self) -> None:
+        """建立具有预设名称及展开图标的按钮，绑定浮层显示入口。"""
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        self._btn = QToolButton()
+        self._btn.setObjectName("presetBtn")  # 背景图模式下作亚克力（见 background_overlay_qss）
+        self._btn.setText(tr("预设"))
+        icons.apply_icon(self._btn, "actions/chevron-down")
+        self._btn.setIconSize(QSize(14, 14))
+        self._btn.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self._btn.setMinimumWidth(160)
+        self._btn.setMaximumWidth(220)
+        self._btn.setMinimumHeight(28)
+        self._btn.setArrowType(Qt.ArrowType.NoArrow)
+        self._btn.clicked.connect(self._show_popup)
+        layout.addWidget(self._btn)
+
+    def set_presets(self, presets: list, current_id: str = "", rename_id: str | None = None) -> None:
+        """更新当前预设文案与浮层列表，可在刷新后定位指定预设进入重命名。"""
+        self._presets = list(presets)
+        self._current_id = current_id
+        cur_name = ""
+        for p in presets:
+            if p.id == current_id:
+                cur_name = p.display_name + (tr("（默认）") if p.is_default else "")
+                break
+        if not cur_name and presets:
+            cur_name = presets[0].display_name
+        self._btn.setText(f"  {cur_name or tr('预设')}  ")
+        self._btn.setToolTip(tr("{cur_name}\n管理与切换预设", cur_name=cur_name) if cur_name else tr("管理与切换预设"))
+        self._popup.set_presets(self._presets, self._current_id)
+        if rename_id:
+            # 先显示编辑器，避免弹窗焦点立即提交刚打开的输入。
+            if not self._popup.isVisible():
+                self._show_popup()
+            self._popup._enter_rename_mode_by_id(rename_id)
+
+    def _show_popup(self) -> None:
+        """依据按钮和屏幕空间定位浮层，应用当前窗口材质并将焦点交给预设列表。"""
+        # 显示前按当前主题和背景设置更新面板材质。
+        self._popup.apply_acrylic()
+        gp = self._btn.mapToGlobal(QPoint(0, self._btn.height()))
+        width = max(380, self._btn.width() * 2)
+        height = 176 + min(5, max(1, len(self._presets))) * 64
+        screen = self._btn.screen()
+        if screen is not None:
+            available = screen.availableGeometry().adjusted(8, 8, -8, -8)
+            width = min(width, available.width())
+            height = min(height, available.height())
+            gp.setX(max(available.left(), min(gp.x(), available.right() - width + 1)))
+            if gp.y() + height > available.bottom() + 1:
+                gp.setY(self._btn.mapToGlobal(QPoint(0, 0)).y() - height)
+            gp.setY(max(available.top(), min(gp.y(), available.bottom() - height + 1)))
+        self._popup.resize(width, height)
+        self._popup.move(gp)
+        self._popup.show()
+        self._popup.raise_()
+        # 系统圆角不可用时，裁剪区域与面板自身的十二像素圆角保持一致。
+        try:
+            from src.ui import win_effects
+
+            win_effects.apply_rounded_corners(self._popup, fallback_radius=12)
+        except Exception:
+            pass
+        # 原生窗口创建后应用 ACCENT 模糊，以支持 Qt 的透明分层窗口。
+        try:
+            from src.ui import win_effects
+
+            win_effects.apply_acrylic_blurbehind(self._popup, dark=(theme.current_theme() == "dark"))
+        except Exception:
+            pass
+        # 让列表获得焦点，方便键盘操作
+        self._popup._list.setFocus(Qt.FocusReason.PopupFocusReason)
+        # 入场动画：从按钮下方略上处下滑到位（几何位移，兼容亚克力磨砂层，不用 effect）。
+        anim.slide_in(self._popup, dy=8)
