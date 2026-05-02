@@ -701,3 +701,127 @@ class PreviewWidget(QWidget):
                 event.acceptProposedAction()
                 return
         event.ignore()
+
+    def eventFilter(self, obj, event) -> bool:
+        """在预览标签接收鼠标移动时更新实际图片区域的悬停光标。"""
+        # 依据真实图像矩形更新光标，与点击打开查看器的命中范围一致。
+        if obj is self._image_label and event.type() == QEvent.Type.MouseMove:
+            self._update_image_hover_cursor(event)
+        return super().eventFilter(obj, event)
+
+    def _update_image_hover_cursor(self, event) -> None:
+        """将标签内鼠标位置映射到预览控件，仅在实际图像范围内显示可点击光标。"""
+        on_image = False
+        if self._images and self._current_index < len(self._images):
+            rect = self._displayed_image_rect()
+            if rect is not None:
+                try:
+                    pos = event.position().toPoint()
+                except AttributeError:
+                    pos = event.pos()
+                # event 落在 label 坐标系 → 映射到 PreviewWidget 坐标再和图片矩形比对
+                on_image = rect.contains(self._image_label.mapTo(self, pos))
+        self._image_label.setCursor(Qt.CursorShape.PointingHandCursor if on_image else Qt.CursorShape.ArrowCursor)
+
+    def mousePressEvent(self, event) -> None:
+        """左键命中图片时打开查看器，右键在整个预览区域内尝试粘贴剪贴板图片。"""
+        # 仅在预览图区域内响应鼠标事件
+        lbl_rect = self._image_label.geometry()
+        if lbl_rect.contains(event.pos()):
+            if event.button() == Qt.MouseButton.LeftButton:
+                # 仅点击实际图像区域时打开查看器，留白不响应。
+                if self._images and self._current_index < len(self._images):
+                    img_rect = self._displayed_image_rect()
+                    if img_rect is not None and img_rect.contains(event.pos()):
+                        self._open_image_viewer()
+                return
+            elif event.button() == Qt.MouseButton.RightButton:
+                # 右键粘贴：整块预览区都可（含空占位时添加图），不限图片像素
+                self._paste_from_clipboard()
+                return
+        super().mousePressEvent(event)
+
+    def _displayed_image_rect(self) -> QRect | None:
+        """当前图片在本控件坐标系里「实际显示的矩形」（contain 居中后的图，不含留白）。
+
+        `_image_label` 用 AlignCenter 承载 fit_contain 后的 pixmap（一边通常小于 label →
+        留白）。这里按 pixmap 的逻辑尺寸在 label 内居中，换算到 PreviewWidget 坐标。无图返回 None。
+        """
+        pm = self._image_label.pixmap()
+        if pm is None or pm.isNull():
+            return None
+        dpr = pm.devicePixelRatio() or 1.0
+        pw = int(round(pm.width() / dpr))
+        ph = int(round(pm.height() / dpr))
+        geo = self._image_label.geometry()  # 相对 PreviewWidget
+        x = geo.x() + max(0, (geo.width() - pw) // 2)
+        y = geo.y() + max(0, (geo.height() - ph) // 2)
+        return QRect(x, y, min(pw, geo.width()), min(ph, geo.height()))
+
+    def _open_image_viewer(self) -> None:
+        """打开放大预览窗口"""
+        if not self._images or self._current_index >= len(self._images):
+            return
+        path = self._images[self._current_index]
+        if fs.exists(path):
+            dialog = ImageViewerDialog(path, parent=self.window())
+            dialog.exec()
+
+    def _paste_from_clipboard(self) -> None:
+        """从剪切板粘贴图片作为预览图
+
+        类别/角色卡片(single_image_mode): 替换原预览图
+        Mod卡片: 添加新预览图
+        """
+        path = clipboard_image_path()
+        if not path:
+            return
+        if self._single_image_mode:
+            self._images = [path]
+            self._current_index = 0
+            self._show_current()
+            self._update_nav()
+        else:
+            self.add_image(path)
+        self.image_dropped.emit(path)
+
+    def _browse_images(self) -> None:
+        """通过文件对话框添加预览图"""
+        if self._single_image_mode:
+            # 类别模式：只选一张，替换现有
+            path, _ = QFileDialog.getOpenFileName(
+                self, tr("选择预览图"), "", tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*)")
+            )
+            if path and fs.exists(path):
+                self._images = [path]
+                self._current_index = 0
+                self._show_current()
+                self._update_nav()
+                self.image_dropped.emit(path)
+        else:
+            files, _ = QFileDialog.getOpenFileNames(
+                self, tr("选择预览图"), "", tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*)")
+            )
+            for f in files:
+                if fs.exists(f):
+                    self.add_image(f)
+                    self.image_dropped.emit(f)
+
+    def set_single_image_mode(self, enabled: bool) -> None:
+        """设置单图模式（类别预览图专用，仅允许一张）"""
+        changed = self._single_image_mode != enabled
+        self._single_image_mode = enabled
+        # 模式变化后立即重算按钮可见性，确保先设置图像再修改模式时也保持一致。
+        if changed:
+            self._update_nav()
+
+    def resizeEvent(self, event) -> None:
+        """调整尺寸时先快速缩放当前图片，并延后执行高质量重采样。"""
+        super().resizeEvent(event)
+        # 调整大小期间使用快速缩放，停止后再用高质量重绘
+        self._show_current(smooth=False)
+        self._resize_smooth_timer.start()
+
+    def _apply_smooth_scaled(self) -> None:
+        """调整大小结束后用高质量缩放重绘"""
+        self._show_current(smooth=True)
