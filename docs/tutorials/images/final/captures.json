@@ -1,0 +1,294 @@
+{
+  "version": "2026-10-30",
+  "theme": "dark",
+  "language": "zh-CN",
+  "screenshots": [
+    {
+      "file": "02-游戏配置.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏　（当前环境）",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1130,
+            325,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1255,
+            325,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            375,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1115,
+            375,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            411,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1115,
+            411,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            447,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1115,
+            449,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            487,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1115,
+            489,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            527,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1115,
+            529,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "当前环境",
+          "box": [
+            1037,
+            569,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存",
+          "box": [
+            1046,
+            620,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1236,
+            621,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    }
+  ]
+}
