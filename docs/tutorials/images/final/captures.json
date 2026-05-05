@@ -4084,6 +4084,260 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "20-删除游戏.webp",
+      "width": 1400,
+      "height": 1280,
+      "logical_width": 700,
+      "logical_height": 640,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "删除「示例游戏」",
+          "box": [
+            77,
+            52,
+            598,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此操作会永久删除以下数据，不进回收站，无法撤销。",
+          "box": [
+            77,
+            96,
+            598,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "资源目录占用",
+          "box": [
+            42,
+            143,
+            78,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "215.8 KB",
+          "box": [
+            551,
+            143,
+            107,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "6",
+          "box": [
+            42,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已入库 Mod",
+          "box": [
+            42,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            201,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别 / 角色",
+          "box": [
+            201,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            360,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设",
+          "box": [
+            360,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1",
+          "box": [
+            519,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "部署副本",
+          "box": [
+            519,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "将删除的内容",
+          "box": [
+            42,
+            285,
+            616,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "整个游戏资源目录（含 Mod 库）",
+          "box": [
+            42,
+            313,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\data\\Sample Game",
+          "box": [
+            42,
+            337,
+            616,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此目录内的全部文件和文件夹都会删除",
+          "box": [
+            42,
+            362,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此游戏的Mod全部部署数据",
+          "box": [
+            42,
+            390,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "该游戏的配置、预设、按键 / 变体偏好和更新记录。",
+          "box": [
+            42,
+            418,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "需要保留的 Mod 请先「导出」；手动放入的文件请另行备份到上述删除范围之外。",
+          "box": [
+            25,
+            465,
+            650,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            519,
+            595,
+            60,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "永久删除",
+          "box": [
+            589,
+            595,
+            86,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "删除游戏",
+          "box": [
+            36,
+            1,
+            614,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
