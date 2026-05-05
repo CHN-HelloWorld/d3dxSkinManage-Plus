@@ -3277,6 +3277,271 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "09-编辑Mod.webp",
+      "width": 1520,
+      "height": 1072,
+      "logical_width": 760,
+      "logical_height": 536,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "编辑 Mod",
+          "box": [
+            70,
+            49,
+            84,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            175,
+            49,
+            561,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示名称",
+          "box": [
+            24,
+            113,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例 Mod A",
+          "box": [
+            24,
+            133,
+            432,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "同时重命名 Mod 文件或文件夹",
+          "box": [
+            24,
+            172,
+            180,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "作者",
+          "box": [
+            24,
+            202,
+            314,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "教程示例",
+          "box": [
+            24,
+            222,
+            314,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "版本",
+          "box": [
+            350,
+            202,
+            106,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "1.0",
+          "box": [
+            350,
+            222,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "来源 URL",
+          "box": [
+            24,
+            266,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "描述",
+          "box": [
+            24,
+            330,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "年龄分级",
+          "box": [
+            498,
+            113,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "G · 全年龄",
+          "box": [
+            498,
+            133,
+            238,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "标签",
+          "box": [
+            498,
+            184,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            505,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            571,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2 / 20",
+          "box": [
+            698,
+            277,
+            38,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "文件信息",
+          "box": [
+            498,
+            320,
+            170,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "只读",
+          "box": [
+            674,
+            320,
+            40,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "尚未修改",
+          "box": [
+            22,
+            488,
+            519,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            549,
+            488,
+            76,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存修改",
+          "box": [
+            633,
+            488,
+            105,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "编辑 Mod - 示例 Mod A",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
