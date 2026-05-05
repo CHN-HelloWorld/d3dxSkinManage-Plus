@@ -3542,6 +3542,128 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "22-批量添加.webp",
+      "width": 1200,
+      "height": 1226,
+      "logical_width": 600,
+      "logical_height": 613,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "批量添加类别",
+          "box": [
+            25,
+            52,
+            550,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "逐个填写类别信息，每个类别可设置名称、英文名和图片。点击「+」添加更多。",
+          "box": [
+            25,
+            87,
+            550,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "#1",
+          "box": [
+            38,
+            139,
+            28,
+            75
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_DragDropImageLabel",
+          "text": "选择\n图片",
+          "box": [
+            78,
+            139,
+            60,
+            75
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "类别",
+          "box": [
+            390,
+            159,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "＋ 添加类别",
+          "box": [
+            25,
+            493,
+            98,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "共 1 个类别",
+          "box": [
+            519,
+            493,
+            56,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            365,
+            558,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部添加",
+          "box": [
+            465,
+            558,
+            110,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "批量添加类别",
+          "box": [
+            36,
+            1,
+            514,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
