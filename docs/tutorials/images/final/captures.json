@@ -3144,6 +3144,139 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "05-导入Mod.webp",
+      "width": 1360,
+      "height": 1080,
+      "logical_width": 680,
+      "logical_height": 540,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "添加文件",
+          "box": [
+            12,
+            43,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加文件夹",
+          "box": [
+            110,
+            43,
+            99,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "移除选中",
+          "box": [
+            582,
+            43,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 / 1",
+          "box": [
+            325,
+            390,
+            30,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "移除",
+          "box": [
+            244,
+            440,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部移除",
+          "box": [
+            330,
+            440,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - 全年龄",
+          "box": [
+            437,
+            123,
+            137,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - 全年龄",
+          "box": [
+            437,
+            159,
+            137,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            510,
+            494,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "确认导入",
+          "box": [
+            582,
+            494,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入 Mod",
+          "box": [
+            36,
+            1,
+            594,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
