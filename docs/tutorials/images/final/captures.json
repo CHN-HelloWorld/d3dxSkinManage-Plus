@@ -4338,6 +4338,304 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "11-设置常规.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod 管理",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "网络代理",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "下载数据",
+          "box": [
+            203,
+            185,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "图片与缓存",
+          "box": [
+            203,
+            229,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 管理",
+          "box": [
+            447,
+            114,
+            69,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "删除方式",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "用于单独或批量删除 Mod。",
+          "box": [
+            416,
+            186,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "直接删除（不可恢复）",
+          "box": [
+            750,
+            165,
+            210,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "了解详情",
+          "box": [
+            416,
+            208,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "并发数量",
+          "box": [
+            416,
+            262,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "同时部署的任务数量，范围 1–16。",
+          "box": [
+            416,
+            284,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "7",
+          "box": [
+            750,
+            263,
+            80,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "个任务",
+          "box": [
+            836,
+            262,
+            36,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "自动推荐",
+          "box": [
+            878,
+            264,
+            74,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
