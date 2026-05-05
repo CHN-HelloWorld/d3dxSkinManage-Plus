@@ -3797,6 +3797,293 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "25-分类导出.webp",
+      "width": 1520,
+      "height": 1480,
+      "logical_width": 760,
+      "logical_height": 740,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "完整分类树",
+          "box": [
+            389,
+            109,
+            65,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            460,
+            109,
+            7,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "展开",
+          "box": [
+            473,
+            112,
+            42,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "折叠",
+          "box": [
+            521,
+            112,
+            42,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设名称",
+          "box": [
+            25,
+            98,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏-分类预设",
+          "box": [
+            25,
+            126,
+            331,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导出范围",
+          "box": [
+            25,
+            174,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏\n完整分类树 · 4 个目录",
+          "box": [
+            25,
+            202,
+            331,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "包含目录图片",
+          "box": [
+            25,
+            247,
+            331,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            44,
+            292,
+            84,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分类目录",
+          "box": [
+            44,
+            328,
+            84,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            148,
+            292,
+            85,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "目录图片",
+          "box": [
+            148,
+            328,
+            85,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0.0",
+          "box": [
+            253,
+            292,
+            84,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "图片 / MiB",
+          "box": [
+            253,
+            328,
+            84,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "文件类型",
+          "box": [
+            25,
+            368,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分类预设文件（.d3dxcp）",
+          "box": [
+            25,
+            396,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "输出位置",
+          "box": [
+            25,
+            424,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "选择…",
+          "box": [
+            289,
+            455,
+            67,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "输出文件",
+          "box": [
+            25,
+            500,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏-分类预设.d3dxcp",
+          "box": [
+            25,
+            528,
+            331,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            589,
+            695,
+            56,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "开始导出",
+          "box": [
+            653,
+            695,
+            82,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
