@@ -3664,6 +3664,139 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "10-分类预设.webp",
+      "width": 1520,
+      "height": 840,
+      "logical_width": 760,
+      "logical_height": 420,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            76,
+            113,
+            576,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 个分类目录",
+          "box": [
+            76,
+            135,
+            576,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "完整分类树",
+          "box": [
+            658,
+            113,
+            60,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入分类预设",
+          "box": [
+            87,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "补充分类和目录图片。",
+          "box": [
+            45,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            449,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分享完整分类树及目录图片。",
+          "box": [
+            407,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏：示例游戏",
+          "box": [
+            25,
+            375,
+            646,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关闭",
+          "box": [
+            679,
+            375,
+            56,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
