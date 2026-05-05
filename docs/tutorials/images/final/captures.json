@@ -576,6 +576,392 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "03-类别总览.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "类别总览",
+          "box": [
+            182,
+            12,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  默认（默认）  ",
+          "box": [
+            773,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "批量添加",
+          "box": [
+            941,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1055,
+            12,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1177,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查更新",
+          "box": [
+            1318,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "标签",
+          "box": [
+            782,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部类型",
+          "box": [
+            870,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部禁用",
+          "box": [
+            998,
+            94,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "按字母升序",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "选择项目查看详情",
+          "box": [
+            1049,
+            473,
+            360,
+            207
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择项目查看预览图",
+          "box": [
+            1046,
+            148,
+            366,
+            295
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "外观",
+          "box": [
+            709,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            738,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "外观",
+          "box": [
+            709,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1/4 已启用",
+          "box": [
+            709,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "示例角色",
+          "box": [
+            537,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "角色",
+          "box": [
+            566,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例角色",
+          "box": [
+            537,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 已启用",
+          "box": [
+            537,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "界面",
+          "box": [
+            365,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            394,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面",
+          "box": [
+            365,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 已启用",
+          "box": [
+            365,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "待整理",
+          "box": [
+            193,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            222,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "待整理",
+          "box": [
+            193,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/0 已启用",
+          "box": [
+            193,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3 个类别, 1 个角色/对象",
+          "box": [
+            182,
+            928,
+            1242,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
