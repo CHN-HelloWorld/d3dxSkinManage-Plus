@@ -2912,6 +2912,238 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "08-组合预设.webp",
+      "width": 760,
+      "height": 864,
+      "logical_width": 380,
+      "logical_height": 432,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "预设",
+          "box": [
+            13,
+            13,
+            34,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            54,
+            13,
+            25,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "新建预设",
+          "box": [
+            277,
+            13,
+            90,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "一键切换整套 Mod 搭配",
+          "box": [
+            13,
+            52,
+            354,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "默认",
+          "box": [
+            25,
+            84,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "默认预设 · 1 个 Mod",
+          "box": [
+            25,
+            109,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "使用中",
+          "box": [
+            271,
+            93,
+            84,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "日常搭配",
+          "box": [
+            25,
+            148,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 个 Mod",
+          "box": [
+            25,
+            173,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            157,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "摄影搭配",
+          "box": [
+            25,
+            212,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 个 Mod",
+          "box": [
+            25,
+            237,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            221,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "空白搭配",
+          "box": [
+            25,
+            276,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0 个 Mod",
+          "box": [
+            25,
+            301,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            285,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重命名",
+          "box": [
+            13,
+            369,
+            77,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "复制",
+          "box": [
+            96,
+            369,
+            64,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            303,
+            369,
+            64,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "选择预设以管理 · Ctrl / Shift 多选",
+          "box": [
+            13,
+            406,
+            354,
+            15
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
