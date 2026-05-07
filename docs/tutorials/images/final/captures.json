@@ -6677,6 +6677,227 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "17-工具箱.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "分类整理",
+          "box": [
+            211,
+            35,
+            1184,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            253,
+            69,
+            108,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏",
+          "box": [
+            373,
+            69,
+            48,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入分类预设，补充分类与目录图片。\n也可以把当前游戏的完整分类树分享给他人。",
+          "box": [
+            215,
+            107,
+            1176,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入分类预设",
+          "box": [
+            215,
+            158,
+            135,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导出分类预设",
+          "box": [
+            359,
+            158,
+            135,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分享分类结构与目录图片，不包含 Mod 文件",
+          "box": [
+            235,
+            206,
+            1156,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "维护与排查",
+          "box": [
+            211,
+            281,
+            1184,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "重建索引",
+          "box": [
+            251,
+            314,
+            56,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏",
+          "box": [
+            316,
+            314,
+            48,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "从文件库重新扫描并恢复当前游戏的索引。",
+          "box": [
+            251,
+            336,
+            1040,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重建索引",
+          "box": [
+            1307,
+            315,
+            88,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "查看日志",
+          "box": [
+            251,
+            383,
+            56,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "应用",
+          "box": [
+            316,
+            383,
+            24,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "查看应用运行日志，排查崩溃 / 报错 / 行为异常",
+          "box": [
+            251,
+            405,
+            1040,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "查看日志",
+          "box": [
+            1307,
+            384,
+            88,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
