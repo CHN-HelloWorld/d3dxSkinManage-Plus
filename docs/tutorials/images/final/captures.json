@@ -6898,6 +6898,282 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "18-插件.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "安装插件",
+          "box": [
+            1056,
+            16,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重新扫描",
+          "box": [
+            1174,
+            16,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开插件目录",
+          "box": [
+            1292,
+            16,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 清单导出",
+          "box": [
+            569,
+            88,
+            716,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "v0.1.0",
+          "box": [
+            569,
+            117,
+            37,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已停用",
+          "box": [
+            1301,
+            88,
+            39,
+            45
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "d3dxSkinManage-Plus",
+          "box": [
+            509,
+            149,
+            889,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。",
+          "box": [
+            509,
+            181,
+            889,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重载",
+          "box": [
+            509,
+            213,
+            88,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "卸载",
+          "box": [
+            613,
+            213,
+            88,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启用并满足依赖后可使用插件设置与功能。",
+          "box": [
+            509,
+            263,
+            889,
+            48
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "权限与来源 · 7 项权限",
+          "box": [
+            509,
+            327,
+            889,
+            49
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "我的插件",
+          "box": [
+            198,
+            81,
+            60,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3",
+          "box": [
+            462,
+            81,
+            8,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部 3",
+          "box": [
+            198,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "已启用 0",
+          "box": [
+            290,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "已停用 3",
+          "box": [
+            382,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 清单导出",
+          "box": [
+            249,
+            216,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设检查",
+          "box": [
+            249,
+            281,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设轮换",
+          "box": [
+            249,
+            346,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "插件可从压缩包安装，或放入插件目录后重新扫描。首次启用需确认信任。",
+          "box": [
+            198,
+            895,
+            272,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
