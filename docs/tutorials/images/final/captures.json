@@ -4636,6 +4636,359 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "12-设置个性化.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "外观",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "整窗背景",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面主题",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "浅色",
+          "box": [
+            423,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "深色",
+          "box": [
+            568,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "跟随系统",
+          "box": [
+            713,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "跟随系统时，按 Windows 的应用主题自动切换。",
+          "box": [
+            396,
+            290,
+            928,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "语言与字体",
+          "box": [
+            447,
+            364,
+            75,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示语言",
+          "box": [
+            416,
+            414,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择应用内显示的语言，重启软件后生效。",
+          "box": [
+            416,
+            436,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "简体中文",
+          "box": [
+            750,
+            415,
+            190,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "自定义语言包",
+          "box": [
+            416,
+            480,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "每个语言文件夹内编辑 strings.json；添加或修改后重启软件生效。",
+          "box": [
+            416,
+            502,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开语言包文件夹",
+          "box": [
+            750,
+            480,
+            144,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "刷新列表",
+          "box": [
+            902,
+            480,
+            92,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面字体",
+          "box": [
+            416,
+            563,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择系统已安装的字体，可输入名称搜索。选择后立即生效，无需重启。",
+          "box": [
+            416,
+            585,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "系统默认",
+          "box": [
+            750,
+            572,
+            263,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "系统默认",
+          "box": [
+            760,
+            578,
+            202,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
