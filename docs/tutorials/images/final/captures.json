@@ -8089,6 +8089,117 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "23-日志.webp",
+      "width": 1680,
+      "height": 1120,
+      "logical_width": 840,
+      "logical_height": 560,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "启动会话:",
+          "box": [
+            11,
+            11,
+            55,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "2026-10-30 #6",
+          "box": [
+            72,
+            11,
+            150,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "级别:",
+          "box": [
+            228,
+            11,
+            29,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部",
+          "box": [
+            263,
+            11,
+            107,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "自动滚动到底部",
+          "box": [
+            420,
+            18,
+            119,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "刷新",
+          "box": [
+            545,
+            11,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开日志目录",
+          "box": [
+            631,
+            11,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "复制",
+          "box": [
+            769,
+            11,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示 1 / 1 行",
+          "box": [
+            11,
+            533,
+            818,
+            16
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
