@@ -8773,6 +8773,260 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "28-整窗背景.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "外观",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "整窗背景",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景素材",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景来源",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关闭背景时保留各类型的素材和显示设置。",
+          "box": [
+            416,
+            186,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关闭",
+          "box": [
+            753,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "图片",
+          "box": [
+            803,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "视频",
+          "box": [
+            853,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "WE 场景",
+          "box": [
+            903,
+            167,
+            72,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景已关闭，恢复主题底色。",
+          "box": [
+            437,
+            218,
+            867,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
