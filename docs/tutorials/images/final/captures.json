@@ -8200,6 +8200,579 @@
         }
       ],
       "required_text": []
+    },
+    {
+      "file": "27-图片与缓存.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod 管理",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "网络代理",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "下载数据",
+          "box": [
+            203,
+            185,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "图片与缓存",
+          "box": [
+            203,
+            229,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "图片内存缓存",
+          "box": [
+            445,
+            110,
+            90,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "RAM",
+          "box": [
+            543,
+            111,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "保留近期图片，让总览、画廊与在线 Mod 回看更快。",
+          "box": [
+            445,
+            132,
+            941,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前图片占用",
+          "box": [
+            416,
+            174,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2.9",
+          "box": [
+            416,
+            198,
+            48,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            469,
+            212,
+            24,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "生效上限 256 MiB",
+          "box": [
+            416,
+            250,
+            108,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1%",
+          "box": [
+            581,
+            250,
+            20,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "仅统计图片缓存，非程序总内存。",
+          "box": [
+            416,
+            288,
+            185,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "缓存额度",
+          "box": [
+            643,
+            220,
+            180,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "64–8192 MiB，按需占用",
+          "box": [
+            643,
+            242,
+            180,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "256",
+          "box": [
+            839,
+            221,
+            76,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            923,
+            220,
+            23,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "自动推荐",
+          "box": [
+            954,
+            222,
+            74,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "释放缓存后，当前显示的图片继续保留。",
+          "box": [
+            414,
+            325,
+            844,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "清理图片内存",
+          "box": [
+            1270,
+            325,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "磁盘缓存",
+          "box": [
+            445,
+            397,
+            60,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "DISK",
+          "box": [
+            513,
+            398,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "保留已下载的在线图片，减少重复下载。",
+          "box": [
+            445,
+            419,
+            941,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前磁盘占用",
+          "box": [
+            416,
+            461,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            416,
+            487,
+            20,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MB",
+          "box": [
+            441,
+            501,
+            21,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "含在线图片与其他可再生缓存",
+          "box": [
+            416,
+            541,
+            185,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "在线图片缓存上限",
+          "box": [
+            643,
+            461,
+            586,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "只限制在线图片的磁盘占用",
+          "box": [
+            643,
+            480,
+            586,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "512 MB",
+          "box": [
+            1241,
+            461,
+            112,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0 · 不限制",
+          "box": [
+            643,
+            530,
+            48,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 GB",
+          "box": [
+            1329,
+            530,
+            24,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "滑块最大值",
+          "box": [
+            643,
+            561,
+            180,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "决定可拖动范围，不等于当前上限",
+          "box": [
+            643,
+            580,
+            180,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "4",
+          "box": [
+            839,
+            561,
+            76,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "GB",
+          "box": [
+            922,
+            561,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "超出上限时，优先移除最久未浏览的在线缩略图，再次浏览时按需下载。",
+          "box": [
+            643,
+            602,
+            710,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "清理可再生缓存，保留已下载的 Mod 压缩包。",
+          "box": [
+            414,
+            638,
+            826,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "清理磁盘缓存",
+          "box": [
+            1270,
+            638,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
     }
   ]
 }
