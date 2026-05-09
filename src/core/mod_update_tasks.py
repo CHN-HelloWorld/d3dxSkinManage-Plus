@@ -570,3 +570,184 @@ class ModUpdateTasks(QObject):
         self._pause_transfer(job)
         self._emit(job)
         return True
+
+    def pause(self, mid) -> bool:
+        """设置用户暂停并尝试停止任务推进；暂停失败恢复原标记并返回 False。"""
+        job = self._lookup(mid)
+        if job is None or job.cancel_requested:
+            return False
+        was_paused = job.user_paused
+        job.user_paused = True
+        if not self._pause_job(job):
+            job.user_paused = was_paused
+            return False
+        self._pump()
+        return True
+
+    def _resume_transfer(self, job) -> None:
+        """等待下载协程完成暂停清理后再恢复传输，仍有暂停来源或取消请求时不操作。"""
+        if not self._current(job) or job.paused or job.cancel_requested or job.archive is not None:
+            return
+        state = getattr(job.download, "state", "")
+        if state in {"queued", "preparing", "downloading"} and not getattr(job.download, "pause_pending", False):
+            # 其他消费者继续传输时，当前更新可独立暂停，无需重新启动下载。
+            job.resume_pending = False
+            return
+        # 协程关闭前可能先发出暂停信号，释放文件和单次执行锁后才能重新调度。
+        if getattr(job.download, "is_running", False):
+            job.resume_pending = True
+            call_later(10, self, lambda: self._resume_transfer(job))
+            return
+        job.resume_pending = False
+        if getattr(job.download, "state", "") == "paused":
+            self.download_manager.resume(job.file.file_id)
+
+    def _resume_job(self, job) -> None:
+        """在全部暂停解除后提交已准备结果、恢复工作进程或下载，并通过调度器推进排队任务。"""
+        if job.paused or job.cancel_requested or not job.active:
+            return
+        if job.prepared is not None:
+            self._process_succeeded(job, job.prepared)
+        elif job.process is not None:
+            if job.process.running:
+                job.process.resume()
+            else:
+                job.process.start()
+        elif job.archive is None and job.download is not None:
+            self._resume_transfer(job)
+        # 恢复等待下载和等待导入的任务时均通过统一调度器。
+        self._emit(job)
+        self._pump()
+
+    def resume(self, mid) -> bool:
+        """解除用户及传输暂停，确认凭据的持有仍保留；任务失效或正取消时返回 False。"""
+        job = self._lookup(mid)
+        if job is None or job.cancel_requested:
+            return False
+        if not job.paused:
+            return True
+        job.user_paused = False
+        job.transfer_paused = False
+        self._resume_job(job)
+        return True
+
+    def pause_all(self) -> bool:
+        """先标记当前游戏全部任务再暂停共享资源，任一失败返回 False 并恢复该任务原标记。"""
+        jobs = [
+            (job, job.user_paused)
+            for mid in self.active_ids()
+            if (job := self._lookup(mid)) is not None and not job.cancel_requested
+        ]
+        for job, _ in jobs:
+            job.user_paused = True
+        paused = True
+        for job, was_paused in jobs:
+            if not self._pause_job(job):
+                job.user_paused = was_paused
+                paused = False
+        return paused
+
+    def resume_all(self) -> None:
+        """逐个恢复当前游戏的活动任务，仍被确认凭据暂停的任务保持等待。"""
+        for mid in self.active_ids():
+            self.resume(mid)
+
+    def begin_stop_confirmation(self, mids=None, *, all_games: bool = False) -> StopConfirmation:
+        """为筛选任务添加独立暂停令牌；任一暂停失败即撤销本次持有并抛出 OSError。"""
+        selected = None if mids is None else set(mids)
+        jobs = tuple(
+            job
+            for job in self._records.values()
+            if job.active
+            and not job.cancel_requested
+            and (all_games or job.game_id == self._manager.current_game_id)
+            and (selected is None or job.mid in selected)
+        )
+        confirmation = StopConfirmation(uuid.uuid4().hex, jobs)
+        for job in jobs:
+            job.holds.add(confirmation.token)
+        try:
+            for job in jobs:
+                if not self._pause_job(job):
+                    raise OSError(tr("无法暂停更新任务，尚未终止"))
+        except Exception:
+            self.finish_stop_confirmation(confirmation, confirmed=False)
+            raise
+        return confirmation
+
+    def finish_stop_confirmation(self, confirmation: StopConfirmation, *, confirmed: bool) -> None:
+        """幂等结算暂停凭据；确认停止时请求取消，否则解除该凭据后尝试恢复任务。"""
+        if confirmation.settled:
+            return
+        confirmation.settled = True
+        for job in confirmation.tasks:
+            if confirmed:
+                self._cancel_job(job)
+            job.holds.discard(confirmation.token)
+            if not confirmed:
+                self._resume_job(job)
+
+    def _cancel_job(self, job) -> None:
+        """请求取消任务，仅在没有其他消费者时取消共享下载，并等待占用资源的执行退出。"""
+        if not job.active or job.cancel_requested:
+            return
+        job.cancel_requested = True
+        self._emit(job)
+        self._disconnect(job)
+        transfer = self._associated_transfer(job)
+        if (
+            transfer is not None
+            and not self._transfer_users(job)
+            and not self.download_manager.has_other_consumers(job.file.file_id, {job.consumer_id})
+        ):
+            job.download = transfer
+            self.download_manager.cancel(job.file.file_id)
+            if getattr(job.download, "is_running", False):
+                self._wait_download_exit(job)
+                return
+        if job.process is not None and job.process.running:
+            job.process.cancel()
+        else:
+            self._finish(job, "canceled")
+
+    def _wait_download_exit(self, job) -> None:
+        """通过 Qt 延迟回调等待下载释放资源，退出后才将仍有效的取消任务标为终态。"""
+        if self._records.get(job.key) is not job or not job.active or not job.cancel_requested:
+            return
+        if getattr(job.download, "is_running", False):
+            call_later(10, self, lambda: self._wait_download_exit(job))
+            return
+        self._finish(job, "canceled")
+
+    def cancel(self, mid) -> None:
+        """请求取消当前游戏的指定活动任务，缺失或已结束记录不操作。"""
+        job = self._lookup(mid)
+        if job is not None:
+            self._cancel_job(job)
+
+    def shutdown(self) -> bool:
+        """阻止新调度并停止全部任务，限时等待下载与清理线程；执行未退出时返回 False 供再次关闭。"""
+        self._closing = True
+        stopped = True
+        for job in list(self._records.values()):
+            if job.active:
+                self._cancel_job(job)
+            if job.process is not None:
+                job.process.shutdown()
+                if job.process.running:
+                    stopped = False
+                elif job.active:
+                    self._finish(job, "canceled")
+            elif job.active and job.download is not None:
+                # 仅应用关闭可同步等待；正常停止操作在网络清理期间保持响应。
+                job.download.wait_finished(timeout=2)
+                if getattr(job.download, "is_running", False):
+                    stopped = False
+                else:
+                    self._finish(job, "canceled")
+        for thread in self._cleanup_threads:
+            thread.join(timeout=2)
+        if not stopped:
+            # 操作系统释放全部工作进程前保留事件循环和暂存原件，后续关闭请求可继续完成清理。
+            self._closing = False
+        return stopped
