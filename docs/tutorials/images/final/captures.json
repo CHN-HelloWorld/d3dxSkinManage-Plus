@@ -1,0 +1,9726 @@
+{
+  "version": "2026-10-30",
+  "theme": "dark",
+  "language": "zh-CN",
+  "screenshots": [
+    {
+      "file": "02-游戏配置.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏　（当前环境）",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1130,
+            325,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1255,
+            325,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            375,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1115,
+            375,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            411,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1115,
+            411,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            447,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1115,
+            449,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            487,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1115,
+            489,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            527,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1115,
+            529,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "当前环境",
+          "box": [
+            1037,
+            569,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存",
+          "box": [
+            1046,
+            620,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1236,
+            621,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "01-添加游戏.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "新游戏",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "拖拽 / 点击添加游戏预览图（仅一张）",
+          "box": [
+            1037,
+            93,
+            391,
+            250
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1173,
+            355,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            405,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "第二个示例游戏",
+          "box": [
+            1115,
+            405,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            441,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game 2",
+          "box": [
+            1115,
+            441,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            477,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "D:/ModLoader",
+          "box": [
+            1115,
+            519,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            557,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "D:/ModLoader/Mods",
+          "box": [
+            1115,
+            559,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "确认",
+          "box": [
+            1037,
+            599,
+            193,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "退出",
+          "box": [
+            1236,
+            599,
+            192,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "新游",
+          "box": [
+            376,
+            72,
+            168,
+            130
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "新游戏",
+          "box": [
+            388,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "03-类别总览.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "类别总览",
+          "box": [
+            182,
+            12,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  默认（默认）  ",
+          "box": [
+            773,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "批量添加",
+          "box": [
+            941,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1055,
+            12,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1177,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查更新",
+          "box": [
+            1318,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "标签",
+          "box": [
+            782,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部类型",
+          "box": [
+            870,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部禁用",
+          "box": [
+            998,
+            94,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "按字母升序",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "选择项目查看详情",
+          "box": [
+            1049,
+            473,
+            360,
+            207
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择项目查看预览图",
+          "box": [
+            1046,
+            148,
+            366,
+            295
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "外观",
+          "box": [
+            709,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            738,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "外观",
+          "box": [
+            709,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1/4 已启用",
+          "box": [
+            709,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "示例角色",
+          "box": [
+            537,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "角色",
+          "box": [
+            566,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例角色",
+          "box": [
+            537,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 已启用",
+          "box": [
+            537,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "界面",
+          "box": [
+            365,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            394,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面",
+          "box": [
+            365,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/1 已启用",
+          "box": [
+            365,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShimmerLabel",
+          "text": "待整理",
+          "box": [
+            193,
+            150,
+            150,
+            128
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别",
+          "box": [
+            222,
+            156,
+            24,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "待整理",
+          "box": [
+            193,
+            285,
+            150,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0/0 已启用",
+          "box": [
+            193,
+            314,
+            150,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3 个类别, 1 个角色/对象",
+          "box": [
+            182,
+            928,
+            1242,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "04-Mod信息.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "类别总览",
+          "box": [
+            182,
+            12,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  默认（默认）  ",
+          "box": [
+            773,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "批量添加",
+          "box": [
+            941,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1055,
+            12,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1177,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查更新",
+          "box": [
+            1318,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "外观",
+          "box": [
+            245,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "标签",
+          "box": [
+            782,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部类型",
+          "box": [
+            870,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部禁用",
+          "box": [
+            998,
+            94,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "按字母升序",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "示例 Mod A",
+          "box": [
+            1049,
+            460,
+            334,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            1391,
+            460,
+            18,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "● 已启用",
+          "box": [
+            1049,
+            484,
+            51,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "· 当前：外观方案 B",
+          "box": [
+            1107,
+            484,
+            302,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "作者",
+          "box": [
+            1049,
+            554,
+            68,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "教程示例",
+          "box": [
+            1129,
+            554,
+            266,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "版本",
+          "box": [
+            1049,
+            580,
+            68,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1.0",
+          "box": [
+            1129,
+            580,
+            266,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "所属分类",
+          "box": [
+            1049,
+            605,
+            68,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "外观",
+          "box": [
+            1129,
+            605,
+            266,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "资源大小",
+          "box": [
+            1049,
+            630,
+            68,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "16.3 KB",
+          "box": [
+            1129,
+            630,
+            266,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "标签",
+          "box": [
+            1049,
+            654,
+            346,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            1049,
+            693,
+            40,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            1095,
+            693,
+            40,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "描述",
+          "box": [
+            1049,
+            726,
+            346,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "演示导入、标签、预览和变体管理。此示例不用于真实游戏。",
+          "box": [
+            1049,
+            765,
+            346,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "文件与来源",
+          "box": [
+            1049,
+            810,
+            346,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\data\\Sample Game\\mods\\外观\\示例 Mod A\\示例 Mod A.zip",
+          "box": [
+            1049,
+            849,
+            346,
+            45
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1126,
+            404,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1251,
+            404,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "禁用",
+          "box": [
+            1078,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "编辑",
+          "box": [
+            1146,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开源目录",
+          "box": [
+            1214,
+            876,
+            98,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1318,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            738,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod D",
+          "box": [
+            719,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            837,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配件",
+          "box": [
+            709,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            566,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod C",
+          "box": [
+            547,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            665,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            581,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            537,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            394,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod B",
+          "box": [
+            375,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            493,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            409,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            365,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            222,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            203,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            321,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            237,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            193,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已选择 1 项（1 个 Mod）",
+          "box": [
+            182,
+            928,
+            1242,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "06-按键设置.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "类别总览",
+          "box": [
+            182,
+            12,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  默认（默认）  ",
+          "box": [
+            773,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "批量添加",
+          "box": [
+            941,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1055,
+            12,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1177,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查更新",
+          "box": [
+            1318,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "外观",
+          "box": [
+            245,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "标签",
+          "box": [
+            782,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部类型",
+          "box": [
+            870,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部禁用",
+          "box": [
+            998,
+            94,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "按字母升序",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "示例 Mod A",
+          "box": [
+            1049,
+            460,
+            334,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            1391,
+            460,
+            18,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "● 已启用",
+          "box": [
+            1049,
+            484,
+            51,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "· 当前：外观方案 B",
+          "box": [
+            1107,
+            484,
+            302,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "INI",
+          "box": [
+            1049,
+            556,
+            31,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "sample.ini",
+          "box": [
+            1088,
+            551,
+            211,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开文件",
+          "box": [
+            1307,
+            551,
+            100,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "动作",
+          "box": [
+            1049,
+            583,
+            150,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "前进 / 开关",
+          "box": [
+            1207,
+            583,
+            96,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "后退",
+          "box": [
+            1311,
+            583,
+            96,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "KeyStyle",
+          "box": [
+            1049,
+            603,
+            150,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "K",
+          "box": [
+            1207,
+            603,
+            74,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "J",
+          "box": [
+            1311,
+            603,
+            74,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1126,
+            404,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1251,
+            404,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "禁用",
+          "box": [
+            1078,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "编辑",
+          "box": [
+            1146,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开源目录",
+          "box": [
+            1214,
+            876,
+            98,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1318,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            738,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod D",
+          "box": [
+            719,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            837,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配件",
+          "box": [
+            709,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            566,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod C",
+          "box": [
+            547,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            665,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            581,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            537,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            394,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod B",
+          "box": [
+            375,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            493,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            409,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            365,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            222,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            203,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            321,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            237,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            193,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已选择 1 项（1 个 Mod）",
+          "box": [
+            182,
+            928,
+            1242,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "07-变体管理.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "类别总览",
+          "box": [
+            182,
+            12,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "  默认（默认）  ",
+          "box": [
+            773,
+            13,
+            160,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "批量添加",
+          "box": [
+            941,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1055,
+            12,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1177,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查更新",
+          "box": [
+            1318,
+            12,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部",
+          "box": [
+            191,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "外观",
+          "box": [
+            245,
+            55,
+            36,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_FilterButton",
+          "text": "标签",
+          "box": [
+            782,
+            95,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部类型",
+          "box": [
+            870,
+            94,
+            120,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部禁用",
+          "box": [
+            998,
+            94,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "按字母升序",
+          "box": [
+            1112,
+            94,
+            180,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "示例 Mod A",
+          "box": [
+            1049,
+            460,
+            334,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            1391,
+            460,
+            18,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "● 已启用",
+          "box": [
+            1049,
+            484,
+            51,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_ElidedLabel",
+          "text": "· 当前：外观方案 B",
+          "box": [
+            1107,
+            484,
+            302,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存当前状态为新变体",
+          "box": [
+            1046,
+            541,
+            366,
+            42
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已保存的变体 · 2",
+          "box": [
+            1047,
+            639,
+            362,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NameLabel",
+          "text": "Mod 默认",
+          "box": [
+            1081,
+            599,
+            295,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NameLabel",
+          "text": "外观方案 A",
+          "box": [
+            1081,
+            680,
+            295,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NameLabel",
+          "text": "外观方案 B",
+          "box": [
+            1081,
+            727,
+            238,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "正在使用",
+          "box": [
+            1328,
+            727,
+            48,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1126,
+            404,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1251,
+            404,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "禁用",
+          "box": [
+            1078,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "编辑",
+          "box": [
+            1146,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开源目录",
+          "box": [
+            1214,
+            876,
+            98,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1318,
+            876,
+            62,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            738,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod D",
+          "box": [
+            719,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            837,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配件",
+          "box": [
+            709,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            566,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod C",
+          "box": [
+            547,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            665,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            581,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            537,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            394,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod B",
+          "box": [
+            375,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            493,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            409,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            365,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod",
+          "box": [
+            222,
+            153,
+            28,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            203,
+            279,
+            114,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "G",
+          "box": [
+            321,
+            282,
+            22,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_MoreButton",
+          "text": "+1",
+          "box": [
+            237,
+            302,
+            39,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            193,
+            302,
+            40,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已选择 1 项（1 个 Mod）",
+          "box": [
+            182,
+            928,
+            1242,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "08-组合预设.webp",
+      "width": 760,
+      "height": 864,
+      "logical_width": 380,
+      "logical_height": 432,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "预设",
+          "box": [
+            13,
+            13,
+            34,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            54,
+            13,
+            25,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "新建预设",
+          "box": [
+            277,
+            13,
+            90,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "一键切换整套 Mod 搭配",
+          "box": [
+            13,
+            52,
+            354,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "默认",
+          "box": [
+            25,
+            84,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "默认预设 · 1 个 Mod",
+          "box": [
+            25,
+            109,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "使用中",
+          "box": [
+            271,
+            93,
+            84,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "日常搭配",
+          "box": [
+            25,
+            148,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 个 Mod",
+          "box": [
+            25,
+            173,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            157,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "摄影搭配",
+          "box": [
+            25,
+            212,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 个 Mod",
+          "box": [
+            25,
+            237,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            221,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_PresetNameLabel",
+          "text": "空白搭配",
+          "box": [
+            25,
+            276,
+            234,
+            25
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0 个 Mod",
+          "box": [
+            25,
+            301,
+            234,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "应用",
+          "box": [
+            271,
+            285,
+            84,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重命名",
+          "box": [
+            13,
+            369,
+            77,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "复制",
+          "box": [
+            96,
+            369,
+            64,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            303,
+            369,
+            64,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "选择预设以管理 · Ctrl / Shift 多选",
+          "box": [
+            13,
+            406,
+            354,
+            15
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "05-导入Mod.webp",
+      "width": 1360,
+      "height": 1080,
+      "logical_width": 680,
+      "logical_height": 540,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "添加文件",
+          "box": [
+            12,
+            43,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加文件夹",
+          "box": [
+            110,
+            43,
+            99,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "移除选中",
+          "box": [
+            582,
+            43,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1 / 1",
+          "box": [
+            325,
+            390,
+            30,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "移除",
+          "box": [
+            244,
+            440,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部移除",
+          "box": [
+            330,
+            440,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - 全年龄",
+          "box": [
+            437,
+            123,
+            137,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_NoWheelComboBox",
+          "text": "G - 全年龄",
+          "box": [
+            437,
+            159,
+            137,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            510,
+            494,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "确认导入",
+          "box": [
+            582,
+            494,
+            86,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入 Mod",
+          "box": [
+            36,
+            1,
+            594,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "09-编辑Mod.webp",
+      "width": 1520,
+      "height": 1072,
+      "logical_width": 760,
+      "logical_height": 536,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "编辑 Mod",
+          "box": [
+            70,
+            49,
+            84,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            175,
+            49,
+            561,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示名称",
+          "box": [
+            24,
+            113,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例 Mod A",
+          "box": [
+            24,
+            133,
+            432,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "同时重命名 Mod 文件或文件夹",
+          "box": [
+            24,
+            172,
+            180,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "作者",
+          "box": [
+            24,
+            202,
+            314,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "教程示例",
+          "box": [
+            24,
+            222,
+            314,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "版本",
+          "box": [
+            350,
+            202,
+            106,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "1.0",
+          "box": [
+            350,
+            222,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "来源 URL",
+          "box": [
+            24,
+            266,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "描述",
+          "box": [
+            24,
+            330,
+            432,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "年龄分级",
+          "box": [
+            498,
+            113,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "G · 全年龄",
+          "box": [
+            498,
+            133,
+            238,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "标签",
+          "box": [
+            498,
+            184,
+            238,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "配色",
+          "box": [
+            505,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "TagChip",
+          "text": "日常",
+          "box": [
+            571,
+            211,
+            61,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2 / 20",
+          "box": [
+            698,
+            277,
+            38,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "文件信息",
+          "box": [
+            498,
+            320,
+            170,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "只读",
+          "box": [
+            674,
+            320,
+            40,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "尚未修改",
+          "box": [
+            22,
+            488,
+            519,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            549,
+            488,
+            76,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存修改",
+          "box": [
+            633,
+            488,
+            105,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "编辑 Mod - 示例 Mod A",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "22-批量添加.webp",
+      "width": 1200,
+      "height": 1226,
+      "logical_width": 600,
+      "logical_height": 613,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "批量添加类别",
+          "box": [
+            25,
+            52,
+            550,
+            23
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "逐个填写类别信息，每个类别可设置名称、英文名和图片。点击「+」添加更多。",
+          "box": [
+            25,
+            87,
+            550,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "#1",
+          "box": [
+            38,
+            139,
+            28,
+            75
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_DragDropImageLabel",
+          "text": "选择\n图片",
+          "box": [
+            78,
+            139,
+            60,
+            75
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "类别",
+          "box": [
+            390,
+            159,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "＋ 添加类别",
+          "box": [
+            25,
+            493,
+            98,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "共 1 个类别",
+          "box": [
+            519,
+            493,
+            56,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            365,
+            558,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部添加",
+          "box": [
+            465,
+            558,
+            110,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "批量添加类别",
+          "box": [
+            36,
+            1,
+            514,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "10-分类预设.webp",
+      "width": 1520,
+      "height": 840,
+      "logical_width": 760,
+      "logical_height": 420,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            76,
+            113,
+            576,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 个分类目录",
+          "box": [
+            76,
+            135,
+            576,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "完整分类树",
+          "box": [
+            658,
+            113,
+            60,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入分类预设",
+          "box": [
+            87,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "补充分类和目录图片。",
+          "box": [
+            45,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            449,
+            199,
+            266,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分享完整分类树及目录图片。",
+          "box": [
+            407,
+            254,
+            308,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏：示例游戏",
+          "box": [
+            25,
+            375,
+            646,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关闭",
+          "box": [
+            679,
+            375,
+            56,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "25-分类导出.webp",
+      "width": 1520,
+      "height": 1480,
+      "logical_width": 760,
+      "logical_height": 740,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            59,
+            52,
+            676,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "完整分类树",
+          "box": [
+            389,
+            109,
+            65,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            460,
+            109,
+            7,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "展开",
+          "box": [
+            473,
+            112,
+            42,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "折叠",
+          "box": [
+            521,
+            112,
+            42,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设名称",
+          "box": [
+            25,
+            98,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏-分类预设",
+          "box": [
+            25,
+            126,
+            331,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导出范围",
+          "box": [
+            25,
+            174,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏\n完整分类树 · 4 个目录",
+          "box": [
+            25,
+            202,
+            331,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "包含目录图片",
+          "box": [
+            25,
+            247,
+            331,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            44,
+            292,
+            84,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分类目录",
+          "box": [
+            44,
+            328,
+            84,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            148,
+            292,
+            85,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "目录图片",
+          "box": [
+            148,
+            328,
+            85,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0.0",
+          "box": [
+            253,
+            292,
+            84,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "图片 / MiB",
+          "box": [
+            253,
+            328,
+            84,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "文件类型",
+          "box": [
+            25,
+            368,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分类预设文件（.d3dxcp）",
+          "box": [
+            25,
+            396,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "输出位置",
+          "box": [
+            25,
+            424,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "选择…",
+          "box": [
+            289,
+            455,
+            67,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "输出文件",
+          "box": [
+            25,
+            500,
+            331,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏-分类预设.d3dxcp",
+          "box": [
+            25,
+            528,
+            331,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            589,
+            695,
+            56,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "开始导出",
+          "box": [
+            653,
+            695,
+            82,
+            30
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "导出分类预设",
+          "box": [
+            36,
+            1,
+            674,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "20-删除游戏.webp",
+      "width": 1400,
+      "height": 1280,
+      "logical_width": 700,
+      "logical_height": 640,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "删除「示例游戏」",
+          "box": [
+            77,
+            52,
+            598,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此操作会永久删除以下数据，不进回收站，无法撤销。",
+          "box": [
+            77,
+            96,
+            598,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "资源目录占用",
+          "box": [
+            42,
+            143,
+            78,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "215.8 KB",
+          "box": [
+            551,
+            143,
+            107,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "6",
+          "box": [
+            42,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已入库 Mod",
+          "box": [
+            42,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            201,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别 / 角色",
+          "box": [
+            201,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4",
+          "box": [
+            360,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设",
+          "box": [
+            360,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1",
+          "box": [
+            519,
+            185,
+            139,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "部署副本",
+          "box": [
+            519,
+            223,
+            139,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "将删除的内容",
+          "box": [
+            42,
+            285,
+            616,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "整个游戏资源目录（含 Mod 库）",
+          "box": [
+            42,
+            313,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\data\\Sample Game",
+          "box": [
+            42,
+            337,
+            616,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此目录内的全部文件和文件夹都会删除",
+          "box": [
+            42,
+            362,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "此游戏的Mod全部部署数据",
+          "box": [
+            42,
+            390,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "该游戏的配置、预设、按键 / 变体偏好和更新记录。",
+          "box": [
+            42,
+            418,
+            616,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "需要保留的 Mod 请先「导出」；手动放入的文件请另行备份到上述删除范围之外。",
+          "box": [
+            25,
+            465,
+            650,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            519,
+            595,
+            60,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "永久删除",
+          "box": [
+            589,
+            595,
+            86,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "删除游戏",
+          "box": [
+            36,
+            1,
+            614,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "11-设置常规.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod 管理",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "网络代理",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "下载数据",
+          "box": [
+            203,
+            185,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "图片与缓存",
+          "box": [
+            203,
+            229,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 管理",
+          "box": [
+            447,
+            114,
+            69,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "删除方式",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "用于单独或批量删除 Mod。",
+          "box": [
+            416,
+            186,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "直接删除（不可恢复）",
+          "box": [
+            750,
+            165,
+            210,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "了解详情",
+          "box": [
+            416,
+            208,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "并发数量",
+          "box": [
+            416,
+            262,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "同时部署的任务数量，范围 1–16。",
+          "box": [
+            416,
+            284,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "7",
+          "box": [
+            750,
+            263,
+            80,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "个任务",
+          "box": [
+            836,
+            262,
+            36,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "自动推荐",
+          "box": [
+            878,
+            264,
+            74,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "12-设置个性化.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "外观",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "整窗背景",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面主题",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "浅色",
+          "box": [
+            423,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "深色",
+          "box": [
+            568,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "跟随系统",
+          "box": [
+            713,
+            247,
+            121,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "跟随系统时，按 Windows 的应用主题自动切换。",
+          "box": [
+            396,
+            290,
+            928,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "语言与字体",
+          "box": [
+            447,
+            364,
+            75,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示语言",
+          "box": [
+            416,
+            414,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择应用内显示的语言，重启软件后生效。",
+          "box": [
+            416,
+            436,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "简体中文",
+          "box": [
+            750,
+            415,
+            190,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "自定义语言包",
+          "box": [
+            416,
+            480,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "每个语言文件夹内编辑 strings.json；添加或修改后重启软件生效。",
+          "box": [
+            416,
+            502,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开语言包文件夹",
+          "box": [
+            750,
+            480,
+            144,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "刷新列表",
+          "box": [
+            902,
+            480,
+            92,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "界面字体",
+          "box": [
+            416,
+            563,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择系统已安装的字体，可输入名称搜索。选择后立即生效，无需重启。",
+          "box": [
+            416,
+            585,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "系统默认",
+          "box": [
+            750,
+            572,
+            263,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "系统默认",
+          "box": [
+            760,
+            578,
+            202,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "13-快捷键.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "按键绑定",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "通用",
+          "box": [
+            447,
+            114,
+            30,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "操作",
+          "box": [
+            416,
+            157,
+            636,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "快捷键",
+          "box": [
+            1066,
+            157,
+            170,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "操作",
+          "box": [
+            1250,
+            157,
+            54,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "复制",
+          "box": [
+            416,
+            197,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "复制选中的文本，或在预设列表中复制预设",
+          "box": [
+            416,
+            220,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            205,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "剪切",
+          "box": [
+            416,
+            262,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "剪切选中的内容，或准备移动所选项目",
+          "box": [
+            416,
+            285,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            270,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "粘贴",
+          "box": [
+            416,
+            327,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "将已复制或剪切的内容粘贴到当前可接收的位置",
+          "box": [
+            416,
+            350,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            335,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "全选",
+          "box": [
+            416,
+            392,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "选择当前编辑区域或列表中的全部内容",
+          "box": [
+            416,
+            415,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            400,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "删除",
+          "box": [
+            416,
+            457,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "删除当前选中的内容或项目，保留相应的删除确认",
+          "box": [
+            416,
+            480,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            465,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "刷新",
+          "box": [
+            416,
+            522,
+            28,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "刷新当前游戏的 Mod 库，重新核对文件变化",
+          "box": [
+            416,
+            545,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            530,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "搜索当前页面",
+          "box": [
+            416,
+            587,
+            84,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "在支持搜索的页面聚焦搜索框并选中已有内容",
+          "box": [
+            416,
+            610,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            595,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "搜索设置",
+          "box": [
+            416,
+            652,
+            56,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "打开设置并聚焦设置搜索框",
+          "box": [
+            416,
+            675,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            660,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "页面导航",
+          "box": [
+            447,
+            740,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "操作",
+          "box": [
+            416,
+            783,
+            636,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "快捷键",
+          "box": [
+            1066,
+            783,
+            170,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "操作",
+          "box": [
+            1250,
+            783,
+            54,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "打开设置",
+          "box": [
+            416,
+            823,
+            56,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "前往设置，保留未保存游戏配置的确认",
+          "box": [
+            416,
+            846,
+            636,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "ShortcutButton",
+          "text": "还原",
+          "box": [
+            1250,
+            831,
+            54,
+            26
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "14-导入与导出.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "导入",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "导出",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入行为",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 导入格式",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "决定 Mod 在库内以哪种压缩格式保存；未强制统一时，外来压缩包保留原格式。",
+          "box": [
+            416,
+            186,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "ZIP 压缩包 (通用)",
+          "box": [
+            750,
+            173,
+            235,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "强制统一为导入格式",
+          "box": [
+            416,
+            247,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关闭时保留外来压缩包的原格式，导入更快。",
+          "box": [
+            416,
+            269,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关",
+          "box": [
+            800,
+            247,
+            12,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "了解详情",
+          "box": [
+            416,
+            291,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "处理性能",
+          "box": [
+            447,
+            365,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入并发",
+          "box": [
+            416,
+            415,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "同时处理的压缩任务数量，范围 1–16。",
+          "box": [
+            416,
+            437,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "7",
+          "box": [
+            750,
+            416,
+            80,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "个任务",
+          "box": [
+            836,
+            415,
+            36,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "自动推荐",
+          "box": [
+            878,
+            417,
+            74,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "15-在线设置.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "在线 Mod 代理",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod 更新",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "在线 Mod 连接",
+          "box": [
+            447,
+            114,
+            103,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启用代理",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "浏览、缩略图和下载使用常规页中的代理。",
+          "box": [
+            416,
+            186,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关",
+          "box": [
+            800,
+            164,
+            12,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前代理配置",
+          "box": [
+            416,
+            230,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "代理总开关已关闭。",
+          "box": [
+            416,
+            252,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "前往代理配置",
+          "box": [
+            750,
+            232,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "GameBanana 在国内部分时段可能无法访问，可在这里启用已配置的代理。",
+          "box": [
+            417,
+            301,
+            906,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "16-程序更新.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "程序更新",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前版本",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "d3dxSkinManage Plus",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前版本 v0.1.0",
+          "box": [
+            416,
+            186,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "检查程序更新",
+          "box": [
+            750,
+            166,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更新偏好",
+          "box": [
+            447,
+            250,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启用程序自动更新",
+          "box": [
+            416,
+            300,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关闭后不再检查/提示新版本。",
+          "box": [
+            416,
+            322,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关",
+          "box": [
+            800,
+            300,
+            12,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启动时检查",
+          "box": [
+            416,
+            366,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启动后静默检查，带 24h 节流；有新版本才打扰。",
+          "box": [
+            416,
+            388,
+            310,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关",
+          "box": [
+            800,
+            366,
+            12,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更新前备份旧版本",
+          "box": [
+            416,
+            432,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "一键更新前由更新器备份程序本体，失败可自动回滚。",
+          "box": [
+            416,
+            454,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "开",
+          "box": [
+            800,
+            432,
+            12,
+            55
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更新包下载源",
+          "box": [
+            416,
+            515,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "下载更新包时优先使用的源；国内直连 GitHub 慢时可选加速镜像。",
+          "box": [
+            416,
+            537,
+            310,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "自动（镜像优先，失败回退）",
+          "box": [
+            750,
+            524,
+            235,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "26-设置搜索.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "缓存",
+          "box": [
+            1079,
+            32,
+            258,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "找到 3 项相关设置",
+          "box": [
+            213,
+            103,
+            1180,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "图片内存缓存",
+          "box": [
+            263,
+            142,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "常规  ›  图片与缓存",
+          "box": [
+            263,
+            169,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "磁盘缓存",
+          "box": [
+            263,
+            226,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "常规  ›  图片与缓存",
+          "box": [
+            263,
+            253,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "缓存额度",
+          "box": [
+            263,
+            310,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "常规  ›  图片与缓存",
+          "box": [
+            263,
+            337,
+            834,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "17-工具箱.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "分类整理",
+          "box": [
+            211,
+            35,
+            1184,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏分类预设",
+          "box": [
+            253,
+            69,
+            108,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏",
+          "box": [
+            373,
+            69,
+            48,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "导入分类预设，补充分类与目录图片。\n也可以把当前游戏的完整分类树分享给他人。",
+          "box": [
+            215,
+            107,
+            1176,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入分类预设",
+          "box": [
+            215,
+            158,
+            135,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导出分类预设",
+          "box": [
+            359,
+            158,
+            135,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "分享分类结构与目录图片，不包含 Mod 文件",
+          "box": [
+            235,
+            206,
+            1156,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "维护与排查",
+          "box": [
+            211,
+            281,
+            1184,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "重建索引",
+          "box": [
+            251,
+            314,
+            56,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前游戏",
+          "box": [
+            316,
+            314,
+            48,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "从文件库重新扫描并恢复当前游戏的索引。",
+          "box": [
+            251,
+            336,
+            1040,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重建索引",
+          "box": [
+            1307,
+            315,
+            88,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "查看日志",
+          "box": [
+            251,
+            383,
+            56,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "应用",
+          "box": [
+            316,
+            383,
+            24,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "查看应用运行日志，排查崩溃 / 报错 / 行为异常",
+          "box": [
+            251,
+            405,
+            1040,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "查看日志",
+          "box": [
+            1307,
+            384,
+            88,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "18-插件.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "安装插件",
+          "box": [
+            1056,
+            16,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重新扫描",
+          "box": [
+            1174,
+            16,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开插件目录",
+          "box": [
+            1292,
+            16,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 清单导出",
+          "box": [
+            569,
+            88,
+            716,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "v0.1.0",
+          "box": [
+            569,
+            117,
+            37,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "已停用",
+          "box": [
+            1301,
+            88,
+            39,
+            45
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "d3dxSkinManage-Plus",
+          "box": [
+            509,
+            149,
+            889,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。",
+          "box": [
+            509,
+            181,
+            889,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "重载",
+          "box": [
+            509,
+            213,
+            88,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "卸载",
+          "box": [
+            613,
+            213,
+            88,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "启用并满足依赖后可使用插件设置与功能。",
+          "box": [
+            509,
+            263,
+            889,
+            48
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "权限与来源 · 7 项权限",
+          "box": [
+            509,
+            327,
+            889,
+            49
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "我的插件",
+          "box": [
+            198,
+            81,
+            60,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3",
+          "box": [
+            462,
+            81,
+            8,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "全部 3",
+          "box": [
+            198,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "已启用 0",
+          "box": [
+            290,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "已停用 3",
+          "box": [
+            382,
+            162,
+            88,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 清单导出",
+          "box": [
+            249,
+            216,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设检查",
+          "box": [
+            249,
+            281,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "预设轮换",
+          "box": [
+            249,
+            346,
+            209,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "插件可从压缩包安装，或放入插件目录后重新扫描。首次启用需确认信任。",
+          "box": [
+            198,
+            895,
+            272,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "19-关于.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏　（当前环境）",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1130,
+            355,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1255,
+            355,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            405,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1115,
+            405,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            441,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1115,
+            441,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            477,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1115,
+            479,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1115,
+            519,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            557,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1115,
+            559,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "当前环境",
+          "box": [
+            1037,
+            599,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存",
+          "box": [
+            1046,
+            650,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1236,
+            651,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关于本项目",
+          "box": [
+            776,
+            49,
+            65,
+            21
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "一款面向社区的现代化 Mod 管理工具 —— 站在前人对社区贡献的肩膀上，以全新的代码与设计重新出发。",
+          "box": [
+            537,
+            189,
+            520,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前状态",
+          "box": [
+            639,
+            254,
+            56,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "开发中 · 未发布",
+          "box": [
+            705,
+            254,
+            118,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "·",
+          "box": [
+            833,
+            254,
+            3,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "立项 2026-03-09",
+          "box": [
+            846,
+            254,
+            108,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "项目故事",
+          "box": [
+            832,
+            356,
+            530,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "火种未熄",
+          "box": [
+            832,
+            379,
+            530,
+            35
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "了解 Plus 背后的故事",
+          "box": [
+            832,
+            422,
+            530,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2026 年 10 月项目短片",
+          "box": [
+            832,
+            448,
+            530,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "播放短片",
+          "box": [
+            860,
+            536,
+            56,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "TRIBUTE · 致敬",
+          "box": [
+            236,
+            634,
+            113,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "向原 d3dxSkinManage 作者致敬",
+          "box": [
+            206,
+            658,
+            1182,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "每一个繁荣的社区背后，都有一位最早点亮火种的人。本项目与原 d3dxSkinManage 没有任何代码或工程上的关联，但那份对社区的开创性贡献，值得被郑重记住。",
+          "box": [
+            206,
+            699,
+            720,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "开创者的火种",
+          "box": [
+            309,
+            780,
+            1052,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "原 d3dxSkinManage 作者以一己之力，为社区构建了最初的 Mod 管理范式，降低了无数创作者与玩家的Mod管理门槛，让「换装/改模」这件事第一次变得触手可及。这种从 0 到 1 的开创，是后来所有同类工具共同的精神起点。",
+          "box": [
+            309,
+            814,
+            1052,
+            57
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_WrapLabel",
+          "text": "※ 声明：d3dxSkinManage-Plus 为独立项目，代码完全重写，与原 d3dxSkinManage 项目无任何引用、衍生或隶属关系。此处致谢仅为表彰其对社区的历史贡献。",
+          "box": [
+            309,
+            881,
+            1052,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "21-画廊.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏　（当前环境）",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1130,
+            355,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1255,
+            355,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            405,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1115,
+            405,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            441,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1115,
+            441,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            477,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1115,
+            479,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1115,
+            519,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            557,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1115,
+            559,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "当前环境",
+          "box": [
+            1037,
+            599,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存",
+          "box": [
+            1046,
+            650,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1236,
+            651,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "画廊视图",
+          "box": [
+            182,
+            12,
+            72,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "显示 NSFW",
+          "box": [
+            1291,
+            12,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod A",
+          "box": [
+            199,
+            319,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "● 已启用",
+          "box": [
+            199,
+            347,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod B",
+          "box": [
+            491,
+            319,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "○ 已禁用",
+          "box": [
+            491,
+            347,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod C",
+          "box": [
+            783,
+            319,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "○ 已禁用",
+          "box": [
+            783,
+            347,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例 Mod D",
+          "box": [
+            1075,
+            319,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "○ 已禁用",
+          "box": [
+            1075,
+            347,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例界面 Mod",
+          "box": [
+            199,
+            651,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "○ 已禁用",
+          "box": [
+            199,
+            679,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例角色 Mod",
+          "box": [
+            491,
+            651,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "○ 已禁用",
+          "box": [
+            491,
+            679,
+            270,
+            24
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "23-日志.webp",
+      "width": 1680,
+      "height": 1120,
+      "logical_width": 840,
+      "logical_height": 560,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "启动会话:",
+          "box": [
+            11,
+            11,
+            55,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "2026-10-30 #6",
+          "box": [
+            72,
+            11,
+            150,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "级别:",
+          "box": [
+            228,
+            11,
+            29,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "全部",
+          "box": [
+            263,
+            11,
+            107,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QCheckBox",
+          "text": "自动滚动到底部",
+          "box": [
+            420,
+            18,
+            119,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "刷新",
+          "box": [
+            545,
+            11,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "打开日志目录",
+          "box": [
+            631,
+            11,
+            132,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "复制",
+          "box": [
+            769,
+            11,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "显示 1 / 1 行",
+          "box": [
+            11,
+            533,
+            818,
+            16
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "27-图片与缓存.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "Mod 管理",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "网络代理",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "下载数据",
+          "box": [
+            203,
+            185,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "图片与缓存",
+          "box": [
+            203,
+            229,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "图片内存缓存",
+          "box": [
+            445,
+            110,
+            90,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "RAM",
+          "box": [
+            543,
+            111,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "保留近期图片，让总览、画廊与在线 Mod 回看更快。",
+          "box": [
+            445,
+            132,
+            941,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前图片占用",
+          "box": [
+            416,
+            174,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "2.9",
+          "box": [
+            416,
+            198,
+            48,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            469,
+            212,
+            24,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "生效上限 256 MiB",
+          "box": [
+            416,
+            250,
+            108,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "1%",
+          "box": [
+            581,
+            250,
+            20,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "仅统计图片缓存，非程序总内存。",
+          "box": [
+            416,
+            288,
+            185,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "缓存额度",
+          "box": [
+            643,
+            220,
+            180,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "64–8192 MiB，按需占用",
+          "box": [
+            643,
+            242,
+            180,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "IntLineEdit",
+          "text": "256",
+          "box": [
+            839,
+            221,
+            76,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MiB",
+          "box": [
+            923,
+            220,
+            23,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "自动推荐",
+          "box": [
+            954,
+            222,
+            74,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "释放缓存后，当前显示的图片继续保留。",
+          "box": [
+            414,
+            325,
+            844,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "清理图片内存",
+          "box": [
+            1270,
+            325,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "磁盘缓存",
+          "box": [
+            445,
+            397,
+            60,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "DISK",
+          "box": [
+            513,
+            398,
+            44,
+            17
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "保留已下载的在线图片，减少重复下载。",
+          "box": [
+            445,
+            419,
+            941,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前磁盘占用",
+          "box": [
+            416,
+            461,
+            185,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0",
+          "box": [
+            416,
+            487,
+            20,
+            44
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "MB",
+          "box": [
+            441,
+            501,
+            21,
+            16
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "含在线图片与其他可再生缓存",
+          "box": [
+            416,
+            541,
+            185,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "在线图片缓存上限",
+          "box": [
+            643,
+            461,
+            586,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "只限制在线图片的磁盘占用",
+          "box": [
+            643,
+            480,
+            586,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "512 MB",
+          "box": [
+            1241,
+            461,
+            112,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "0 · 不限制",
+          "box": [
+            643,
+            530,
+            48,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "4 GB",
+          "box": [
+            1329,
+            530,
+            24,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "滑块最大值",
+          "box": [
+            643,
+            561,
+            180,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "决定可拖动范围，不等于当前上限",
+          "box": [
+            643,
+            580,
+            180,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "4",
+          "box": [
+            839,
+            561,
+            76,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "GB",
+          "box": [
+            922,
+            561,
+            80,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "超出上限时，优先移除最久未浏览的在线缩略图，再次浏览时按需下载。",
+          "box": [
+            643,
+            602,
+            710,
+            14
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "清理可再生缓存，保留已下载的 Mod 压缩包。",
+          "box": [
+            414,
+            638,
+            826,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "清理磁盘缓存",
+          "box": [
+            1270,
+            638,
+            118,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "28-整窗背景.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QPushButton",
+          "text": "常规",
+          "box": [
+            203,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "个性化",
+          "box": [
+            281,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "快捷键",
+          "box": [
+            373,
+            30,
+            84,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "导入与导出",
+          "box": [
+            465,
+            30,
+            112,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "在线 Mod",
+          "box": [
+            585,
+            30,
+            106,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "更新",
+          "box": [
+            699,
+            30,
+            70,
+            38
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Ctrl K",
+          "box": [
+            1346,
+            38,
+            48,
+            22
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "外观",
+          "box": [
+            203,
+            97,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "_SectionButton",
+          "text": "整窗背景",
+          "box": [
+            203,
+            141,
+            172,
+            40
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景素材",
+          "box": [
+            447,
+            114,
+            60,
+            20
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景来源",
+          "box": [
+            416,
+            164,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "关闭背景时保留各类型的素材和显示设置。",
+          "box": [
+            416,
+            186,
+            310,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关闭",
+          "box": [
+            753,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "图片",
+          "box": [
+            803,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "视频",
+          "box": [
+            853,
+            167,
+            48,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "WE 场景",
+          "box": [
+            903,
+            167,
+            72,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "背景已关闭，恢复主题底色。",
+          "box": [
+            437,
+            218,
+            867,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "更改即时生效并自动保存",
+          "box": [
+            222,
+            900,
+            132,
+            43
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "恢复默认",
+          "box": [
+            1351,
+            908,
+            52,
+            26
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    },
+    {
+      "file": "24-在线Mod.webp",
+      "width": 2880,
+      "height": 1920,
+      "logical_width": 1440,
+      "logical_height": 960,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "游戏",
+          "box": [
+            180,
+            10,
+            36,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "卡片视图",
+          "box": [
+            1066,
+            10,
+            114,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加游戏",
+          "box": [
+            1320,
+            10,
+            106,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏　（当前环境）",
+          "box": [
+            1037,
+            66,
+            391,
+            19
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "添加预览图",
+          "box": [
+            1130,
+            355,
+            119,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1255,
+            355,
+            80,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "游戏名称",
+          "box": [
+            1037,
+            405,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "示例游戏",
+          "box": [
+            1115,
+            405,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            1037,
+            441,
+            52,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Sample Game",
+          "box": [
+            1115,
+            441,
+            313,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "可执行文件",
+          "box": [
+            1037,
+            477,
+            65,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\Game\\SampleGame.exe",
+          "box": [
+            1115,
+            479,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "3DMigoto",
+          "box": [
+            1037,
+            517,
+            63,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto",
+          "box": [
+            1115,
+            519,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Mod 文件夹",
+          "box": [
+            1037,
+            557,
+            72,
+            28
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "C:\\Users\\Administrator\\AppData\\Local\\Temp\\d3dx-tutorial-placeholder\\demo\\3DMigoto\\Mods",
+          "box": [
+            1115,
+            559,
+            273,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "当前环境",
+          "box": [
+            1037,
+            599,
+            391,
+            34
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "保存",
+          "box": [
+            1046,
+            650,
+            184,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "删除",
+          "box": [
+            1236,
+            651,
+            183,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "当前",
+          "box": [
+            316,
+            78,
+            40,
+            18
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例游戏",
+          "box": [
+            196,
+            208,
+            154,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "Sample Game",
+          "box": [
+            186,
+            240,
+            164,
+            30
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "默认",
+          "box": [
+            1100,
+            4,
+            116,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "LeadingIconComboBox",
+          "text": "模糊 NSFW",
+          "box": [
+            1224,
+            4,
+            133,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "示例游戏（占位）",
+          "box": [
+            174,
+            46,
+            127,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "/",
+          "box": [
+            305,
+            46,
+            21,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "Mod",
+          "box": [
+            330,
+            46,
+            72,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "/",
+          "box": [
+            406,
+            46,
+            21,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QToolButton",
+          "text": "示例分类",
+          "box": [
+            431,
+            46,
+            95,
+            31
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod A",
+          "box": [
+            180,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            180,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            196,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            239,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            276,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod B",
+          "box": [
+            398,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            398,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            414,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            457,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            494,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod C",
+          "box": [
+            616,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            616,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            632,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            675,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            712,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod D",
+          "box": [
+            834,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            834,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            850,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            893,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            930,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod E",
+          "box": [
+            1052,
+            253,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            1052,
+            288,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            1068,
+            322,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            1111,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            1148,
+            322,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例在线 Mod F",
+          "box": [
+            180,
+            531,
+            198,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "示例作者",
+          "box": [
+            180,
+            566,
+            198,
+            32
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "100",
+          "box": [
+            196,
+            600,
+            18,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "10",
+          "box": [
+            239,
+            600,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "20",
+          "box": [
+            276,
+            600,
+            12,
+            33
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "关于",
+          "box": [
+            0,
+            816,
+            160,
+            37
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动Mod加载器",
+          "box": [
+            0,
+            853,
+            160,
+            37
+          ],
+          "enabled": false
+        },
+        {
+          "class": "QPushButton",
+          "text": "启动游戏",
+          "box": [
+            0,
+            890,
+            160,
+            37
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": []
+    }
+  ]
+}

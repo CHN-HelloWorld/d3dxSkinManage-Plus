@@ -827,3 +827,686 @@ class PresetManager(QObject):
         for mid in mod_ids:
             cur.remove_mod(mid)
         self._save()
+
+    # 级联清理
+
+    def _cascade_delete_token(self):
+        """包含尚未保存的原地修改，不仅比较方法调用计数。"""
+
+        def mapping(value):
+            """将成员映射冻结为元组，供级联删除候选比较内存版本。"""
+            return tuple((key, tuple(ids)) for key, ids in value.items())
+
+        records = tuple(
+            (
+                pid,
+                id(preset),
+                tuple(
+                    (
+                        item.name,
+                        mapping(preset.character_mods)
+                        if item.name == "character_mods"
+                        else tuple(sorted(preset.mod_variants.items()))
+                        if item.name == "mod_variants"
+                        else getattr(preset, item.name),
+                    )
+                    for item in fields(Preset)
+                ),
+            )
+            for pid, preset in self._presets.items()
+        )
+        return (
+            str(self._presets_file),
+            records,
+            tuple((pid, mapping(value)) for pid, value in self._durable_refs.items()),
+            tuple((pid, mapping(value)) for pid, value in self._resolved_refs.items()),
+        )
+
+    def prepare_cascade_delete(self, mod_id: str, game_id: str):
+        """在所有者线程采集独立候选，不修改活动选择。"""
+        from types import SimpleNamespace
+
+        from src.core.preset_delete import PreparedPresetDelete, StalePresetDelete, file_version
+
+        if not mod_id:
+            return None
+        if not any(
+            preset.game_id == game_id
+            and (
+                any(mod_id in ids for ids in preset.character_mods.values())
+                or any(mod_id in ids for ids in self._durable_refs.get(pid, {}).values())
+            )
+            for pid, preset in self._presets.items()
+        ):
+            return None
+        token = self._cascade_delete_token()
+        version = file_version(self._presets_file)
+
+        def clone(mapping):
+            """复制成员映射及各成员列表，隔离待提交候选与当前预设。"""
+            return {key: list(ids) for key, ids in mapping.items()}
+
+        shadow = SimpleNamespace(
+            _durable_refs={pid: clone(value) for pid, value in self._durable_refs.items()},
+            _resolved_refs={pid: clone(value) for pid, value in self._resolved_refs.items()},
+        )
+        runtime, updated, records = {}, {}, []
+        dirty = False
+        for pid, live in self._presets.items():
+            preset = copy.copy(live)
+            preset.character_mods = clone(live.character_mods)
+            preset.mod_variants = dict(live.mod_variants)
+            if preset.game_id == game_id:
+                durable = shadow._durable_refs.get(pid, {})
+                captured = (
+                    pid in shadow._durable_refs
+                    and pid in shadow._resolved_refs
+                    and preset.character_mods == shadow._resolved_refs[pid]
+                )
+                in_runtime = any(mod_id in ids for ids in preset.character_mods.values())
+                in_durable = any(mod_id in ids for ids in durable.values())
+
+                def remove(mapping):
+                    """从候选成员映射剔除目标 Mod，并移除因此变空的分类条目。"""
+                    return {
+                        key: kept for key, ids in mapping.items() if (kept := [mid for mid in ids if mid != mod_id])
+                    }
+
+                if in_runtime:
+                    preset.character_mods = remove(preset.character_mods)
+                    preset.updated_at = datetime.now().isoformat()
+                    runtime[pid] = preset.character_mods
+                    updated[pid] = preset.updated_at
+                if in_durable:
+                    shadow._durable_refs[pid] = remove(durable)
+                if captured and (in_runtime or in_durable):
+                    shadow._resolved_refs[pid] = clone(preset.character_mods)
+                dirty |= in_runtime or in_durable
+                if in_runtime or in_durable:
+                    preset.mod_variants.pop(mod_id, None)
+            if (
+                pid not in shadow._durable_refs
+                or pid not in shadow._resolved_refs
+                or preset.character_mods != shadow._resolved_refs[pid]
+            ):
+                PresetManager._capture_references(shadow, preset)
+            record = {item.name: getattr(preset, item.name) for item in fields(Preset) if item.name != "character_mods"}
+            # 保持原有 JSON 键顺序。
+            record = {
+                key: (shadow._durable_refs[pid] if key == "character_mods" else record[key])
+                for key in (
+                    "id",
+                    "name",
+                    "description",
+                    "game_id",
+                    "is_default",
+                    "character_mods",
+                    "mod_variants",
+                    "created_at",
+                    "updated_at",
+                )
+            }
+            record["mod_variants"] = {
+                mid: preset.mod_variants.get(mid) for mids in shadow._durable_refs[pid].values() for mid in mids
+            }
+            records.append(record)
+        if not dirty:
+            return None
+        if self._cascade_delete_token() != token or file_version(self._presets_file) != version:
+            raise StalePresetDelete("Preset changed while preparing deletion")
+        temporary = self._presets_file.with_name(f".{self._presets_file.name}.delete-{uuid.uuid4().hex}.tmp")
+        return PreparedPresetDelete(
+            id(self),
+            mod_id,
+            game_id,
+            self._presets_file,
+            temporary,
+            token,
+            version,
+            {"version": SCHEMA_VERSION, "presets": records},
+            runtime,
+            updated,
+            shadow._durable_refs,
+            shadow._resolved_refs,
+        )
+
+    @library_mutation
+    def commit_cascade_delete(self, candidate) -> None:
+        """仅发布与已刷新到磁盘的候选完全一致的预设选择。"""
+        from src.core.preset_delete import StalePresetDelete, discard_prepared_preset_delete, file_version
+
+        if candidate.committed:
+            raise StalePresetDelete("Preset deletion candidate was already committed")
+        try:
+            if (
+                candidate.owner_id != id(self)
+                or candidate.cancelled.is_set()
+                or self._cascade_delete_token() != candidate.token
+                or file_version(self._presets_file) != candidate.target_version
+            ):
+                raise StalePresetDelete("Preset changed before deletion publication")
+            if (
+                not candidate.written.is_set()
+                or candidate.staged_version is None
+                or file_version(candidate.temporary) != candidate.staged_version
+            ):
+                raise StalePresetDelete("Preset deletion candidate is not durably staged")
+            os.replace(candidate.temporary, candidate.target)
+            for pid, runtime in candidate.runtime.items():
+                self._presets[pid].character_mods = runtime
+                self._presets[pid].updated_at = candidate.updated_at[pid]
+            for preset in self._presets.values():
+                if preset.game_id == candidate.game_id:
+                    preset.mod_variants.pop(candidate.mod_id, None)
+            self._durable_refs = candidate.durable
+            self._resolved_refs = candidate.resolved
+            candidate.committed = True
+        except BaseException:
+            discard_prepared_preset_delete(candidate)
+            raise
+
+    @library_mutation
+    def cascade_delete_mod(self, mod_id: str, game_id: str) -> None:
+        """删除某 mod 时清理该游戏所有预设的引用"""
+        if not mod_id:
+            return
+        durable_before = self._durable_refs.copy()
+        resolved_before = self._resolved_refs.copy()
+        changed = []
+        try:
+            for preset in self._presets.values():
+                if preset.game_id != game_id:
+                    continue
+                runtime = preset.character_mods
+                durable = self._durable_refs.get(preset.id, {})
+                captured = (
+                    preset.id in self._durable_refs
+                    and preset.id in self._resolved_refs
+                    and runtime == self._resolved_refs[preset.id]
+                )
+                in_runtime = any(mod_id in ids for ids in runtime.values())
+                in_durable = any(mod_id in ids for ids in durable.values())
+                if not in_runtime and not in_durable:
+                    continue
+                changed.append((preset, runtime, preset.updated_at, dict(preset.mod_variants)))
+                preset.mod_variants.pop(mod_id, None)
+
+                def remove(mapping):
+                    """删除各分类中的目标成员，并仅保留仍有成员的分类映射。"""
+                    return {
+                        cid: remaining
+                        for cid, ids in mapping.items()
+                        if (remaining := [mid for mid in ids if mid != mod_id])
+                    }
+
+                if in_runtime:
+                    preset.character_mods = remove(runtime)
+                    preset.updated_at = datetime.now().isoformat()
+                if in_durable:
+                    self._durable_refs[preset.id] = remove(durable)
+                if captured:
+                    self._resolved_refs[preset.id] = {cid: list(ids) for cid, ids in preset.character_mods.items()}
+            if changed:
+                self._save()
+        except Exception:
+            for preset, runtime, updated_at, variants in changed:
+                preset.character_mods = runtime
+                preset.updated_at = updated_at
+                preset.mod_variants = variants
+            self._durable_refs = durable_before
+            self._resolved_refs = resolved_before
+            raise
+
+    @library_mutation
+    def cascade_delete_character(self, character_id: str, game_id: str) -> None:
+        """删除某角色时清理该游戏所有预设的对应 key"""
+        if not character_id:
+            return
+        dirty = False
+        for p in self._presets.values():
+            if p.game_id != game_id:
+                continue
+            if self._durable_refs.get(p.id, {}).pop(character_id, None) is not None:
+                dirty = True
+            if character_id in p.character_mods:
+                p.remove_character(character_id)
+                dirty = True
+        if dirty:
+            self._save()
+
+    @library_mutation
+    def cascade_move_mod(
+        self,
+        mod_id: str,
+        old_character_id: str,
+        new_character_id: str,
+        game_id: str,
+    ) -> None:
+        """move_mod 后同步预设：从旧角色 list 移除并加入新角色 list"""
+        if not mod_id or old_character_id == new_character_id:
+            return
+        dirty = False
+        for p in self._presets.values():
+            if p.game_id != game_id:
+                continue
+            bucket = p.character_mods.get(old_character_id, [])
+            if mod_id not in bucket:
+                continue
+            bucket.remove(mod_id)
+            if not bucket:
+                del p.character_mods[old_character_id]
+            new_bucket = p.character_mods.setdefault(new_character_id, [])
+            if mod_id not in new_bucket:
+                new_bucket.append(mod_id)
+            p.updated_at = datetime.now().isoformat()
+            dirty = True
+        if dirty:
+            self._save()
+
+    @library_mutation
+    def refresh_after_rebuild(self, game_id: str) -> int:
+        """刷新节点分组，保持 Mod 身份稳定。"""
+        mods = self._read_plan_mods(game_id)
+        changed = 0
+        save_needed = False
+        for preset in self.get_all_presets(game_id):
+            before = copy.deepcopy(preset.character_mods)
+            durable_before = copy.deepcopy(self._durable_refs.get(preset.id, {}))
+            self._capture_references(preset)
+            self._resolve_references(preset, mods)
+            self._capture_references(preset)
+            if before != preset.character_mods:
+                changed += 1
+            save_needed |= durable_before != self._durable_refs[preset.id]
+        if save_needed:
+            self._save()
+        return changed
+
+    def _refresh_deployments(self, game_id: str, *, locations=None, rows=None, records=None) -> None:
+        """通过宿主钩子或默认对账服务刷新部署状态，可复用已采集的位置和记录。"""
+        if self._before_reconcile is not None:
+            if locations is None:
+                self._before_reconcile(game_id)
+            else:
+                self._before_reconcile(game_id, locations=locations, rows=rows, records=records)
+        else:
+            from src.core.deployment_reconcile import reconcile_deployment_records
+
+            reconcile_deployment_records(
+                self._get_index(),
+                self._get_storage(),
+                game_id,
+                force=True,
+                locations=locations,
+                rows=rows,
+                records=records,
+            )
+
+    @library_mutation
+    def prepare_preset_apply(self, preset_id: str, *, preparation=None):
+        """在主线程创建、校验并记录不可变计划。
+
+        没有部署目录时允许不涉及文件的状态切换，需要部署文件时拒绝执行并说明原因。
+        """
+        from src.core.preset_deployment_plan import (
+            build_preset_deployment_plan,
+            validate_plan_filesystem,
+        )
+
+        target = self._presets.get(preset_id)
+        if target is None:
+            raise ValueError(f"preset does not exist: {preset_id}")
+        if preparation is not None and target.game_id != preparation.game_id:
+            raise ValueError(tr("预设不存在或不属于当前游戏"))
+        idx = self._get_index()
+        if self.has_pending_apply(target.game_id):
+            raise RuntimeError(tr("另一个预设切换事务尚未完成"))
+        storage = preparation.storage if preparation is not None else self._get_storage()
+        records = {r.mod_id: r for r in idx.get_deployments(target.game_id)} if preparation is not None else None
+        # 用户操作核对计划中的精确路径，位置修复和重新对账由后台审计负责。
+        root = storage.get_deploy_dir()
+        state_only = root is None
+        if state_only:
+            # 占位根目录：零文件操作的计划不会用到它；一旦发现有动作就在下面拒绝。
+            root = get_data_dir()
+        mods = preparation.mods if preparation is not None else self._read_plan_mods(target.game_id)
+        if records is None:
+            records = {r.mod_id: r for r in idx.get_deployments(target.game_id)}
+        self._capture_references(target, mods)
+        self._resolve_references(target, mods)
+        resolved = {mod.mod_id for mod in mods}
+        unresolved = {
+            identity
+            for identities in self._durable_refs.get(target.id, {}).values()
+            for identity in identities
+            if identity not in resolved
+        }
+        if unresolved:
+            raise IdentityConflict(tr("预设引用的源 Mod 暂未恢复：") + ", ".join(sorted(unresolved)))
+        if state_only and (target.enabled_mod_ids or any(mod.is_enabled for mod in mods)):
+            raise RuntimeError(tr("未配置「Mod 文件夹」，无法切换需要部署的预设"))
+        current_id = idx.get_current_preset_id(target.game_id)
+        if not current_id:
+            current_id = self._game_store.get_current_preset_id(target.game_id) or ""
+        plan = build_preset_deployment_plan(
+            game_id=target.game_id,
+            from_preset_id=current_id,
+            to_preset_id=preset_id,
+            mods=mods,
+            target_mod_ids=set(target.enabled_mod_ids),
+            deployments=list(records.values()),
+            deploy_root=root,
+        )
+        if state_only and plan.actions:
+            raise RuntimeError(
+                tr(
+                    "未配置「Mod 文件夹」，无法部署该预设中的 Mod。"
+                    "请先在「游戏」页设置「Mod 文件夹」，或先禁用当前已启用的 Mod。"
+                )
+            )
+        if preparation is None:
+            validate_plan_filesystem(plan)
+        journal = PresetApplyJournal(
+            operation_id=plan.operation_id,
+            game_id=plan.game_id,
+            from_preset_id=plan.from_preset_id,
+            to_preset_id=plan.to_preset_id,
+            phase="planned",
+            plan_json=plan.to_json(),
+        )
+        idx.save_journal(journal)
+        try:
+            if preparation is None and self._before_plan_io is not None:
+                self._before_plan_io(plan)
+        except Exception:
+            idx.delete_journal(plan.operation_id)
+            raise
+        return plan
+
+    @library_mutation
+    def mark_preset_apply_executing(self, operation_id: str) -> None:
+        """将预设恢复日志推进到执行阶段，并初始化已完成步骤列表。"""
+        self._get_index().update_journal(operation_id, phase="executing", completed_steps_json="[]")
+
+    @library_mutation
+    def record_preset_apply_steps(self, operation_id: str, completed) -> None:
+        """序列化已完成部署步骤并更新执行阶段日志，供失败或重启时恢复。"""
+        idx = self._get_index()
+        idx.update_journal(
+            operation_id,
+            phase="executing",
+            completed_steps_json=json.dumps([asdict(step) for step in completed], ensure_ascii=False),
+        )
+
+    @library_mutation
+    def commit_preset_apply(self, plan, completed, *, preparation=None) -> list[str]:
+        """持有偏好和变体锁，核对并固定全部源对象后提交预设切换状态。"""
+        from contextlib import ExitStack
+
+        from src.core.mod_runtime_prefs import PREFS_LOCK
+        from src.core.mod_variant_store import VARIANT_STORE_LOCK
+        from src.core.operation_preflight import OperationPreflightError, access_file, confirm_source
+
+        with PREFS_LOCK, VARIANT_STORE_LOCK, ExitStack() as stack:
+            for action in plan.actions:
+                mod = self._get_index().get_mod(action.mod_id)
+                if mod is None or mod.path != action.source_path:
+                    raise OperationPreflightError(action.mod_id, action.source_path, tr("预设源位置已变化"))
+                previous = preparation.receipts.get(action.mod_id) if preparation is not None else None
+                receipt = confirm_source(
+                    action.source_path, action.mod_id, mod.content_hash, full=previous is None, expected=previous
+                )
+                stack.enter_context(access_file(receipt.path, pin=True))
+                receipt.recheck()
+            return self._commit_preset_apply(plan, completed, preparation=preparation)
+
+    def _commit_preset_apply(self, plan, completed, *, preparation=None) -> list[str]:
+        """原子提交部署状态、受影响 Mod 状态和当前预设。"""
+        if preparation is not None and preparation.validated_operation_id != plan.operation_id:
+            raise RuntimeError(tr("预设部署尚未完成提交前校验"))
+        for action in plan.actions if preparation is None else ():
+            actual = action.disabled_path if action.action == "park" else action.active_path
+            marker = read_deployment_identity(actual)
+            if marker is None or marker["mod_id"] != action.mod_id:
+                raise IdentityConflict(tr("提交前部署身份已变更：{actual}", actual=actual))
+        # 差量部署已完成、DB 还没提交：此刻写回运行时变体（写容器 override 初始值 + 从
+        # d3dx_user.ini 删键），改动与写前/写后哈希记进 journal 的 runtime_patch_json，
+        # 崩溃或回滚时可反向还原。配置未完成必须阻止提交。
+        if preparation is None and self._before_plan_commit is not None:
+            self._before_plan_commit(plan)
+        if preparation is not None:
+            preparation.variants.verify_preset_configuration(plan)
+        elif self._verify_configuration is not None:
+            self._verify_configuration(plan)
+        idx = self._get_index()
+        if preparation is not None:
+            for operation_id, patch_json in preparation.patches.items():
+                idx.update_journal_runtime_patch(operation_id, patch_json)
+        affected: list[str] = []
+        now = datetime.now().isoformat()
+        with idx.transaction() as conn:
+            for action in plan.actions:
+                active = action.action != "park"
+                actual = action.active_path if active else action.disabled_path
+                state = "active" if active else "disabled"
+                old = conn.execute(
+                    "SELECT COALESCE(d.state,'absent') FROM mods m "
+                    "LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+                    "WHERE m.mod_id=? AND m.game_id=?",
+                    (action.mod_id, plan.game_id),
+                ).fetchone()
+                if old is None:
+                    raise IdentityConflict(tr("预设提交源身份已消失或游戏已变更: {mod_id}", mod_id=action.mod_id))
+                if (old[0] == "active") != active:
+                    affected.append(action.mod_id)
+                conn.execute(
+                    """INSERT INTO deployment_records
+                       (mod_id,state,actual_path) VALUES (?,?,?)
+                       ON CONFLICT(mod_id) DO UPDATE SET state=excluded.state,
+                         actual_path=excluded.actual_path""",
+                    (action.mod_id, state, actual),
+                )
+            conn.execute(
+                """INSERT INTO game_deployment_state(game_id,current_preset_id,updated_at)
+                   VALUES (?,?,?) ON CONFLICT(game_id) DO UPDATE SET
+                   current_preset_id=excluded.current_preset_id,updated_at=excluded.updated_at""",
+                (plan.game_id, plan.to_preset_id, now),
+            )
+            conn.execute(
+                "UPDATE preset_apply_journal SET phase='committed',updated_at=? WHERE operation_id=?",
+                (now, plan.operation_id),
+            )
+            conn.execute("DELETE FROM preset_apply_journal WHERE operation_id=?", (plan.operation_id,))
+        # 事务已提交，配置指针写入失败时仅记录错误，不撤销已完成的部署。
+        # 抛出去会变成新的部署回滚触发器，把一次已经写入磁盘成功的部署倒回去。
+        self._game_store.set_current_preset_id(plan.game_id, plan.to_preset_id)
+        if preparation is None:
+            if self._after_plan_commit is not None:
+                try:
+                    self._after_plan_commit(plan)
+                except Exception as error:
+                    logger.error("预设已提交，后续同步或通知失败：%s", error)
+            self.preset_changed.emit(plan.game_id)
+            self.preset_applied.emit(affected)
+        return affected
+
+    def finish_prepared_apply(self, plan, affected, preparation) -> None:
+        """后台完成 INI 和变体处理后，在所有者线程发布。"""
+        self.preset_changed.emit(plan.game_id)
+        self.preset_applied.emit(affected)
+
+    @library_mutation
+    def fail_preset_apply(self, plan, error, *, preparation=None) -> None:
+        """执行器回滚后完成日志处理，回滚不完整时保留恢复记录。"""
+        logger.error(
+            "预设切换失败 game=%s op=%s mods=%s paths=%s: %s",
+            plan.game_id,
+            plan.operation_id,
+            [a.mod_id for a in plan.actions],
+            [a.active_path for a in plan.actions],
+            error,
+        )
+        rollback_errors = tuple(getattr(error, "rollback_errors", ()))
+        # 部署步骤已由 executor 反向回滚；这里把运行时补丁也反向执行（容器 override 原文 +
+        # d3dx_user.ini 写回前值）。反向失败并入 rollback_errors → journal 留作 recovery_required。
+        if preparation is None:
+            rollback_errors += self._reverse_runtime_patch(plan)
+        else:
+            for operation_id, patch_json in preparation.patches.items():
+                self._get_index().update_journal_runtime_patch(operation_id, patch_json)
+        if rollback_errors:
+            self._get_index().update_journal(
+                plan.operation_id,
+                phase="recovery_required",
+                completed_steps_json=json.dumps(
+                    [asdict(step) for step in getattr(error, "completed", ())], ensure_ascii=False
+                ),
+            )
+        else:
+            self._get_index().delete_journal(plan.operation_id)
+            if preparation is None and self._after_plan_rollback is not None:
+                self._after_plan_rollback(plan)
+
+    def _reverse_runtime_patch(self, plan) -> tuple[str, ...]:
+        """反向执行运行时变体补丁，返回未能还原的原因；空字符串表示成功。
+
+        补丁记录保存在事务日志的 runtime_patch_json 中，必须在 delete_journal 前恢复。
+        """
+        if self._on_runtime_rollback is None:
+            return ()
+        try:
+            return tuple(self._on_runtime_rollback(plan) or ())
+        except Exception as e:
+            return (tr("变体补丁回滚异常: {e}", e=e),)
+
+    @library_mutation
+    def recover_incomplete_applies(self, game_id: str = "") -> list[str]:
+        """部署根可用后回滚未提交事务。"""
+        from src.core.preset_apply_service import CompletedStep, PresetPlanExecutor
+        from src.core.preset_deployment_plan import PresetDeploymentPlan
+
+        idx = self._get_index()
+        errors: list[str] = []
+        for journal in idx.get_journals(game_id):
+            try:
+                plan = PresetDeploymentPlan.from_json(journal.plan_json)
+                raw_steps = json.loads(journal.completed_steps_json or "[]")
+                completed = tuple(CompletedStep(**item) for item in raw_steps)
+                if journal.phase == "planned" and not completed and not journal.runtime_patch_json:
+                    idx.delete_journal(journal.operation_id)
+                    continue
+                if journal.phase == "committed":
+                    if self._after_plan_commit is not None:
+                        self._after_plan_commit(plan)
+                    idx.delete_journal(journal.operation_id)
+                    continue
+                if journal.phase == "executing" and not completed:
+                    inferred: list[CompletedStep] = []
+                    for action in plan.actions:
+                        active_exists = self._get_storage()._deploy_path_exists(Path(action.active_path))
+                        disabled_exists = self._get_storage()._deploy_path_exists(Path(action.disabled_path))
+                        if active_exists and disabled_exists:
+                            raise FileExistsError(
+                                f"active and disabled both exist: {action.active_path}; {action.disabled_path}"
+                            )
+                        if action.action == "park" and disabled_exists and not active_exists:
+                            inferred.append(
+                                CompletedStep(action.mod_id, "park", action.active_path, action.disabled_path)
+                            )
+                        elif action.action == "restore" and active_exists and not disabled_exists:
+                            inferred.append(
+                                CompletedStep(action.mod_id, "restore", action.disabled_path, action.active_path)
+                            )
+                        elif action.action == "materialize_active" and active_exists and not disabled_exists:
+                            inferred.append(
+                                CompletedStep(
+                                    action.mod_id, "materialize_active", action.partial_path, action.active_path
+                                )
+                            )
+                    completed = tuple(inferred)
+                rollback_errors = self._reverse_runtime_patch(plan)
+                if not rollback_errors:
+                    rollback_errors = PresetPlanExecutor(self._get_storage()).rollback(completed)
+                for action in plan.actions:
+                    partial = Path(action.partial_path)
+                    if partial.exists():
+                        # 解压中断可能尚未写 marker；一旦已有身份，事务只能清理自己的副本。
+                        marker = read_deployment_identity(partial)
+                        if marker is not None and marker["mod_id"] != action.mod_id:
+                            raise IdentityConflict(tr("恢复事务的 partial 身份不符：{partial}", partial=partial))
+                        if not self._get_storage().remove_deploy_path(partial):
+                            rollback_errors += (f"cannot remove partial: {partial}",)
+                # 删除事务日志前先恢复其中记录的运行时补丁。
+                if rollback_errors:
+                    idx.update_journal(
+                        journal.operation_id,
+                        phase="recovery_required",
+                        completed_steps_json=journal.completed_steps_json,
+                    )
+                    errors.extend(rollback_errors)
+                else:
+                    idx.delete_journal(journal.operation_id)
+                    if self._after_plan_rollback is not None:
+                        self._after_plan_rollback(plan)
+            except Exception as exc:
+                errors.append(f"{journal.operation_id}: {exc}")
+                idx.update_journal(
+                    journal.operation_id,
+                    phase="recovery_required",
+                    completed_steps_json=journal.completed_steps_json,
+                )
+        return errors
+
+    @library_mutation
+    def garbage_collect_deployments(self, game_id: str) -> list[str]:
+        """只移除没有预设引用且身份吻合的精确禁用路径。"""
+        idx = self._get_index()
+        storage = self._get_storage()
+        if idx.get_journals(game_id) or storage.get_deploy_dir() is None:
+            return []
+        try:
+            self._refresh_deployments(game_id)
+        except (OSError, IdentityConflict) as error:
+            logger.warning("无法确认部署身份，暂缓清理：%s", error)
+            return []
+        for preset in self.get_all_presets(game_id):
+            self._capture_references(preset)
+        referenced = {
+            identity
+            for preset in self.get_all_presets(game_id)
+            for identities in self._durable_refs.get(preset.id, {}).values()
+            for identity in identities
+        }
+        removed: list[str] = []
+        for record in idx.get_deployments(game_id):
+            if record.state != DeploymentState.DISABLED or record.mod_id in referenced:
+                continue
+            try:
+                if not record.actual_path:
+                    continue
+                marker = read_deployment_identity(record.actual_path)
+                if marker is None or marker["mod_id"] != record.mod_id:
+                    continue
+                if not storage.remove_deploy_path(record.actual_path):
+                    logger.warning(
+                        "清理部署失败 game=%s mod=%s path=%s: remove_deploy_path returned false",
+                        game_id,
+                        record.mod_id,
+                        record.actual_path,
+                    )
+                    continue
+                with idx.transaction():
+                    idx.upsert_deployment(
+                        DeploymentRecord(
+                            mod_id=record.mod_id,
+                            state=DeploymentState.ABSENT,
+                            actual_path="",
+                        ),
+                        commit=False,
+                    )
+                removed.append(record.mod_id)
+            except Exception as exc:
+                logger.warning(
+                    "清理零引用部署失败 game=%s mod=%s path=%s: %s", game_id, record.mod_id, record.actual_path, exc
+                )
+        return removed
