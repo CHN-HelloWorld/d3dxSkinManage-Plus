@@ -895,3 +895,150 @@ class TaskCenterPanel(QFrame):
         a.finished.connect(self._finish_list_anim)
         a.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
         self._list_anim = a
+
+    def _stop_list_anim(self) -> None:
+        """清除当前明细动画引用并停止仍有效的动画，容忍 Qt 对象已销毁。"""
+        a = getattr(self, "_list_anim", None)
+        self._list_anim = None
+        if a is None:
+            return
+        try:
+            if a.state() != QPropertyAnimation.State.Stopped:
+                a.stop()
+        except RuntimeError:
+            pass
+
+    def _on_list_anim_frame(self) -> None:
+        """展开明细时逐帧更新宿主高度并重排整个面板栈。
+
+        直接设置位置，避免连续创建位移动画相互打断。
+        """
+        self.adjustSize()
+        if self._embedded:
+            win = self.window()
+            if win is not None:
+                win.adjustSize()
+            return
+        self._reposition()
+        if self._stack is not None:
+            self._stack.relayout(animate=False, fit=False)
+
+    def _finish_list_anim(self) -> None:
+        """结束明细动画，折叠时隐藏列表与分隔线并保持高度上限为零。"""
+        self._list_anim = None
+        if not self._is_expanded:
+            self._list_scroll.hide()
+            self._divider.hide()
+            # 收起态把上限留在 0（不是 LIST_MAX_HEIGHT）——见 _animate_list_height 的不变量。
+            self._list_scroll.setMaximumHeight(0)
+        self._on_list_anim_frame()
+
+    # 定位 / 动画
+
+    def reposition(self) -> None:
+        """父容器 resize 时从外部调用，保持贴右下角。"""
+        self._reposition()
+
+    def _stack_offset(self) -> int:
+        """参与堆叠时，本面板底边要比父容器底边多抬高的像素。"""
+        if self._stack is None:
+            return 0
+        return self._stack.offset_for(self)
+
+    def _target_geometry(self) -> QRect | None:
+        """按当前尺寸 + 堆叠位次算出应有几何；父容器缺失时返回 None。"""
+        p = self.parent()
+        if p is None:
+            return None
+        self.adjustSize()
+        w, h = self.width(), self.height()
+        x = p.width() - w - self._MARGIN
+        y = p.height() - h - self._MARGIN - self._stack_offset()
+        return QRect(max(0, x), max(0, y), w, h)
+
+    def _reposition(self) -> None:
+        """将独立浮层移动到目标堆叠位置，嵌入模式保留宿主布局控制。"""
+        if self._embedded:
+            return
+        geo = self._target_geometry()
+        if geo is not None:
+            self.move(geo.x(), geo.y())
+
+    def settle_position(self, *, animate: bool = True) -> None:
+        """将面板移动到堆叠序列规定的位置。
+
+        显示或关闭动画进行中暂不修改同一几何属性；animate=False 用于逐帧直接跟随布局。
+        """
+        if self._embedded or not self.isVisible():
+            return
+        if not animate:
+            self._stop_move_anim()
+        # 先检查活动动画再计算目标几何，避免 adjustSize 改变正在动画中的尺寸。
+        try:
+            if self._anim is not None and self._anim.state() != QPropertyAnimation.State.Stopped:
+                return
+        except RuntimeError:
+            self._anim = None
+        geo = self._target_geometry()
+        if geo is None or geo.topLeft() == self.pos():
+            return
+        if animate:
+            anim.animate_move(self, QPoint(geo.x(), geo.y()))
+        else:
+            self.move(geo.x(), geo.y())
+
+    def _stop_move_anim(self) -> None:
+        """停止已有面板位移动画并清除引用，忽略已销毁对象。"""
+        move = getattr(self, "_move_anim", None)
+        self._move_anim = None
+        if move is not None:
+            try:
+                move.stop()
+            except RuntimeError:
+                pass
+
+    def _stop_current_anim(self) -> None:
+        """停止几何动画并清除引用。
+
+        动画停止后原生对象可能自动删除，不能继续使用其 Python 包装对象。
+        """
+        anim = self._anim
+        self._anim = None
+        if anim is None:
+            return
+        try:
+            if anim.state() != QPropertyAnimation.State.Stopped:
+                anim.stop()
+        except RuntimeError:
+            pass
+
+    def _slide_in(self) -> None:
+        """显示面板；独立模式先加入堆叠再从目标位置下方滑入，嵌入模式直接显示。"""
+        if self._embedded:
+            # 嵌入模式由宿主布局管理，不使用独立位移动画。
+            self.show()
+            return
+        self._stop_current_anim()
+        self._stop_move_anim()
+        # 先加入堆叠序列，再按已显示面板的总高度计算位置。
+        if self._stack is not None:
+            self._stack.note_shown(self)
+        self.adjustSize()
+        self._reposition()
+        if not self.isVisible():
+            # 起点在下方 dy px
+            geo = self.geometry()
+            start = QRect(geo.x(), geo.y() + 12, geo.width(), geo.height())
+            self.setGeometry(start)
+            self.show()
+            self.raise_()
+            anim_obj = QPropertyAnimation(self, b"geometry", self)
+            anim_obj.setDuration(SLIDE_MS)
+            anim_obj.setStartValue(start)
+            anim_obj.setEndValue(geo)
+            anim_obj.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim_obj.finished.connect(self._on_slide_in_done)
+            anim_obj.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._anim = anim_obj
+        else:
+            self.raise_()
