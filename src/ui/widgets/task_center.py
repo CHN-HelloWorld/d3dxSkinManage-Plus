@@ -1042,3 +1042,121 @@ class TaskCenterPanel(QFrame):
             self._anim = anim_obj
         else:
             self.raise_()
+
+    def _on_slide_in_done(self) -> None:
+        """滑入结束后清除动画状态并重新排列面板。
+
+        显示动画期间可能有其他面板收起，结束时重新布局以处理被延迟的位置更新。
+        """
+        self._anim = None
+        if self._stack is not None:
+            self._stack.relayout()
+
+    def _slide_out(self) -> None:
+        """独立面板收起前解除失焦监听及已有动画，再向下滑出并由完成回调隐藏。"""
+        if self._embedded or not self.isVisible():
+            return
+        # 收起前解除失焦监听，避免隐藏后仍接收过滤事件或定时回调。
+        self._disarm_focus_dismiss()
+        self._stop_current_anim()
+        self._stop_move_anim()
+        geo = self.geometry()
+        end = QRect(geo.x(), geo.y() + 24, geo.width(), geo.height())
+        anim_obj = QPropertyAnimation(self, b"geometry", self)
+        anim_obj.setDuration(SLIDE_MS)
+        anim_obj.setStartValue(geo)
+        anim_obj.setEndValue(end)
+        anim_obj.setEasingCurve(QEasingCurve.Type.InQuad)
+        anim_obj.finished.connect(self._on_slide_out_done)
+        anim_obj.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._anim = anim_obj
+
+    def _on_slide_out_done(self) -> None:
+        """滑出结束后隐藏面板，再更新其余面板的位置。"""
+        self.hide()
+        self._anim = None
+        if self._stack is not None:
+            self._stack.note_hidden(self)
+
+
+# 小图标按钮
+
+
+class _IconButton(QWidget):
+    """固定尺寸的图标按钮，自绘悬停背景和圆角。"""
+
+    clicked = Signal()
+
+    def __init__(
+        self,
+        icon_name: str,
+        color_token: str = "text.secondary",
+        parent: QWidget | None = None,
+    ) -> None:
+        """建立固定尺寸的图标按钮，缓存图标位图并初始化启用和悬停状态。"""
+        super().__init__(parent)
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._icon_name = icon_name
+        self._color_token = color_token
+        self._enabled = True
+        self._hovered = False
+        self._pix = self._build_pix()
+
+    def set_icon(self, icon_name: str, color_token: str) -> None:
+        """替换图标及主题色标，重建位图缓存后请求重绘。"""
+        self._icon_name = icon_name
+        self._color_token = color_token
+        self._pix = self._build_pix()
+        self.update()
+
+    def setEnabled(self, on: bool) -> None:
+        """同步 Qt 启用状态及自绘状态，刷新禁用透明度。"""
+        self._enabled = on
+        super().setEnabled(on)
+        self.update()
+
+    def _build_pix(self):
+        """按当前图标与色标生成位图，资源加载失败时返回 None。"""
+        try:
+            return icons.pixmap(self._icon_name, 16, self._color_token)
+        except Exception:
+            return None
+
+    def retheme(self) -> None:
+        """按当前主题重建图标缓存并重绘按钮。"""
+        self._pix = self._build_pix()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        """绘制悬停底色和居中图标，禁用时降低图标透明度。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self._hovered and self._enabled:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.color("bg.hover")))
+            p.drawRoundedRect(self.rect(), 4, 4)
+        if self._pix and not self._pix.isNull():
+            x = (self.width() - 16) // 2
+            y = (self.height() - 16) // 2
+            p.setOpacity(1.0 if self._enabled else 0.38)
+            p.drawPixmap(x, y, 16, 16, self._pix)
+        p.end()
+
+    def enterEvent(self, e) -> None:
+        """记录鼠标进入状态并刷新悬停外观。"""
+        self._hovered = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        """清除鼠标悬停状态并恢复普通外观。"""
+        self._hovered = False
+        self.update()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e) -> None:
+        """启用状态下按下左键时发送点击信号，其余事件沿用控件处理。"""
+        if self._enabled and e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
