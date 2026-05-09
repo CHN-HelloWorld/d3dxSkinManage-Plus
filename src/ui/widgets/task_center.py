@@ -751,3 +751,147 @@ class TaskCenterPanel(QFrame):
             return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
         except RuntimeError:
             return False
+
+    def _restart_dismiss_timer(self) -> None:
+        """鼠标位于面板内时暂停计时，离开后按进入记录选择等待时间。"""
+        if not self._dismiss_armed:
+            return
+        if self._cursor_inside():
+            # 计时检查时同步记录鼠标位置，覆盖状态变化后没有新进入事件的情况。
+            self._dismiss_touched = True
+            self._dismiss_timer.stop()
+            return
+        delay = DISMISS_AFTER_LEAVE_MS if self._dismiss_touched else DISMISS_UNTOUCHED_MS
+        self._dismiss_timer.start(delay)
+
+    def _on_dismiss_timeout(self) -> None:
+        """自动收起前重新核对鼠标位置。
+
+        移动到面板子按钮也可能触发父控件离开事件，不能仅据该事件关闭面板。
+        """
+        if not self._dismiss_armed:
+            return
+        if self._cursor_inside():
+            self._restart_dismiss_timer()
+            return
+        self._slide_out()
+
+    def eventFilter(self, obj, event):
+        """在应用事件过滤器中处理面板外部点击。"""
+        if self._dismiss_armed and event.type() == QEvent.Type.MouseButtonPress:
+            widget = obj if isinstance(obj, QWidget) else None
+            inside = widget is not None and (widget is self or self.isAncestorOf(widget))
+            # 独立对话框、图片查看器或菜单中的点击不属于当前面板的外部交互。
+            other_window = widget is not None and widget.window() is not self.window()
+            if not inside and not other_window:
+                self._disarm_focus_dismiss()
+                self._slide_out()
+        return super().eventFilter(obj, event)
+
+    def enterEvent(self, event) -> None:
+        """鼠标进入时停止自动收起计时，并记录已进入状态。"""
+        self._dismiss_touched = True
+        self._dismiss_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开后重新评估自动收起计时，再交由基类处理事件。"""
+        self._restart_dismiss_timer()
+        super().leaveEvent(event)
+
+    def queue_info(self, n_pending: int) -> None:
+        """在明细行尾追加「另 n 组排队」。
+
+        取 full_text 而非 text：_ElideLabel.text 返回的是已加省略号的显示串，
+        拿它拼接会把「…」永久写进正文。
+        """
+        if n_pending > 0:
+            base = self._detail.full_text()
+            self._detail.setText(
+                tr("{base}\u3000另 {n_pending} 组排队", base=base, n_pending=n_pending)
+                if base
+                else tr("另 {n_pending} 组排队", n_pending=n_pending)
+            )
+
+    def retheme(self) -> None:
+        """更新任务面板、明细行和环形进度按钮的主题样式。"""
+        self._apply_style()
+        self._ring.retheme()
+
+    # 内部交互
+
+    def _on_ring_clicked(self) -> None:
+        """任务支持暂停时切换显示状态，并向宿主请求暂停或继续。"""
+        if not self._has_pause:
+            return
+        if self._paused:
+            self.set_paused(False)
+            self.resume_requested.emit()
+        else:
+            self.set_paused(True)
+            self.pause_requested.emit()
+
+    def _content_height(self) -> int:
+        """明细列表的自然高度（未截断），用于决定展开目标高度与是否需要滚动条。"""
+        return max(0, self._list_container.sizeHint().height())
+
+    def _sync_scrollbar_policy(self, target: int) -> None:
+        """内容高度超过上限时持续显示滚动条，明确提示存在更多明细。"""
+        overflow = target > 0 and self._content_height() > target
+        self._list_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn if overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+    def _toggle_expand(self) -> None:
+        """切换明细展开状态及按钮提示，由堆叠管理器或本面板调整明细高度。"""
+        self._is_expanded = not self._is_expanded
+        if self._is_expanded:
+            self._expand_btn.set_icon("actions/chevron-up", "text.secondary")
+            self._expand_btn.setToolTip(tr("收起明细"))
+        else:
+            self._expand_btn.set_icon("actions/chevron-down", "text.secondary")
+            self._expand_btn.setToolTip(tr("展开明细"))
+
+        if self._stack is not None:
+            self._stack.fit_details()
+        else:
+            target = min(self._content_height(), LIST_MAX_HEIGHT) if self._is_expanded else 0
+            self._animate_list_height(target)
+
+    def _animate_list_height(self, target: int, *, animate: bool = True) -> None:
+        """通过最大高度动画展开或收起明细，并逐帧同步宿主尺寸。
+
+        maximumHeight 始终表示当前动画高度，收起时保持为零，供下一次展开作为起点。
+        每帧同步面板锚点及堆叠位置，避免面板与右下角脱离。
+        """
+        self._stop_list_anim()
+        self._stop_move_anim()
+        self._list_target = target
+        self._sync_scrollbar_policy(target)
+        if self._is_expanded:
+            self._divider.show()
+            self._list_scroll.show()
+
+        start = max(0, self._list_scroll.maximumHeight())
+        if start == target:
+            self._finish_list_anim()
+            return
+
+        if not animate or not anim.is_enabled():
+            self._list_scroll.setMaximumHeight(target)
+            self._finish_list_anim()
+            return
+
+        self._list_scroll.setMaximumHeight(start)
+        a = QPropertyAnimation(self._list_scroll, b"maximumHeight", self)
+        a.setDuration(EXPAND_MS)
+        a.setStartValue(start)
+        a.setEndValue(target)
+        a.setEasingCurve(
+            # 高度增长和缩减使用相同曲线，避免共享预算暂时溢出。
+            QEasingCurve.Type.OutCubic if self._is_expanded or self._stack is not None else QEasingCurve.Type.InCubic
+        )
+        a.valueChanged.connect(lambda _v: self._on_list_anim_frame())
+        a.finished.connect(self._finish_list_anim)
+        a.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._list_anim = a
