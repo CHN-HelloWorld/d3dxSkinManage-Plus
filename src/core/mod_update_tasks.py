@@ -366,3 +366,207 @@ class ModUpdateTasks(QObject):
             if job.paused:
                 self._pause_transfer(job)
             self._emit(job)
+
+    def _download_finished(self, job, path) -> None:
+        """接收一次归档完成结果并保留文件引用，发布等待导入状态后重新调度。"""
+        if not self._current(job) or job.cancel_requested or job.archive is not None:
+            return
+        self._disconnect(job)
+        job.archive = Path(path)
+        job.phase = "queued"
+        try:
+            size = job.archive.stat().st_size
+        except OSError as error:
+            self._finish(job, "failed", tr("更新文件无法读取：{error}", error=error))
+            return
+        job.data.update(downloaded_bytes=size, total_bytes=size, speed_bps=0.0, eta_seconds=-1.0, detail=tr("等待导入"))
+        # 缓存保留策略可能同步唤醒调度器，先发布完整状态，避免覆盖调度结果。
+        if self.download_manager is not None:
+            self.download_manager.retain(
+                job.file.file_id, job.file.md5_checksum, owner=job.consumer_id, path=job.archive
+            )
+        if not self._current(job):
+            return
+        self._emit(job)
+        if self._current(job):
+            self._pump()
+
+    def _prepare(self, job) -> None:
+        """保护库资源并创建安装计划与工作进程；切换游戏时延后安装，准备异常转为失败。"""
+        if not self._current(job) or job.paused or job.cancel_requested or job.process is not None:
+            return
+        if job.game_id != self._manager.current_game_id:
+            self._finish(job, "deferred", tr("请切回原游戏后重试，更新文件已保留"))
+            return
+        reservation = "update-preparing:" + job.consumer_id
+        try:
+            # 创建工作目录或进入可重入检查前预留资源。
+            self._manager.protect_library_operation(reservation, mod_ids=(job.mid,))
+            from src.core.mod_update_process import UpdateProcess
+
+            job.plan = make_update_plan(
+                self._manager,
+                job.mid,
+                job.archive,
+                job.metadata,
+            )
+            self._manager.protect_library_operation(
+                "update:" + job.plan["job_id"],
+                mod_ids=(job.mid,),
+                paths=tuple(
+                    job.plan.get(key, "") for key in ("container", "work_root", "deploy_target", "deploy_work")
+                ),
+            )
+            job.process = UpdateProcess(job.plan, parent=self)
+            job.process.progress.connect(lambda snapshot: self._process_progress(job, snapshot))
+            job.process.succeeded.connect(lambda result: self._process_succeeded(job, result))
+            job.process.failed.connect(lambda error: self._finish(job, "failed", error))
+            job.process.canceled.connect(lambda: self._finish(job, "canceled"))
+            job.phase = "verifying"
+            job.data["detail"] = tr("正在校验更新文件")
+            self._emit(job)
+            if self._current(job) and not job.paused and not job.cancel_requested:
+                job.process.start()
+        except Exception as error:
+            self._finish(job, "failed", str(error))
+        finally:
+            self._manager.release_library_operation(reservation)
+
+    def _process_progress(self, job, snapshot) -> None:
+        """将工作进程的有效进度字段合并到任务快照，保留队列持有的文件身份。"""
+        if not self._current(job) or job.cancel_requested or job.paused:
+            return
+        job.phase = snapshot.get("phase", job.phase)
+        job.data.update(
+            {
+                key: value
+                for key, value in snapshot.items()
+                if key not in {"phase", "resume_phase", "sequence", "file_name"}
+            }
+        )
+        self._emit(job)
+
+    def _process_succeeded(self, job, result) -> None:
+        """保存准备结果，未暂停时提交更新；提交失败按当前游戏状态标记失败或延后。"""
+        if not self._current(job) or job.cancel_requested:
+            return
+        job.prepared = result
+        if job.paused:
+            return
+        try:
+            updated = commit_update(self._manager, job.plan, result)
+        except Exception as error:
+            phase = "deferred" if job.game_id != self._manager.current_game_id else "failed"
+            self._finish(job, phase, str(error))
+            return
+        self._finished_archives[job.archive] = (job.file.file_id, (job.file.md5_checksum or "").lower())
+        self._finish(job, "done")
+        self.applied.emit(job.mid, updated)
+
+    def _finish(self, job, phase: str, error: str = "") -> None:
+        """使活动任务进入终态，释放下载持有权并安排暂存清理，随后推进等待任务。"""
+        if self._records.get(job.key) is not job or not job.active:
+            return
+        self._disconnect(job)
+        job.data["resume_phase"] = job.phase
+        job.phase = phase
+        job.cancel_requested = False
+        if self.download_manager is not None:
+            self.download_manager.release(job.consumer_id)
+        job.data.update(error=error, detail=error, speed_bps=0.0, eta_seconds=-1.0)
+        if phase == "done":
+            job.data.update(stage_progress=1.0, detail=tr("更新完成"), completed_at=monotonic())
+        self._emit(job)
+        if job.game_id == self._manager.current_game_id:
+            if phase == "failed":
+                self.failed.emit(job.mid, error)
+            elif phase == "canceled":
+                self.canceled.emit(job.mid)
+            elif phase == "deferred":
+                self.deferred.emit(job.mid)
+        if job.plan is not None:
+            self._cleanup(job.plan)
+        self._collect_archives()
+        self._pump()
+
+    def _cleanup(self, plan) -> None:
+        """启动后台线程清理安装暂存，并记录线程以供应用退出时等待。"""
+
+        def clean():
+            """清理计划资源并记录异常；没有待恢复标记时释放该更新的库操作保护。"""
+            try:
+                cleanup_update(plan)
+            except Exception:
+                logger.exception("清理更新暂存失败：%s", plan["work_root"])
+            finally:
+                from src.utils import fs
+
+                if not fs.exists(Path(plan["work_root"]) / "recovery_required"):
+                    self._manager.release_library_operation("update:" + plan["job_id"])
+
+        worker = threading.Thread(target=clean, name="mod-update-cleanup", daemon=True)
+        self._cleanup_threads = [thread for thread in self._cleanup_threads if thread.is_alive()]
+        self._cleanup_threads.append(worker)
+        worker.start()
+
+    def _collect_archives(self) -> None:
+        """按配置回收成功安装且不再被活动更新使用的归档，共享下载器负责最终引用检查。"""
+        if not self._config.get("gamebanana.delete_archive_after_install", True):
+            return
+        from src.services.gamebanana.download_store import delete_if_download
+
+        for path, (fid, checksum) in list(self._finished_archives.items()):
+            if any(
+                job.active
+                and (
+                    job.file.file_id == fid
+                    or job.archive == path
+                    or (checksum and (job.file.md5_checksum or "").lower() == checksum)
+                )
+                for job in self._records.values()
+            ):
+                continue
+            self._finished_archives.pop(path, None)
+            if self.download_manager is not None:
+                self.download_manager.delete_archive_when_unused(path)
+            else:
+                delete_if_download(path)
+
+    def _lookup(self, mid) -> _UpdateTask | None:
+        """查找当前游戏的活动更新，记录不存在或已结束时返回 None。"""
+        job = self._records.get((self._manager.current_game_id, mid))
+        return job if job is not None and job.active else None
+
+    def _transfer_users(self, job) -> list[_UpdateTask]:
+        """收集仍依赖相同文件且未请求取消的活动更新，供共享传输控制判断。"""
+        return [
+            other
+            for other in self._records.values()
+            if other.active and other.file.file_id == job.file.file_id and not other.cancel_requested
+        ]
+
+    def _associated_transfer(self, job):
+        """查找任务已绑定或尚未绑定的共享下载；已有归档时不再关联传输。"""
+        if job.archive is not None or self.download_manager is None:
+            return None
+        # 排队更新在连接信号前已拥有共享文件，最后一个消费者暂停或停止时也须控制下载。
+        return job.download if job.download is not None else self.download_manager.get_task(job.file.file_id)
+
+    def _pause_transfer(self, job) -> None:
+        """仅在全部更新消费者均暂停且没有外部消费者时暂停共享下载。"""
+        if self._associated_transfer(job) is None:
+            return
+        users = self._transfer_users(job)
+        if all(other.paused for other in users) and not self.download_manager.has_other_consumers(
+            job.file.file_id, {other.consumer_id for other in users}
+        ):
+            self.download_manager.pause(job.file.file_id)
+
+    def _pause_job(self, job) -> bool:
+        """暂停运行中的安装进程并按引用关系暂停下载，进程拒绝暂停时返回 False。"""
+        if job.process is not None and job.process.running:
+            if not job.process.pause():
+                return False
+        self._pause_transfer(job)
+        self._emit(job)
+        return True
