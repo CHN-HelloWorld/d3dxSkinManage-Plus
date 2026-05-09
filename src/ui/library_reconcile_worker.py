@@ -152,3 +152,109 @@ class LibraryReconcileController(QObject):
         self._snapshot_timer = QTimer(self)
         self._snapshot_timer.setSingleShot(True)
         self._snapshot_timer.timeout.connect(self._snapshot_slice)
+
+    def invalidate(self):
+        """使当前探测代次与操作信任失效，空闲可用时安排完整探测并取消旧扫描。"""
+        self.generation += 1
+        self.invalidated.emit()
+        if self.paused or self.closing:
+            return
+        self.pending = True
+        self._full_pending = True
+        if self.worker is not None:
+            self.worker.requestInterruption()
+
+    def _invalidate_operation_trust(self):
+        """增加操作审查版本，并撤销管理器对当前库状态的信任。"""
+        self._operation_review_revision += 1
+        self.manager.invalidate_operation_trust()
+
+    def schedule_changes(self, paths, *, deployment=False, events=(), force_source_audit=False):
+        """事件优先于完整审计，但校验证据仍覆盖完整身份空间。"""
+        if self.closing or self.paused:
+            return
+        if force_source_audit:
+            self._full_pending = True
+            self._force_source_audit_pending = True
+        if deployment:
+            self._deployment_pending = True
+        else:
+            self._source_paths.update(str(path) for path in paths if path)
+            self._source_events.extend(events)
+        self.generation += 1
+        self.invalidated.emit()
+        self.pending = True
+        if self.worker is not None:
+            self.worker.requestInterruption()
+        self._start_pending()
+
+    def _sync_stamp(self):
+        """将管理器库版本同步到控制器，版本改变时增加代次并通知审计失效。"""
+        stamp = self.manager.library_probe_stamp
+        if stamp != self._stamp:
+            if self._stamp is not None and stamp[0] != self._stamp[0]:
+                self.source_observed.emit((stamp[0], ()))
+            self._stamp = stamp
+            self.generation += 1
+            self.invalidated.emit()
+
+    def _busy(self):
+        """返回宿主操作或管理器库事务是否阻止开始及发布探测。"""
+        return self._host_busy() or self.manager.library_probe_busy()
+
+    def yield_to_local_events(self):
+        """暂停后台工作，不取消或重启完整审计。"""
+        self._invalidate_operation_trust()
+        self._local_event_window.defer()
+
+    def current_full_audit_state(self, game_id, *, force_source_audit=False):
+        """允许发现重试复用证据，不替代新的手动刷新。"""
+        worker = self.worker
+        if worker is not None and worker.isInterruptionRequested():
+            return None
+        request = worker.request if worker is not None else self._result.request if self._result is not None else None
+        if request is not None:
+            if (
+                request.token.game_id == game_id
+                and request.mode == "full"
+                and (not force_source_audit or request.force_source_audit)
+                and self._valid_token(request.token)
+            ):
+                return "running"
+            return None
+        if self.pending or self.applying or self._snapshot_iterator is not None:
+            return None
+        if self._settled_full_audit is not None:
+            token, strong = self._settled_full_audit
+            if token.game_id == game_id and (not force_source_audit or strong) and self._valid_token(token):
+                return "settled"
+        return None
+
+    def schedule(self, *, force_source_audit=False, periodic=False):
+        """合并完整探测请求；强来源审计可替换较弱的在途请求，暂停时保留失败提示。"""
+        if self.closing:
+            return
+        if self.paused:
+            if force_source_audit and self.last_error:
+                self.failed.emit(self.last_error)
+            return
+        if periodic and not force_source_audit and (self.worker is not None or self.applying):
+            # 定时器只要求最终检查，活动任务已能满足；过期结果自行重试。
+            return
+        self.pending = True
+        self._full_pending = True
+        self._force_source_audit_pending |= force_source_audit
+        active = (
+            self.worker.request
+            if self.worker is not None
+            else self._result.request
+            if self._result is not None
+            else None
+        )
+        if force_source_audit and active is not None and active.mode != "deployment" and not active.force_source_audit:
+            # 用户请求新的完整身份审计后，较弱的在途结果不能先执行清理。
+            self.generation += 1
+            self.invalidated.emit()
+            if self.worker is not None:
+                self.worker.requestInterruption()
+        self._start_pending()
