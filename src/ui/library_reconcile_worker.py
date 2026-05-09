@@ -472,3 +472,256 @@ class LibraryReconcileController(QObject):
         self._removed_ids = set()
         self.applying = True
         self._apply_slice()
+
+    def _apply_slice(self):
+        """在界面时间预算内应用探测步骤并收集增量事件，代次变化或异常时保存未发布状态并重试。"""
+        if self._iterator is None:
+            return
+        start = time.perf_counter()
+        self._inside_apply = True
+        try:
+            if not self._valid(self._result):
+                self._discard_application()
+                return
+            while True:
+                generation = self.generation
+                item_start = time.perf_counter()
+                self.manager._library_probe_events = self._events
+                try:
+                    step = next(self._iterator)
+                finally:
+                    self.manager._library_probe_events = None
+                elapsed = (time.perf_counter() - item_start) * 1000
+                if elapsed > 8:
+                    self.metrics["slow_items"].append(dict(phase=step.phase, id=step.item_id, ms=elapsed))
+                self._changed |= step.changed
+                self._removed += step.removed
+                if step.changed and step.item_id:
+                    self._changed_ids.add(step.item_id)
+                if step.removed and step.item_id:
+                    self._removed_ids.add(step.item_id)
+                # 原子修改可推进数据库和物理计数，界面失效不能冒充该操作的变更。
+                if generation != self.generation or self.closing:
+                    self._discard_application()
+                    return
+                self._stamp = self.manager.library_probe_stamp
+                if (time.perf_counter() - start) * 1000 >= self.APPLY_BUDGET_MS:
+                    self._continuation.start(0)
+                    return
+        except StopIteration:
+            self._finish_application()
+        except Exception:
+            logger.exception("Library result application stopped; preserving remaining rows")
+            self._discard_application()
+        finally:
+            self.metrics["apply_slice_ms"].append((time.perf_counter() - start) * 1000)
+            self._inside_apply = False
+            if self.closing:
+                self.stop()
+
+    def _discard_application(self):
+        """终止当前结果迭代，保留已应用但未发布的事件，并按请求有效性重新排入完整审计。"""
+        self._invalidate_operation_trust()
+        self._source_recovery_claim = None
+        self.metrics["discarded"] += 1
+        retry = (
+            not self.closing
+            and not self.paused
+            and self._result is not None
+            and self._result.token.request_id > self._cancelled_request_id
+        )
+        if retry:
+            self.pending = True
+            self._full_pending = True
+            self._force_source_audit_pending |= self._result.request.force_source_audit
+            self._source_paths.update(self._result.request.changed_paths)
+            self._source_events.extend(self._result.request.events)
+        if self._result is not None and (self._changed or self._events):
+            # 已提交项继续有效，接受新扫描后才发布，避免过期完成事件触发刷新。
+            self._unpublished[self._result.token.game_id] = (self._changed, self._removed, self._events)
+        iterator, self._iterator = self._iterator, None
+        if iterator is not None:
+            close = getattr(iterator, "close", None)
+            if close is not None:
+                close()
+        self._result = None
+        self._events = []
+        self.applying = False
+        if self.closing:
+            if self.worker is None and not self._inside_apply:
+                self.stopped.emit()
+        elif retry:
+            self._retry.start(1000)
+
+    def _finish_application(self):
+        """完成来源恢复与增量发布，逐项核验通知有效性，并按审计结果更新操作信任和完成标记。"""
+        result = self._result
+        self._accept_source_recovery(result)
+        self.last_mode = result.request.mode
+        self.last_force_source_audit = result.request.force_source_audit
+        game_id = result.token.game_id
+        changed, removed, events = self._changed, self._removed, self._events
+        if result.source_inventory is not None:
+            self.source_inventory = result.source_inventory
+        self.changed_ids = None if self._incomplete_delta else tuple(self._changed_ids)
+        self.removed_ids = None if self._incomplete_delta else tuple(self._removed_ids)
+        self._iterator = None
+        self._result = None
+        self._events = []
+        # 回调期间继续保持忙状态，插件可能进入嵌套事件循环。
+        try:
+            if changed:
+                self.changed.emit(game_id, removed)
+            for offset, (event, payload) in enumerate(events):
+                if not self._valid(result):
+                    self._unpublished[game_id] = (False, 0, events[offset:])
+                    if result.token.request_id > self._cancelled_request_id:
+                        self.pending = True
+                    break
+                self.manager._emit(event, **payload)
+        finally:
+            self.applying = False
+            self.changed_ids = self.removed_ids = None
+        if not self.closing and result.token.request_id > self._cancelled_request_id:
+            if self._can_accept_operation_trust(result):
+                self.manager.accept_operation_trust(game_id)
+            else:
+                self._invalidate_operation_trust()
+            # 只保留已接受的令牌和证据强度，不额外保存完整记录快照。
+            self._settled_full_audit = (
+                (result.token, result.request.force_source_audit)
+                if result.request.mode == "full" and self._valid(result)
+                else None
+            )
+            self.source_observed.emit((game_id, ()))
+            self.settled.emit()
+            if self.pending:
+                self._retry.start(1000 if game_id in self._unpublished else 0)
+
+    def _can_accept_operation_trust(self, result):
+        """工作线程成功不代表已变化或不完整的文件库可信。"""
+        from src.core.library_snapshot import path_key
+
+        request, inventory = result.request, result.source_inventory
+        if (
+            result.error
+            or result.cancelled
+            or request.mode != "full"
+            or not self._valid(result)
+            or inventory is None
+            or self._operation_review_claim != self._operation_review_revision
+            or self.pending
+            or self._source_paths
+            or self._source_events
+            or self._deployment_pending
+            or self._full_pending
+            or self._unpublished
+            or self.manager.has_pending_source_cleanup()
+            or path_key(inventory.root) != path_key(request.library_root)
+            or path_key(str(self.manager._index.paths.roots.get(result.token.game_id, "")))
+            != path_key(request.library_root)
+            or any(entry.error for entry in inventory.entries)
+            or len(result.checks) != len(request.rows)
+        ):
+            return False
+        for row, check in zip(request.rows, result.checks):
+            if check.path != row.path or check.state not in {"exists", "missing"}:
+                return False
+            if check.state == "missing":
+                current = self.manager.get_mod(row.mod_id)
+                # 已删除记录和成功认领的移动已经完成，原路径重新出现的源仍需检查。
+                if current is not None and (current.path == row.path or row.mod_id not in self._changed_ids):
+                    return False
+        service = getattr(self.manager, "_local_source_events", None)
+        if service is not None and (getattr(service, "_tainted", False) or getattr(service, "_missing", None)):
+            return False
+        if getattr(self.manager, "_deferred_source_events", None) or getattr(
+            self.manager, "_deferred_deployment_events", None
+        ):
+            return False
+        host = self.parent()
+        if host is not None:
+            if any(
+                getattr(host, name, None) for name in ("_watcher_events", "_deployment_events", "_watcher_restarts")
+            ):
+                return False
+            for name in ("_file_watcher", "_deploy_watcher"):
+                watcher = getattr(host, name, None)
+                needed = name == "_file_watcher" or bool(request.deploy_roots)
+                if watcher is not None and needed and not watcher.is_running():
+                    return False
+        return True
+
+    def cancel(self):
+        """取消当前轮次，不关闭控制器或撤销已提交项。"""
+        self._cancelled_request_id = self.request_id
+        self.generation += 1
+        self.pending = False
+        self._source_paths.clear()
+        self._source_events.clear()
+        self._deployment_pending = self._full_pending = False
+        self._force_source_audit_pending = False
+        self._settled_full_audit = None
+        self._source_recovery_claim = None
+        self._retry.stop()
+        self._continuation.stop()
+        self._snapshot_timer.stop()
+        iterator, self._snapshot_iterator = self._snapshot_iterator, None
+        if iterator is not None:
+            iterator.close()
+        self._snapshot_ready = None
+        self.invalidated.emit()
+        if self.worker is not None:
+            self.worker.requestInterruption()
+        # 重入取消时先完成当前原子项，再关闭生成器并丢弃剩余工作。
+        if self.applying and not self._inside_apply:
+            self._discard_application()
+
+    def pause(self, error=""):
+        """失败后暂停读写，等待宿主修复或重新选择根目录。"""
+        self.paused = True
+        self.last_error = str(error)
+        self.cancel()
+        if self.last_error:
+            self.failed.emit(self.last_error)
+
+    def reset_failure(self):
+        """根目录变更或显式恢复成功后允许新工作。"""
+        self.paused = False
+        self.last_error = ""
+
+    def stop(self):
+        """请求停止但不等待文件操作，保留 Qt 所有权。"""
+        self._invalidate_operation_trust()
+        self.closing = True
+        self.generation += 1
+        self.pending = False
+        self._source_paths.clear()
+        self._source_events.clear()
+        self._deployment_pending = self._full_pending = False
+        self._force_source_audit_pending = False
+        self.source_inventory = None
+        self._retry.stop()
+        self._continuation.stop()
+        self._snapshot_timer.stop()
+        if self._snapshot_iterator is not None:
+            self._snapshot_iterator.close()
+            self._snapshot_iterator = None
+        self._snapshot_ready = None
+        # 重入关闭请求须保留窗口，直到原子发布返回外层槽函数。
+        if self._inside_apply:
+            return
+        self._iterator = None
+        self._result = None
+        self._events = []
+        self.applying = False
+        if self.worker is not None:
+            self.worker.requestInterruption()
+        else:
+            self.stopped.emit()
+
+    def resume(self):
+        """解除关闭和失败暂停状态，并安排一次完整库探测。"""
+        self.closing = False
+        self.reset_failure()
+        self.schedule()
