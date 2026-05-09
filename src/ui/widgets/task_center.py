@@ -582,3 +582,172 @@ class TaskCenterPanel(QFrame):
         except TypeError:
             pass
         self._expand_btn.clicked.connect(self._toggle_expand)
+
+    def _reset_detail_area(self) -> None:
+        """每批开始时清空并收起明细区域。
+
+        新行按进度通知逐项创建，初始最大高度保持为零，作为下次展开的动画起点。
+        """
+        self._is_expanded = False
+        self._list_target = 0
+        self._stop_list_anim()
+        self._list_scroll.setMaximumHeight(0)
+        self._list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bar = self._list_scroll.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)
+        self._divider.hide()
+        self._list_scroll.hide()
+        self._expand_btn.set_icon("actions/chevron-down", "text.secondary")
+        self._expand_btn.setToolTip(tr("展开明细"))
+
+    def update_progress(
+        self,
+        pct: float | None,
+        title: str,
+        detail: str,
+    ) -> None:
+        """更新总进度环 + 标题 / 明细。pct=None 表示不确定态。"""
+        self._title.setText(title)
+        self._detail.setText(detail)
+        if pct is None:
+            self._ring.set_indeterminate(True)
+            self._ring.set_progress(-1)
+        else:
+            self._ring.set_indeterminate(False)
+            self._ring.set_progress(max(0.0, min(100.0, float(pct))))
+
+    def update_item(
+        self,
+        index: int,
+        name: str,
+        status: str,
+        detail: str = "",
+        *,
+        icon: str = "",
+        icon_color: str = "",
+    ) -> None:
+        """新增或更新某项明细行。"""
+        if index not in self._items:
+            row = _ItemRow(name, self._list_container)
+            self._items[index] = row
+            self._list_layout.addWidget(row)
+            # 展开期间新增明细行后同步高度限制和滚动条，保证新内容可见。
+            if self._is_expanded and self._list_anim is None:
+                if self._stack is not None:
+                    self._stack.fit_details(animate=False)
+                else:
+                    target = min(self._content_height(), LIST_MAX_HEIGHT)
+                    self._sync_scrollbar_policy(target)
+                    self._list_scroll.setMaximumHeight(target)
+                    self._on_list_anim_frame()
+        self._items[index].set_status(status, detail, done_text=self._done_text)
+        self._items[index].set_icon(icon, icon_color)
+
+    def finish(
+        self,
+        title: str,
+        detail: str,
+        *,
+        ok: bool = True,
+    ) -> None:
+        """显示完成状态；成功时定时收起，失败时在失焦后收起，悬停期间保持可读。"""
+        self._ring.set_indeterminate(False)
+        self._ring.setEnabled(False)
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.hide()
+
+        if ok:
+            self._ring.set_progress(100)
+            self._ring.set_ring_color("success")
+            self._ring.set_icon("meta/check", "success")
+        else:
+            self._failed = True
+            self._ring.set_progress(100)
+            self._ring.set_ring_color("warning")
+            self._ring.set_icon("status/warning", "warning")
+            self._make_expand_btn_dismiss()
+
+        self._title.setText(title)
+        self._detail.setText(detail)
+
+        # 嵌入模式由宿主管理关闭，不自动隐藏内容。
+        if ok and not self._embedded:
+            self._hide_timer.start(RESULT_HOLD_MS)
+        elif not ok:
+            # 失焦收起（嵌入模式与未显示态由 _arm_focus_dismiss 自行忽略）。
+            self._arm_focus_dismiss()
+
+    def set_paused(self, paused: bool) -> None:
+        """按宿主任务状态同步暂停外观。"""
+        self._paused = bool(paused)
+        if not self._has_pause:
+            return
+        if self._paused:
+            self._ring.set_icon("actions/play", "text.on_accent")
+            self._ring.setToolTip(self._resume_tooltip)
+            self._ring.setAccessibleName(self._resume_tooltip)
+        else:
+            self._ring.set_icon("actions/pause", "text.on_accent")
+            self._ring.setToolTip(self._pause_tooltip)
+            self._ring.setAccessibleName(self._pause_tooltip)
+
+    def set_stop_enabled(self, on: bool) -> None:
+        """设置终止按钮可用性，停止处理期间禁用重复操作。"""
+        self._stop_btn.setEnabled(bool(on))
+
+    def _make_expand_btn_dismiss(self) -> None:
+        """批次结束后将展开按钮改为关闭按钮。
+
+        使用连接标志保证重复结束通知不会重复修改信号连接。
+        """
+        if getattr(self, "_dismiss_wired", False):
+            return
+        self._dismiss_wired = True
+        self._expand_btn.set_icon("actions/dismiss", "text.secondary")
+        self._expand_btn.setToolTip(tr("关闭"))
+        try:
+            self._expand_btn.clicked.disconnect()
+        except TypeError:
+            pass
+        self._expand_btn.clicked.connect(self._slide_out)
+
+    def finish_cancelled(self, detail: str) -> None:
+        """用户停止后的结束态（warning 色，驻留 → 失焦后自动收起）。"""
+        self.finish(self._cancelled_title, detail, ok=False)
+
+    # 终止态失焦自动收起
+
+    def _arm_focus_dismiss(self) -> None:
+        """等待鼠标离开后开始自动收起计时，点击面板外部时立即收起。"""
+        if self._embedded or not self.isVisible():
+            return  # 嵌入模式由宿主控制显隐，与 finish 的处理一致。
+        if self._dismiss_armed:
+            return
+        self._dismiss_armed = True
+        # 从结束状态开始重新记录鼠标进入情况，避免将点击停止按钮视为已经阅读结果。
+        self._dismiss_touched = False
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._restart_dismiss_timer()
+
+    def _disarm_focus_dismiss(self) -> None:
+        """停止自动收起计时并移除全局事件过滤器。
+
+        开始新批次和隐藏面板时均须清理，避免旧任务干扰新面板。
+        """
+        self._dismiss_timer.stop()
+        if not self._dismiss_armed:
+            return
+        self._dismiss_armed = False
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
+    def _cursor_inside(self) -> bool:
+        """判断全局鼠标位置是否位于面板内，控件已销毁时返回 False。"""
+        try:
+            return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        except RuntimeError:
+            return False
