@@ -400,3 +400,215 @@ class UpdateProcess(QObject):
     def paused(self) -> bool:
         """返回当前任务是否处于暂停状态。"""
         return self._paused
+
+    @property
+    def pid(self) -> int | None:
+        """返回已创建的根工作进程号，尚未创建时返回 None。"""
+        return self._pid
+
+    def _worker_command(self) -> list[str]:
+        """根据打包运行或源码运行模式构造工作进程入口命令。"""
+        plan_path = str(self._work_root / "plan.json")
+        if is_frozen():
+            return [sys.executable, "--mod-update-worker", plan_path]
+        return [sys.executable, "-m", "src.core.mod_update_worker", plan_path]
+
+    def start(self) -> None:
+        """保存任务计划并创建隐藏的受控工作进程，纳入作业后解除启动等待并开启轮询。
+
+        控制器仅可启动一次；创建或绑定失败进入终止流程，确认退出后才报告失败。"""
+        if self._started or self._terminal:
+            return
+        self._started = True
+        try:
+            if not self._work_root.is_dir():
+                raise ValueError(tr("更新任务暂存目录不存在"))
+            for name in ("start", "progress.json", "result.json"):
+                (self._work_root / name).unlink(missing_ok=True)
+            temporary = self._work_root / "plan.json.tmp"
+            temporary.write_text(json.dumps(store_update_plan(self._plan), ensure_ascii=False), encoding="utf-8")
+            os.replace(temporary, self._work_root / "plan.json")
+            self._tree = _WindowsJob() if os.name == "nt" else _PosixProcessGroup()
+            # 虚拟环境启动器也以暂停状态创建，加入作业前不能派生实际解释器。
+            options = (
+                {"creationflags": subprocess.CREATE_NO_WINDOW | 0x00000004}
+                if os.name == "nt"
+                else {"start_new_session": True}
+            )
+            self._process = subprocess.Popen(
+                self._worker_command(),
+                cwd=str(Path(__file__).resolve().parents[2]),
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                close_fds=True,
+                **options,
+            )
+            self._pid = self._process.pid
+            self._tree.attach(self._pid)
+            (self._work_root / "start").touch()
+            self._tree.release_startup()
+            self._timer.start()
+        except (OSError, ValueError, TypeError) as error:
+            self._request_failure(str(error))
+
+    def pause(self) -> bool:
+        """暂停仍运行的整个进程树，状态不允许或原生控制失败时返回 False。"""
+        if not self.running or self._cancel_requested or self._failure is not None:
+            return False
+        if self._paused:
+            return True
+        self._paused = True
+        try:
+            if self._tree is not None:
+                self._tree.pause()
+            return True
+        except OSError as error:
+            self._request_failure(str(error))
+            return False
+
+    def resume(self) -> bool:
+        """恢复暂停的进程树并立即轮询已完成结果，失败时启动统一终止流程。"""
+        if not self.running or self._cancel_requested or self._failure is not None:
+            return False
+        if not self._paused:
+            return True
+        try:
+            if self._tree is not None:
+                self._tree.resume()
+            self._paused = False
+            self._poll()
+            return True
+        except OSError as error:
+            self._request_failure(str(error))
+            return False
+
+    def cancel(self) -> None:
+        """标记取消并终止进程树，等待进程实际退出后发布取消信号。"""
+        if self._terminal or self._cancel_requested:
+            return
+        self._cancel_requested = True
+        self._paused = False
+        if self._process is None:
+            self._finish("canceled")
+            return
+        self._terminate_processes()
+        self._timer.start()
+        self._poll()
+
+    def shutdown(self) -> None:
+        """应用退出时取消工作，最多等待两秒回收进程。"""
+        self.cancel()
+        deadline = time.monotonic() + 2.0
+        while self.running and time.monotonic() < deadline:
+            process = self._process
+            if process is not None:
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=min(0.05, max(0.001, deadline - time.monotonic())))
+            self._poll()
+            if self.running:
+                time.sleep(0.005)
+        # 超时后保留句柄和运行状态，由定时器继续回收；进程退出也会关闭所属作业。
+
+    def _terminate_processes(self) -> None:
+        """终止受控进程树，并补充强制结束仍存活的根进程。"""
+        if self._tree is not None:
+            try:
+                self._tree.terminate()
+            except OSError:
+                self._tree.close()
+                self._tree = None
+        if self._process is not None and self._process.poll() is None:
+            with contextlib.suppress(OSError):
+                self._process.kill()
+
+    def _request_failure(self, message: str) -> None:
+        """保存失败原因并停止进程活动，未创建进程时立即发布失败。"""
+        self._failure = message
+        self._paused = False
+        if self._process is None:
+            self._finish("failed", message)
+            return
+        self._terminate_processes()
+        self._timer.start()
+
+    def _read_progress(self) -> None:
+        """读取发生变化的进度 JSON 并发送信号，暂时不可读或无效数据留待后续轮询。"""
+        try:
+            content = (self._work_root / "progress.json").read_bytes()
+            if content == self._last_progress:
+                return
+            value = json.loads(content)
+        except (OSError, ValueError):
+            return  # Windows 上原子替换可能短暂不可用。
+        if isinstance(value, dict):
+            self._last_progress = content
+            self.progress.emit(value)
+
+    def _poll(self) -> None:
+        """轮询进度与根进程退出，确认全部后代停止后再决定取消、失败或读取结果。"""
+        if not self.running or self._process is None or self._paused:
+            return
+        if not self._cancel_requested and self._failure is None:
+            self._read_progress()
+        # 进度回调可能同步暂停或取消当前任务。
+        if not self.running or self._paused or self._process is None:
+            return
+        return_code = self._process.poll()
+        if return_code is None:
+            return
+        try:
+            if self._tree is not None and not self._tree.root_exited():
+                return
+            if self._tree is not None and self._tree.is_running():
+                # 父进程异常退出时不能遗留解压子进程。
+                self._terminate_processes()
+                return
+        except OSError as error:
+            self._request_failure(str(error))
+            return
+        if self._cancel_requested:
+            self._finish("canceled")
+        elif self._failure is not None:
+            self._finish("failed", self._failure)
+        else:
+            self._read_result(return_code)
+
+    def _read_result(self, return_code: int) -> None:
+        """校验结果文件、成功标记和退出码，恢复结果路径后发布成功或具体失败原因。"""
+        try:
+            result = json.loads((self._work_root / "result.json").read_bytes())
+        except FileNotFoundError:
+            self._finish("failed", tr("更新工作进程未返回结果（退出码 {return_code}）", return_code=return_code))
+            return
+        except (OSError, ValueError) as error:
+            self._finish("failed", tr("无法读取更新工作进程结果：{error}", error=error))
+            return
+        if not isinstance(result, dict) or type(result.get("ok")) is not bool:
+            self._finish("failed", tr("更新工作进程返回了无效结果"))
+        elif not result["ok"]:
+            self._finish("failed", str(result.get("error") or tr("更新工作进程失败")))
+        elif not isinstance(result.get("result"), dict):
+            self._finish("failed", tr("更新工作进程返回了无效结果"))
+        elif return_code != 0:
+            self._finish("failed", tr("更新工作进程异常退出（退出码 {return_code}）", return_code=return_code))
+        else:
+            self._finish("succeeded", load_update_result(result["result"], self._work_root))
+
+    def _finish(self, outcome: str, value=None) -> None:
+        """只发布一次终态，停止定时器并释放进程控制资源后发送对应结果信号。"""
+        if self._terminal:
+            return
+        self._terminal = True
+        self._paused = False
+        self._timer.stop()
+        if self._tree is not None:
+            self._tree.close()
+            self._tree = None
+        self._process = None
+        if outcome == "canceled":
+            self.canceled.emit()
+        elif outcome == "failed":
+            self.failed.emit(value)
+        else:
+            self.succeeded.emit(value)
