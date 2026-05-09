@@ -291,3 +291,112 @@ class _PosixProcessGroup:
     def __init__(self):
         """初始化尚未绑定的工作进程组编号。"""
         self._pid: int | None = None
+
+    def attach(self, pid: int) -> None:
+        """记录根进程号作为独立会话的进程组编号。"""
+        self._pid = pid
+
+    def release_startup(self) -> None:
+        """提供统一启动接口；POSIX 工作进程通过启动文件解除等待，无需恢复挂起状态。"""
+        pass
+
+    def _signal(self, value: int) -> None:
+        """向已绑定进程组发送信号，组已退出时忽略查找错误。"""
+        if self._pid is not None:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(self._pid, value)
+
+    def pause(self) -> None:
+        """向工作进程组发送停止信号，暂停其全部成员。"""
+        self._signal(signal.SIGSTOP)
+
+    def resume(self) -> None:
+        """向工作进程组发送继续信号，恢复暂停的成员。"""
+        self._signal(signal.SIGCONT)
+
+    def terminate(self) -> None:
+        """向整个工作进程组发送强制终止信号。"""
+        self._signal(signal.SIGKILL)
+
+    def root_exited(self) -> bool:
+        # POSIX 平台的 Popen.poll 已经回收根进程。
+        """返回根退出已由调用方的子进程轮询负责确认这一约定状态。"""
+        return True
+
+    def is_running(self) -> bool:
+        """检查进程组是否仍有运行成员，在 Linux 上排除无法继续写文件的僵尸进程。"""
+        if self._pid is None:
+            return False
+        try:
+            os.killpg(self._pid, 0)
+        except ProcessLookupError:
+            return False
+        if sys.platform.startswith("linux"):
+            # 僵尸后代不能继续写文件，不应阻止取消完成。
+            for path in Path("/proc").iterdir():
+                if not path.name.isdecimal():
+                    continue
+                try:
+                    fields = (path / "stat").read_text().rsplit(")", 1)[1].split()
+                    if int(fields[2]) == self._pid and fields[0] not in ("Z", "X"):
+                        return True
+                except (OSError, ValueError, IndexError):
+                    continue
+            return False
+        return True
+
+    def close(self) -> None:
+        """终止已绑定进程组并清除进程组编号。"""
+        self.terminate()
+        self._pid = None
+
+    def __del__(self):
+        """对象回收时尽力终止进程组，忽略析构异常。"""
+        with contextlib.suppress(Exception):
+            self.close()
+
+
+class UpdateProcess(QObject):
+    """单次使用的工作进程控制器，公开方法在所属 Qt 线程执行。
+
+    暂停中的未投递结果仍视为运行中。进程树停止后才发出取消信号，
+    由所有者清理暂存文件，本类不执行文件删除。
+    """
+
+    progress = Signal(dict)
+    succeeded = Signal(dict)
+    failed = Signal(str)
+    canceled = Signal()
+
+    def __init__(self, plan: dict, parent=None):
+        """固定工作目录及语言，初始化进程树、终态与暂停状态，并连接进度轮询和退出清理。"""
+        super().__init__(parent)
+        from src.utils.i18n import get_i18n
+
+        self._work_root = Path(plan["work_root"]).resolve()
+        self._plan = {**plan, "work_root": str(self._work_root), "language": get_i18n().current_language}
+        self._process: subprocess.Popen | None = None
+        self._tree: _WindowsJob | _PosixProcessGroup | None = None
+        self._pid: int | None = None
+        self._started = False
+        self._terminal = False
+        self._paused = False
+        self._cancel_requested = False
+        self._failure: str | None = None
+        self._last_progress: bytes | None = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(50)
+        self._timer.timeout.connect(self._poll)
+        application = QCoreApplication.instance()
+        if application is not None:
+            application.aboutToQuit.connect(self.shutdown)
+
+    @property
+    def running(self) -> bool:
+        """判断控制器是否已启动且尚未发布终态，包括暂停中的任务。"""
+        return self._started and not self._terminal
+
+    @property
+    def paused(self) -> bool:
+        """返回当前任务是否处于暂停状态。"""
+        return self._paused
