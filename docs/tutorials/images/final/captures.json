@@ -10770,6 +10770,188 @@
       "required_text": [
         "+ 新建类别"
       ]
+    },
+    {
+      "file": "31-新建类别.webp",
+      "width": 1040,
+      "height": 1026,
+      "logical_width": 520,
+      "logical_height": 513,
+      "device_pixel_ratio": 2.0,
+      "language": "zh-CN",
+      "controls": [
+        {
+          "class": "QLabel",
+          "text": "新建类别",
+          "box": [
+            25,
+            52,
+            470,
+            27
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别图片",
+          "box": [
+            25,
+            114,
+            140,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "点击选择\n或拖拽图片",
+          "box": [
+            25,
+            137,
+            140,
+            180
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "选择",
+          "box": [
+            29,
+            325,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "清除",
+          "box": [
+            99,
+            325,
+            60,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "类别名称 *",
+          "box": [
+            185,
+            114,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "外观",
+          "box": [
+            185,
+            133,
+            310,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "英文名称",
+          "box": [
+            185,
+            181,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLineEdit",
+          "text": "Appearance",
+          "box": [
+            185,
+            200,
+            310,
+            36
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "节点类型",
+          "box": [
+            185,
+            248,
+            310,
+            15
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QComboBox",
+          "text": "类别（可同时启用多个Mod）",
+          "box": [
+            185,
+            267,
+            310,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "角色/对象类型会限制其下所有子类别中同时只能启用一个Mod。",
+          "box": [
+            185,
+            305,
+            310,
+            13
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "取消",
+          "box": [
+            305,
+            458,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QPushButton",
+          "text": "确认",
+          "box": [
+            405,
+            458,
+            90,
+            34
+          ],
+          "enabled": true
+        },
+        {
+          "class": "QLabel",
+          "text": "新建类别",
+          "box": [
+            36,
+            1,
+            434,
+            31
+          ],
+          "enabled": true
+        }
+      ],
+      "required_text": [
+        "新建类别",
+        "节点类型",
+        "确认",
+        "外观"
+      ]
     }
   ]
 }
