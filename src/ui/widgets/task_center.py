@@ -1,0 +1,1162 @@
+"""显示导入、纳管和导出的批次进度。
+
+独立模式定位于父内容区右下角，不参与布局尺寸分配；嵌入模式由宿主布局管理。
+调用方推送批次和单项状态，面板不持有工作线程。折叠时显示总进度及操作按钮，
+展开后显示可滚动的逐项明细。
+"""
+
+from __future__ import annotations
+
+from PySide6.QtCore import (
+    QEasingCurve,
+    QEvent,
+    QPoint,
+    QPropertyAnimation,
+    QRect,
+    Qt,
+    QTimer,
+    Signal,
+)
+from PySide6.QtGui import QColor, QCursor, QFontMetrics, QPainter
+from PySide6.QtWidgets import (
+    QApplication,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QScrollArea,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
+
+from src.ui import anim, icons, theme
+from src.ui.widgets.ring_progress import RingProgressButton
+from src.utils.i18n import N_
+from src.utils.i18n import t as tr
+
+# 常量
+
+PANEL_WIDTH = 340
+ITEM_DOT_PX = 7  # 状态点直径
+SLIDE_MS = 200
+EXPAND_MS = 190  # 明细区展开/收起动画时长
+LIST_MAX_HEIGHT = 200  # 明细区高度上限；超出即出滚动条
+RESULT_HOLD_MS = 3500  # 成功后自动收起的等待时间。
+# 任务浮层不占键盘焦点，按鼠标是否进入过选择终态自动收起的等待时间。
+DISMISS_AFTER_LEAVE_MS = 800
+DISMISS_UNTOUCHED_MS = 3500
+
+# 供调用方传递单项状态的字符串常量。
+ST_QUEUED = "queued"
+ST_RUNNING = "running"
+ST_DONE = "done"
+ST_FAILED = "failed"
+ST_ROLLED_BACK = "rolled_back"
+
+_DOT_COLORS = {
+    ST_QUEUED: "text.disabled",
+    ST_RUNNING: "accent",
+    ST_DONE: "success",
+    ST_FAILED: "danger",
+    ST_ROLLED_BACK: "warning",
+}
+
+
+# 省略号标签
+
+
+class _ElideLabel(QLabel):
+    """按可用宽度省略尾部文本的单行标签。
+
+    保留完整文本，尺寸变化时重新计算显示内容，避免固定宽度面板直接裁切长名称。
+    """
+
+    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
+        """保存完整文字并允许标签缩小，按当前可用宽度生成显示文本。"""
+        super().__init__(parent)
+        self._full = text
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(0)
+        self._sync()
+
+    def setText(self, text: str) -> None:
+        """更新完整文字缓存，并重新计算尾部省略结果。"""
+        self._full = text or ""
+        self._sync()
+
+    def full_text(self) -> str:
+        """返回未经省略的原始文本，供提示或状态处理使用。"""
+        return self._full
+
+    def _sync(self) -> None:
+        """按字体度量和当前宽度更新显示文本，尚无可用宽度时保留完整内容。"""
+        avail = max(0, self.width())
+        if avail <= 0:
+            super().setText(self._full)
+            return
+        fm = QFontMetrics(self.font())
+        super().setText(fm.elidedText(self._full, Qt.TextElideMode.ElideRight, avail))
+
+    def resizeEvent(self, event) -> None:
+        """尺寸变化后重新计算单行文字的省略位置。"""
+        super().resizeEvent(event)
+        self._sync()
+
+
+# 逐项行
+
+
+class _ItemRow(QWidget):
+    """显示单项任务名称、状态标记及状态文案。"""
+
+    def __init__(self, name: str, parent: QWidget | None = None) -> None:
+        """创建初始排队状态的任务行，使名称宽度让位于状态文案。"""
+        super().__init__(parent)
+        self._status = ST_QUEUED
+        self._dot_color = "text.disabled"
+        self._icon_name = ""
+        self._icon_color = ""
+
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(7)
+
+        self._dot = QLabel()
+        self._dot.setFixedSize(ITEM_DOT_PX, ITEM_DOT_PX)
+        lay.addWidget(self._dot, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        # 保持水平尺寸策略为 Ignored，使完整文本宽度不参与最小宽度计算，
+        # 从而让标签按面板实际分配的宽度省略文本。
+        self._name = _ElideLabel(name)
+        lay.addWidget(self._name, 1)
+
+        self._state_label = QLabel(tr("排队中"))
+        self._state_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        lay.addWidget(self._state_label, 0)
+
+        self._apply_style()
+
+    def set_status(self, status: str, text: str = "", *, done_text: str = N_("已完成")) -> None:
+        """记录任务状态，选择默认或指定文案，并同步状态标记与文字颜色。"""
+        self._status = status
+        self._dot_color = _DOT_COLORS.get(status, "text.disabled")
+        label = text or {
+            ST_QUEUED: tr("排队中"),
+            ST_DONE: tr(done_text),
+            ST_FAILED: tr("失败"),
+            ST_ROLLED_BACK: tr("已回滚"),
+        }.get(status, "")
+        self._state_label.setText(label)
+        self._apply_style()
+
+    def _apply_style(self) -> None:
+        """按任务状态及可选自定义图标更新状态标记、名称和文案样式。"""
+        if self._icon_name:
+            self._dot.setFixedSize(14, 14)
+            self._dot.setStyleSheet("background:transparent;")
+            self._dot.setPixmap(icons.pixmap(self._icon_name, 14, self._icon_color or self._dot_color))
+        else:
+            self._dot.setFixedSize(ITEM_DOT_PX, ITEM_DOT_PX)
+            self._dot.clear()
+            dot_hex = theme.color(self._dot_color)
+            self._dot.setStyleSheet(f"background:{dot_hex}; border-radius:{ITEM_DOT_PX // 2}px;")
+        name_hex = theme.color("text.primary" if self._status == ST_RUNNING else "text.secondary")
+        st_hex = theme.color(_DOT_COLORS.get(self._status, "text.tertiary"))
+        self._name.setStyleSheet(f"color:{name_hex}; font-size:12px; background:transparent;")
+        self._state_label.setStyleSheet(f"color:{st_hex}; font-size:11px; background:transparent;")
+
+    def retheme(self) -> None:
+        """使用当前主题重新应用任务行的状态样式。"""
+        self._apply_style()
+
+    def set_icon(self, name: str, color_token: str = "") -> None:
+        """设置任务行的自定义状态图标及可选色标，并立即刷新显示。"""
+        self._icon_name, self._icon_color = name, color_token
+        self._apply_style()
+
+
+# 面板主体
+
+
+class TaskCenterStack:
+    """同一父容器内多张任务浮层的右下角堆叠排版器。
+
+    面板按进入顺序由下向上排列；一个面板收起后，其上方面板下移补位。
+    仅管理纵向偏移，保留面板层级和内容。面板通过 ``note_shown / note_hidden``
+    报告显隐状态，通过 ``offset_for`` 查询位置偏移。``_order`` 索引 0 对应最早进入的底部面板。
+    """
+
+    _GAP = 10  # 相邻两张浮层的垂直间距
+
+    def __init__(self) -> None:
+        """初始化面板显示顺序及明细高度协调的重入保护状态。"""
+        self._order: list[TaskCenterPanel] = []
+        self._fitting_details = False
+
+    def note_shown(self, panel: TaskCenterPanel) -> None:
+        """显示面板时加入堆叠序列末尾。"""
+        if panel not in self._order:
+            self._order.append(panel)
+        self.fit_details(entering=panel)
+
+    def note_hidden(self, panel: TaskCenterPanel) -> None:
+        """隐藏面板后移出序列，并更新其他面板的位置。"""
+        if panel in self._order:
+            self._order.remove(panel)
+            # 先收起空槽位，避免列表扩展与位置动画同时修改几何。
+            self.relayout(fit=False)
+            moving = False
+            for other in self._order:
+                move = getattr(other, "_move_anim", None)
+                try:
+                    if move is not None and move.state() != QPropertyAnimation.State.Stopped:
+                        move.finished.connect(self._finish_reflow)
+                        moving = True
+                except RuntimeError:
+                    pass
+            if not moving:
+                self.fit_details()
+
+    def _finish_reflow(self) -> None:
+        """等待所有面板位移动画结束后重新分配明细区域高度。"""
+        for panel in self._order:
+            move = getattr(panel, "_move_anim", None)
+            try:
+                if move is not None and move.state() != QPropertyAnimation.State.Stopped:
+                    return
+            except RuntimeError:
+                pass
+        self.fit_details()
+
+    def offset_for(self, panel: TaskCenterPanel) -> int:
+        """返回当前面板下方可见面板占用的总高度。"""
+        total = 0
+        for other in self._order:
+            if other is panel:
+                break
+            try:
+                if other.isVisible():
+                    total += other.height() + self._GAP
+            except RuntimeError:
+                continue  # 面板已被销毁，忽略
+        return total
+
+    def relayout(self, *, animate: bool = True, fit: bool = True) -> None:
+        """按当前顺序重新定位全部面板。
+
+        逐帧跟随展开或收起动画时直接设置位置，避免连续创建位移动画相互中断。
+        """
+        if fit:
+            self.fit_details(animate=animate)
+        if any(panel._list_anim is not None for panel in self._order):
+            animate = False
+        for panel in list(self._order):
+            try:
+                panel.settle_position(animate=animate)
+            except RuntimeError:
+                self._order.remove(panel)
+
+    def fit_details(self, *, animate: bool = True, entering=None) -> None:
+        """共享可用详情空间，避免多个展开卡片重叠。"""
+        if self._fitting_details:
+            return
+        self._fitting_details = True
+        try:
+            panels = []
+            for panel in list(self._order):
+                try:
+                    if panel.isVisible() or panel is entering:
+                        panels.append(panel)
+                except RuntimeError:
+                    self._order.remove(panel)
+            if not panels:
+                return
+            parent = panels[0].parentWidget()
+            if parent is None:
+                return
+            fixed = 0
+            wanted = {}
+            for panel in panels:
+                panel.adjustSize()
+                visible_list = 0 if panel._list_scroll.isHidden() else panel._list_scroll.height()
+                fixed += panel.height() - visible_list
+                if panel._is_expanded and panel._divider.isHidden():
+                    fixed += panel._divider.height()
+                wanted[panel] = min(panel._content_height(), LIST_MAX_HEIGHT) if panel._is_expanded else 0
+            room = max(0, parent.height() - 2 * panels[0]._MARGIN - fixed - self._GAP * (len(panels) - 1))
+            targets = dict.fromkeys(panels, 0)
+            pending = [panel for panel in panels if wanted[panel]]
+            while pending:
+                share, extra = divmod(room, len(pending))
+                small = [panel for panel in pending if wanted[panel] <= share]
+                if not small:
+                    for index, panel in enumerate(pending):
+                        targets[panel] = share + (index < extra)
+                    break
+                for panel in small:
+                    targets[panel] = wanted[panel]
+                    room -= wanted[panel]
+                    pending.remove(panel)
+            for panel, target in targets.items():
+                if target == panel._list_target and (
+                    panel._list_anim is not None or panel._list_scroll.maximumHeight() == target
+                ):
+                    continue
+                panel._animate_list_height(target, animate=animate)
+        finally:
+            self._fitting_details = False
+
+    def raise_all(self) -> None:
+        """提升可见面板的层级，避免被页面切换或覆盖层遮挡。"""
+        for panel in list(self._order):
+            try:
+                if panel.isVisible():
+                    panel.raise_()
+            except RuntimeError:
+                self._order.remove(panel)
+
+
+class TaskCenterPanel(QFrame):
+    """非模态批次任务面板。
+
+    start_batch 开始批次，update_item 和 update_progress 更新状态，finish 完成批次。
+    通过信号向宿主请求停止、暂停或继续，具体任务调度由宿主处理。
+    """
+
+    stop_requested = Signal()
+    pause_requested = Signal()
+    resume_requested = Signal()
+
+    _MARGIN = 14  # 距父容器右边 / 下边的间距
+    _SHADOW_BLUR = 20  # 估算阴影占用高度（用于避遮挡）
+
+    def __init__(
+        self,
+        parent: QWidget,
+        *,
+        embedded: bool = False,
+        stack: TaskCenterStack | None = None,
+    ) -> None:
+        """配置嵌入模式及面板堆叠关系。
+
+        嵌入模式由宿主管理外观、布局和显隐；独立模式支持右下角定位及显示动画。
+        stack 提供多面板位置管理，未传入时单独定位。
+        """
+        super().__init__(parent)
+        self.setObjectName("taskCenterPanel")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._embedded = bool(embedded)
+        self._stack = None if self._embedded else stack
+        if not self._embedded:
+            self.setFixedWidth(PANEL_WIDTH)
+            # 独立于父布局定位。
+            self.hide()
+
+        self._has_pause = False
+        self._paused = False
+        self._is_expanded = False
+        self._total_items = 0
+        self._items: dict[int, _ItemRow] = {}  # 索引映射到明细行控件。
+        self._failed = False  # 是否有失败项（失败时不自动消失）
+        # 每批任务通过 start_batch 设置业务文案，默认用于纳管和导入。
+        self._stop_tooltip = tr("停止纳管并恢复原文件")
+        self._cancelled_title = tr("已停止纳管")
+        self._done_text = tr("已纳管")
+        self._pause_tooltip = tr("暂停")
+        self._resume_tooltip = tr("继续")
+
+        self._hide_timer = QTimer(self)
+        self._hide_timer.setSingleShot(True)
+        self._hide_timer.timeout.connect(self._slide_out)
+
+        # 终止状态按鼠标交互决定收起时间，与成功状态的固定延迟分别管理。
+        self._dismiss_armed = False
+        self._dismiss_touched = False  # 本批终止后鼠标是否进过浮层
+        self._dismiss_timer = QTimer(self)
+        self._dismiss_timer.setSingleShot(True)
+        self._dismiss_timer.timeout.connect(self._on_dismiss_timeout)
+
+        self._anim: QPropertyAnimation | None = None
+        self._list_anim: QPropertyAnimation | None = None
+        self._list_target = 0
+
+        self._build_ui()
+        self._apply_style()
+
+    # 构建 UI
+
+    def _build_ui(self) -> None:
+        """构建总进度、暂停停止操作和默认折叠的明细列表，向宿主转发任务控制请求。"""
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # 头部行。
+        head = QWidget()
+        head.setObjectName("tcHead")
+        hl = QHBoxLayout(head)
+        hl.setContentsMargins(10, 9, 8, 9)
+        hl.setSpacing(10)
+
+        self._ring = RingProgressButton(size=34, line_width=3, parent=head)
+        self._ring.set_icon("actions/pause", "text.on_accent")
+        self._ring.set_indeterminate(True)
+        self._ring.set_progress(-1)
+        self._ring.setToolTip(tr("暂停"))
+        self._ring.clicked.connect(self._on_ring_clicked)
+        hl.addWidget(self._ring, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        txt_col = QVBoxLayout()
+        txt_col.setSpacing(1)
+        txt_col.setContentsMargins(0, 0, 0, 0)
+        self._title = _ElideLabel(tr("正在处理…"))
+        self._title.setObjectName("tcTitle")
+        self._detail = _ElideLabel("")
+        self._detail.setObjectName("tcDetail")
+        txt_col.addWidget(self._title)
+        txt_col.addWidget(self._detail)
+        hl.addLayout(txt_col, 1)
+
+        self._stop_btn = _IconButton("actions/stop", "danger", parent=head)
+        self._stop_btn.setToolTip(self._stop_tooltip)
+        self._stop_btn.clicked.connect(self.stop_requested)
+        hl.addWidget(self._stop_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        self._expand_btn = _IconButton("actions/chevron-down", "text.secondary", parent=head)
+        self._expand_btn.setToolTip(tr("展开明细"))
+        self._expand_btn.clicked.connect(self._toggle_expand)
+        hl.addWidget(self._expand_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+
+        outer.addWidget(head)
+
+        # 仅在明细展开时显示的分隔线。
+        self._divider = QFrame()
+        self._divider.setObjectName("tcDivider")
+        self._divider.setFixedHeight(1)
+        self._divider.hide()
+        outer.addWidget(self._divider)
+
+        # 明细列表。
+        self._list_scroll = QScrollArea()
+        self._list_scroll.setObjectName("tcListScroll")
+        self._list_scroll.setWidgetResizable(True)
+        self._list_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._list_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 起始收起态：上限 0，它同时是首次展开动画的起点（见 _animate_list_height）。
+        self._list_scroll.setMaximumHeight(0)
+        self._list_scroll.hide()
+
+        self._list_container = QWidget()
+        self._list_container.setObjectName("tcListContainer")
+        self._list_layout = QVBoxLayout(self._list_container)
+        self._list_layout.setContentsMargins(0, 4, 0, 4)
+        self._list_layout.setSpacing(0)
+        self._list_scroll.setWidget(self._list_container)
+
+        outer.addWidget(self._list_scroll)
+
+    # 样式
+
+    def _apply_style(self) -> None:
+        """按嵌入模式决定是否绘制面板外壳，并同步头部、明细行及滚动条主题。"""
+        bg = theme.color("bg.card")
+        stroke = theme.color("stroke.card")
+        divider = theme.color("stroke.divider")
+        r = theme.radius("large")
+        primary = theme.color("text.primary")
+        tertiary = theme.color("text.tertiary")
+        # 嵌入模式：不画卡片外壳（宿主对话框已有背景与描边），只留内容层。
+        shell = (
+            "#taskCenterPanel { background:transparent; border:none; }"
+            if self._embedded
+            else f"#taskCenterPanel {{ background:{bg}; border:1px solid {stroke}; border-radius:{r}px; }}"
+        )
+        self.setStyleSheet(
+            shell + f"#tcHead {{ background:transparent; }}"
+            f"#tcTitle {{ color:{primary}; font-size:12px; font-weight:600;"
+            f" background:transparent; }}"
+            f"#tcDetail {{ color:{tertiary}; font-size:11px; background:transparent; }}"
+            f"#tcDivider {{ background:{divider}; border:none; }}"
+            f"#tcListContainer {{ background:transparent; }}"
+            f"#tcListScroll {{ background:transparent; }}"
+            # 使用较宽且对比明显的滚动条，使溢出内容的操作入口清晰可见。
+            f"#tcListScroll QScrollBar:vertical {{ width:8px; border:none;"
+            f" background:transparent; margin:2px 1px 2px 0; }}"
+            f"#tcListScroll QScrollBar::handle:vertical {{"
+            f" background:{theme.color('scrollbar.handle')};"
+            f" border-radius:3px; min-height:24px; }}"
+            f"#tcListScroll QScrollBar::handle:vertical:hover {{"
+            f" background:{theme.color('scrollbar.handle.hover')}; }}"
+            f"#tcListScroll QScrollBar::add-line:vertical,"
+            f"#tcListScroll QScrollBar::sub-line:vertical {{ height:0; }}"
+            f"#tcListScroll QScrollBar::add-page:vertical,"
+            f"#tcListScroll QScrollBar::sub-page:vertical {{ background:transparent; }}"
+        )
+        # 每行子控件的颜色由 _ItemRow._apply_style 独立管理。
+        for row in self._items.values():
+            row.retheme()
+
+    # 对外 API
+
+    def start_batch(
+        self,
+        total: int,
+        title: str,
+        *,
+        has_pause: bool = False,
+        stop_tooltip: str = N_("停止纳管并恢复原文件"),
+        cancelled_title: str = N_("已停止纳管"),
+        done_text: str = N_("已纳管"),
+        pause_tooltip: str = N_("暂停"),
+        resume_tooltip: str = N_("继续"),
+    ) -> None:
+        """开始一批作业，total 为零时使用不确定进度。
+
+        文案参数用于区分纳管、导入和导出，各调用方提供符合实际操作的终止提示。
+        """
+        self._hide_timer.stop()
+        # 开始新批次前取消上一批的自动收起任务。
+        self._disarm_focus_dismiss()
+        self._dismiss_touched = False
+        self._failed = False
+        self._has_pause = has_pause
+        self._paused = False
+        self._total_items = total
+        self._stop_tooltip = tr(stop_tooltip)
+        self._cancelled_title = tr(cancelled_title)
+        self._done_text = tr(done_text)
+        self._pause_tooltip = tr(pause_tooltip)
+        self._resume_tooltip = tr(resume_tooltip)
+        self._stop_btn.setToolTip(self._stop_tooltip)
+        self._stop_btn.setAccessibleName(self._stop_tooltip)
+        self._items.clear()
+        # 清空列表控件
+        while self._list_layout.count():
+            item = self._list_layout.takeAt(0)
+            if item and item.widget():
+                item.widget().deleteLater()
+
+        # 环态：无确定进度时走不确定旋转
+        self._ring.set_progress(-1)
+        self._ring.set_ring_color("accent")
+        if total > 0:
+            self._ring.set_indeterminate(False)
+            self._ring.set_progress(0)
+        else:
+            self._ring.set_indeterminate(True)
+
+        # has_pause 决定环心图标
+        if has_pause:
+            self._ring.set_icon("actions/pause", "text.on_accent")
+            self._ring.setEnabled(True)
+            self.set_paused(False)
+        else:
+            # 仅进度展示，环不可点
+            self._ring.set_icon("", "")
+            self._ring.setEnabled(False)
+
+        self._title.setText(title)
+        self._detail.setText("")
+        self._stop_btn.setEnabled(True)
+        self._stop_btn.show()
+        self._expand_btn.show()
+        self._restore_expand_btn()
+        self._reset_detail_area()
+
+        self._apply_style()
+        self._reposition()
+        self._slide_in()
+
+    def _restore_expand_btn(self) -> None:
+        """将复用面板的关闭按钮恢复为展开按钮，并重置信号连接。
+
+        关闭操作仅在失败或终止批次后连接，受 `_dismiss_wired` 控制。
+        明细区需在每批开始时复位，独立由 `_reset_detail_area` 处理，避免继承上一批展开状态。
+        """
+        if not getattr(self, "_dismiss_wired", False):
+            return
+        self._dismiss_wired = False
+        try:
+            self._expand_btn.clicked.disconnect()
+        except TypeError:
+            pass
+        self._expand_btn.clicked.connect(self._toggle_expand)
+
+    def _reset_detail_area(self) -> None:
+        """每批开始时清空并收起明细区域。
+
+        新行按进度通知逐项创建，初始最大高度保持为零，作为下次展开的动画起点。
+        """
+        self._is_expanded = False
+        self._list_target = 0
+        self._stop_list_anim()
+        self._list_scroll.setMaximumHeight(0)
+        self._list_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        bar = self._list_scroll.verticalScrollBar()
+        if bar is not None:
+            bar.setValue(0)
+        self._divider.hide()
+        self._list_scroll.hide()
+        self._expand_btn.set_icon("actions/chevron-down", "text.secondary")
+        self._expand_btn.setToolTip(tr("展开明细"))
+
+    def update_progress(
+        self,
+        pct: float | None,
+        title: str,
+        detail: str,
+    ) -> None:
+        """更新总进度环 + 标题 / 明细。pct=None 表示不确定态。"""
+        self._title.setText(title)
+        self._detail.setText(detail)
+        if pct is None:
+            self._ring.set_indeterminate(True)
+            self._ring.set_progress(-1)
+        else:
+            self._ring.set_indeterminate(False)
+            self._ring.set_progress(max(0.0, min(100.0, float(pct))))
+
+    def update_item(
+        self,
+        index: int,
+        name: str,
+        status: str,
+        detail: str = "",
+        *,
+        icon: str = "",
+        icon_color: str = "",
+    ) -> None:
+        """新增或更新某项明细行。"""
+        if index not in self._items:
+            row = _ItemRow(name, self._list_container)
+            self._items[index] = row
+            self._list_layout.addWidget(row)
+            # 展开期间新增明细行后同步高度限制和滚动条，保证新内容可见。
+            if self._is_expanded and self._list_anim is None:
+                if self._stack is not None:
+                    self._stack.fit_details(animate=False)
+                else:
+                    target = min(self._content_height(), LIST_MAX_HEIGHT)
+                    self._sync_scrollbar_policy(target)
+                    self._list_scroll.setMaximumHeight(target)
+                    self._on_list_anim_frame()
+        self._items[index].set_status(status, detail, done_text=self._done_text)
+        self._items[index].set_icon(icon, icon_color)
+
+    def finish(
+        self,
+        title: str,
+        detail: str,
+        *,
+        ok: bool = True,
+    ) -> None:
+        """显示完成状态；成功时定时收起，失败时在失焦后收起，悬停期间保持可读。"""
+        self._ring.set_indeterminate(False)
+        self._ring.setEnabled(False)
+        self._stop_btn.setEnabled(False)
+        self._stop_btn.hide()
+
+        if ok:
+            self._ring.set_progress(100)
+            self._ring.set_ring_color("success")
+            self._ring.set_icon("meta/check", "success")
+        else:
+            self._failed = True
+            self._ring.set_progress(100)
+            self._ring.set_ring_color("warning")
+            self._ring.set_icon("status/warning", "warning")
+            self._make_expand_btn_dismiss()
+
+        self._title.setText(title)
+        self._detail.setText(detail)
+
+        # 嵌入模式由宿主管理关闭，不自动隐藏内容。
+        if ok and not self._embedded:
+            self._hide_timer.start(RESULT_HOLD_MS)
+        elif not ok:
+            # 失焦收起（嵌入模式与未显示态由 _arm_focus_dismiss 自行忽略）。
+            self._arm_focus_dismiss()
+
+    def set_paused(self, paused: bool) -> None:
+        """按宿主任务状态同步暂停外观。"""
+        self._paused = bool(paused)
+        if not self._has_pause:
+            return
+        if self._paused:
+            self._ring.set_icon("actions/play", "text.on_accent")
+            self._ring.setToolTip(self._resume_tooltip)
+            self._ring.setAccessibleName(self._resume_tooltip)
+        else:
+            self._ring.set_icon("actions/pause", "text.on_accent")
+            self._ring.setToolTip(self._pause_tooltip)
+            self._ring.setAccessibleName(self._pause_tooltip)
+
+    def set_stop_enabled(self, on: bool) -> None:
+        """设置终止按钮可用性，停止处理期间禁用重复操作。"""
+        self._stop_btn.setEnabled(bool(on))
+
+    def _make_expand_btn_dismiss(self) -> None:
+        """批次结束后将展开按钮改为关闭按钮。
+
+        使用连接标志保证重复结束通知不会重复修改信号连接。
+        """
+        if getattr(self, "_dismiss_wired", False):
+            return
+        self._dismiss_wired = True
+        self._expand_btn.set_icon("actions/dismiss", "text.secondary")
+        self._expand_btn.setToolTip(tr("关闭"))
+        try:
+            self._expand_btn.clicked.disconnect()
+        except TypeError:
+            pass
+        self._expand_btn.clicked.connect(self._slide_out)
+
+    def finish_cancelled(self, detail: str) -> None:
+        """用户停止后的结束态（warning 色，驻留 → 失焦后自动收起）。"""
+        self.finish(self._cancelled_title, detail, ok=False)
+
+    # 终止态失焦自动收起
+
+    def _arm_focus_dismiss(self) -> None:
+        """等待鼠标离开后开始自动收起计时，点击面板外部时立即收起。"""
+        if self._embedded or not self.isVisible():
+            return  # 嵌入模式由宿主控制显隐，与 finish 的处理一致。
+        if self._dismiss_armed:
+            return
+        self._dismiss_armed = True
+        # 从结束状态开始重新记录鼠标进入情况，避免将点击停止按钮视为已经阅读结果。
+        self._dismiss_touched = False
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+        self._restart_dismiss_timer()
+
+    def _disarm_focus_dismiss(self) -> None:
+        """停止自动收起计时并移除全局事件过滤器。
+
+        开始新批次和隐藏面板时均须清理，避免旧任务干扰新面板。
+        """
+        self._dismiss_timer.stop()
+        if not self._dismiss_armed:
+            return
+        self._dismiss_armed = False
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+
+    def _cursor_inside(self) -> bool:
+        """判断全局鼠标位置是否位于面板内，控件已销毁时返回 False。"""
+        try:
+            return self.rect().contains(self.mapFromGlobal(QCursor.pos()))
+        except RuntimeError:
+            return False
+
+    def _restart_dismiss_timer(self) -> None:
+        """鼠标位于面板内时暂停计时，离开后按进入记录选择等待时间。"""
+        if not self._dismiss_armed:
+            return
+        if self._cursor_inside():
+            # 计时检查时同步记录鼠标位置，覆盖状态变化后没有新进入事件的情况。
+            self._dismiss_touched = True
+            self._dismiss_timer.stop()
+            return
+        delay = DISMISS_AFTER_LEAVE_MS if self._dismiss_touched else DISMISS_UNTOUCHED_MS
+        self._dismiss_timer.start(delay)
+
+    def _on_dismiss_timeout(self) -> None:
+        """自动收起前重新核对鼠标位置。
+
+        移动到面板子按钮也可能触发父控件离开事件，不能仅据该事件关闭面板。
+        """
+        if not self._dismiss_armed:
+            return
+        if self._cursor_inside():
+            self._restart_dismiss_timer()
+            return
+        self._slide_out()
+
+    def eventFilter(self, obj, event):
+        """在应用事件过滤器中处理面板外部点击。"""
+        if self._dismiss_armed and event.type() == QEvent.Type.MouseButtonPress:
+            widget = obj if isinstance(obj, QWidget) else None
+            inside = widget is not None and (widget is self or self.isAncestorOf(widget))
+            # 独立对话框、图片查看器或菜单中的点击不属于当前面板的外部交互。
+            other_window = widget is not None and widget.window() is not self.window()
+            if not inside and not other_window:
+                self._disarm_focus_dismiss()
+                self._slide_out()
+        return super().eventFilter(obj, event)
+
+    def enterEvent(self, event) -> None:
+        """鼠标进入时停止自动收起计时，并记录已进入状态。"""
+        self._dismiss_touched = True
+        self._dismiss_timer.stop()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开后重新评估自动收起计时，再交由基类处理事件。"""
+        self._restart_dismiss_timer()
+        super().leaveEvent(event)
+
+    def queue_info(self, n_pending: int) -> None:
+        """在明细行尾追加「另 n 组排队」。
+
+        取 full_text 而非 text：_ElideLabel.text 返回的是已加省略号的显示串，
+        拿它拼接会把「…」永久写进正文。
+        """
+        if n_pending > 0:
+            base = self._detail.full_text()
+            self._detail.setText(
+                tr("{base}\u3000另 {n_pending} 组排队", base=base, n_pending=n_pending)
+                if base
+                else tr("另 {n_pending} 组排队", n_pending=n_pending)
+            )
+
+    def retheme(self) -> None:
+        """更新任务面板、明细行和环形进度按钮的主题样式。"""
+        self._apply_style()
+        self._ring.retheme()
+
+    # 内部交互
+
+    def _on_ring_clicked(self) -> None:
+        """任务支持暂停时切换显示状态，并向宿主请求暂停或继续。"""
+        if not self._has_pause:
+            return
+        if self._paused:
+            self.set_paused(False)
+            self.resume_requested.emit()
+        else:
+            self.set_paused(True)
+            self.pause_requested.emit()
+
+    def _content_height(self) -> int:
+        """明细列表的自然高度（未截断），用于决定展开目标高度与是否需要滚动条。"""
+        return max(0, self._list_container.sizeHint().height())
+
+    def _sync_scrollbar_policy(self, target: int) -> None:
+        """内容高度超过上限时持续显示滚动条，明确提示存在更多明细。"""
+        overflow = target > 0 and self._content_height() > target
+        self._list_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOn if overflow else Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+
+    def _toggle_expand(self) -> None:
+        """切换明细展开状态及按钮提示，由堆叠管理器或本面板调整明细高度。"""
+        self._is_expanded = not self._is_expanded
+        if self._is_expanded:
+            self._expand_btn.set_icon("actions/chevron-up", "text.secondary")
+            self._expand_btn.setToolTip(tr("收起明细"))
+        else:
+            self._expand_btn.set_icon("actions/chevron-down", "text.secondary")
+            self._expand_btn.setToolTip(tr("展开明细"))
+
+        if self._stack is not None:
+            self._stack.fit_details()
+        else:
+            target = min(self._content_height(), LIST_MAX_HEIGHT) if self._is_expanded else 0
+            self._animate_list_height(target)
+
+    def _animate_list_height(self, target: int, *, animate: bool = True) -> None:
+        """通过最大高度动画展开或收起明细，并逐帧同步宿主尺寸。
+
+        maximumHeight 始终表示当前动画高度，收起时保持为零，供下一次展开作为起点。
+        每帧同步面板锚点及堆叠位置，避免面板与右下角脱离。
+        """
+        self._stop_list_anim()
+        self._stop_move_anim()
+        self._list_target = target
+        self._sync_scrollbar_policy(target)
+        if self._is_expanded:
+            self._divider.show()
+            self._list_scroll.show()
+
+        start = max(0, self._list_scroll.maximumHeight())
+        if start == target:
+            self._finish_list_anim()
+            return
+
+        if not animate or not anim.is_enabled():
+            self._list_scroll.setMaximumHeight(target)
+            self._finish_list_anim()
+            return
+
+        self._list_scroll.setMaximumHeight(start)
+        a = QPropertyAnimation(self._list_scroll, b"maximumHeight", self)
+        a.setDuration(EXPAND_MS)
+        a.setStartValue(start)
+        a.setEndValue(target)
+        a.setEasingCurve(
+            # 高度增长和缩减使用相同曲线，避免共享预算暂时溢出。
+            QEasingCurve.Type.OutCubic if self._is_expanded or self._stack is not None else QEasingCurve.Type.InCubic
+        )
+        a.valueChanged.connect(lambda _v: self._on_list_anim_frame())
+        a.finished.connect(self._finish_list_anim)
+        a.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._list_anim = a
+
+    def _stop_list_anim(self) -> None:
+        """清除当前明细动画引用并停止仍有效的动画，容忍 Qt 对象已销毁。"""
+        a = getattr(self, "_list_anim", None)
+        self._list_anim = None
+        if a is None:
+            return
+        try:
+            if a.state() != QPropertyAnimation.State.Stopped:
+                a.stop()
+        except RuntimeError:
+            pass
+
+    def _on_list_anim_frame(self) -> None:
+        """展开明细时逐帧更新宿主高度并重排整个面板栈。
+
+        直接设置位置，避免连续创建位移动画相互打断。
+        """
+        self.adjustSize()
+        if self._embedded:
+            win = self.window()
+            if win is not None:
+                win.adjustSize()
+            return
+        self._reposition()
+        if self._stack is not None:
+            self._stack.relayout(animate=False, fit=False)
+
+    def _finish_list_anim(self) -> None:
+        """结束明细动画，折叠时隐藏列表与分隔线并保持高度上限为零。"""
+        self._list_anim = None
+        if not self._is_expanded:
+            self._list_scroll.hide()
+            self._divider.hide()
+            # 收起态把上限留在 0（不是 LIST_MAX_HEIGHT）——见 _animate_list_height 的不变量。
+            self._list_scroll.setMaximumHeight(0)
+        self._on_list_anim_frame()
+
+    # 定位 / 动画
+
+    def reposition(self) -> None:
+        """父容器 resize 时从外部调用，保持贴右下角。"""
+        self._reposition()
+
+    def _stack_offset(self) -> int:
+        """参与堆叠时，本面板底边要比父容器底边多抬高的像素。"""
+        if self._stack is None:
+            return 0
+        return self._stack.offset_for(self)
+
+    def _target_geometry(self) -> QRect | None:
+        """按当前尺寸 + 堆叠位次算出应有几何；父容器缺失时返回 None。"""
+        p = self.parent()
+        if p is None:
+            return None
+        self.adjustSize()
+        w, h = self.width(), self.height()
+        x = p.width() - w - self._MARGIN
+        y = p.height() - h - self._MARGIN - self._stack_offset()
+        return QRect(max(0, x), max(0, y), w, h)
+
+    def _reposition(self) -> None:
+        """将独立浮层移动到目标堆叠位置，嵌入模式保留宿主布局控制。"""
+        if self._embedded:
+            return
+        geo = self._target_geometry()
+        if geo is not None:
+            self.move(geo.x(), geo.y())
+
+    def settle_position(self, *, animate: bool = True) -> None:
+        """将面板移动到堆叠序列规定的位置。
+
+        显示或关闭动画进行中暂不修改同一几何属性；animate=False 用于逐帧直接跟随布局。
+        """
+        if self._embedded or not self.isVisible():
+            return
+        if not animate:
+            self._stop_move_anim()
+        # 先检查活动动画再计算目标几何，避免 adjustSize 改变正在动画中的尺寸。
+        try:
+            if self._anim is not None and self._anim.state() != QPropertyAnimation.State.Stopped:
+                return
+        except RuntimeError:
+            self._anim = None
+        geo = self._target_geometry()
+        if geo is None or geo.topLeft() == self.pos():
+            return
+        if animate:
+            anim.animate_move(self, QPoint(geo.x(), geo.y()))
+        else:
+            self.move(geo.x(), geo.y())
+
+    def _stop_move_anim(self) -> None:
+        """停止已有面板位移动画并清除引用，忽略已销毁对象。"""
+        move = getattr(self, "_move_anim", None)
+        self._move_anim = None
+        if move is not None:
+            try:
+                move.stop()
+            except RuntimeError:
+                pass
+
+    def _stop_current_anim(self) -> None:
+        """停止几何动画并清除引用。
+
+        动画停止后原生对象可能自动删除，不能继续使用其 Python 包装对象。
+        """
+        anim = self._anim
+        self._anim = None
+        if anim is None:
+            return
+        try:
+            if anim.state() != QPropertyAnimation.State.Stopped:
+                anim.stop()
+        except RuntimeError:
+            pass
+
+    def _slide_in(self) -> None:
+        """显示面板；独立模式先加入堆叠再从目标位置下方滑入，嵌入模式直接显示。"""
+        if self._embedded:
+            # 嵌入模式由宿主布局管理，不使用独立位移动画。
+            self.show()
+            return
+        self._stop_current_anim()
+        self._stop_move_anim()
+        # 先加入堆叠序列，再按已显示面板的总高度计算位置。
+        if self._stack is not None:
+            self._stack.note_shown(self)
+        self.adjustSize()
+        self._reposition()
+        if not self.isVisible():
+            # 起点在下方 dy px
+            geo = self.geometry()
+            start = QRect(geo.x(), geo.y() + 12, geo.width(), geo.height())
+            self.setGeometry(start)
+            self.show()
+            self.raise_()
+            anim_obj = QPropertyAnimation(self, b"geometry", self)
+            anim_obj.setDuration(SLIDE_MS)
+            anim_obj.setStartValue(start)
+            anim_obj.setEndValue(geo)
+            anim_obj.setEasingCurve(QEasingCurve.Type.OutCubic)
+            anim_obj.finished.connect(self._on_slide_in_done)
+            anim_obj.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+            self._anim = anim_obj
+        else:
+            self.raise_()
+
+    def _on_slide_in_done(self) -> None:
+        """滑入结束后清除动画状态并重新排列面板。
+
+        显示动画期间可能有其他面板收起，结束时重新布局以处理被延迟的位置更新。
+        """
+        self._anim = None
+        if self._stack is not None:
+            self._stack.relayout()
+
+    def _slide_out(self) -> None:
+        """独立面板收起前解除失焦监听及已有动画，再向下滑出并由完成回调隐藏。"""
+        if self._embedded or not self.isVisible():
+            return
+        # 收起前解除失焦监听，避免隐藏后仍接收过滤事件或定时回调。
+        self._disarm_focus_dismiss()
+        self._stop_current_anim()
+        self._stop_move_anim()
+        geo = self.geometry()
+        end = QRect(geo.x(), geo.y() + 24, geo.width(), geo.height())
+        anim_obj = QPropertyAnimation(self, b"geometry", self)
+        anim_obj.setDuration(SLIDE_MS)
+        anim_obj.setStartValue(geo)
+        anim_obj.setEndValue(end)
+        anim_obj.setEasingCurve(QEasingCurve.Type.InQuad)
+        anim_obj.finished.connect(self._on_slide_out_done)
+        anim_obj.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._anim = anim_obj
+
+    def _on_slide_out_done(self) -> None:
+        """滑出结束后隐藏面板，再更新其余面板的位置。"""
+        self.hide()
+        self._anim = None
+        if self._stack is not None:
+            self._stack.note_hidden(self)
+
+
+# 小图标按钮
+
+
+class _IconButton(QWidget):
+    """固定尺寸的图标按钮，自绘悬停背景和圆角。"""
+
+    clicked = Signal()
+
+    def __init__(
+        self,
+        icon_name: str,
+        color_token: str = "text.secondary",
+        parent: QWidget | None = None,
+    ) -> None:
+        """建立固定尺寸的图标按钮，缓存图标位图并初始化启用和悬停状态。"""
+        super().__init__(parent)
+        self.setFixedSize(26, 26)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._icon_name = icon_name
+        self._color_token = color_token
+        self._enabled = True
+        self._hovered = False
+        self._pix = self._build_pix()
+
+    def set_icon(self, icon_name: str, color_token: str) -> None:
+        """替换图标及主题色标，重建位图缓存后请求重绘。"""
+        self._icon_name = icon_name
+        self._color_token = color_token
+        self._pix = self._build_pix()
+        self.update()
+
+    def setEnabled(self, on: bool) -> None:
+        """同步 Qt 启用状态及自绘状态，刷新禁用透明度。"""
+        self._enabled = on
+        super().setEnabled(on)
+        self.update()
+
+    def _build_pix(self):
+        """按当前图标与色标生成位图，资源加载失败时返回 None。"""
+        try:
+            return icons.pixmap(self._icon_name, 16, self._color_token)
+        except Exception:
+            return None
+
+    def retheme(self) -> None:
+        """按当前主题重建图标缓存并重绘按钮。"""
+        self._pix = self._build_pix()
+        self.update()
+
+    def paintEvent(self, _e) -> None:
+        """绘制悬停底色和居中图标，禁用时降低图标透明度。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        if self._hovered and self._enabled:
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(QColor(theme.color("bg.hover")))
+            p.drawRoundedRect(self.rect(), 4, 4)
+        if self._pix and not self._pix.isNull():
+            x = (self.width() - 16) // 2
+            y = (self.height() - 16) // 2
+            p.setOpacity(1.0 if self._enabled else 0.38)
+            p.drawPixmap(x, y, 16, 16, self._pix)
+        p.end()
+
+    def enterEvent(self, e) -> None:
+        """记录鼠标进入状态并刷新悬停外观。"""
+        self._hovered = True
+        self.update()
+        super().enterEvent(e)
+
+    def leaveEvent(self, e) -> None:
+        """清除鼠标悬停状态并恢复普通外观。"""
+        self._hovered = False
+        self.update()
+        super().leaveEvent(e)
+
+    def mousePressEvent(self, e) -> None:
+        """启用状态下按下左键时发送点击信号，其余事件沿用控件处理。"""
+        if self._enabled and e.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
+        super().mousePressEvent(e)
