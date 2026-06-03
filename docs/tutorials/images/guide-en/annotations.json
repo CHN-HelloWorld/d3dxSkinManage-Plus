@@ -62,5 +62,121 @@
       48,
       194
     ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "source_sha256": "aefaba1f17e6688b8f5a5ddf5d2921f0ec2a2291de90ea411c75016eedf876df",
+    "image_sha256": "72ac6d77ae4181ce10d8e1604cd97e484300f52e16d5c6fe50bd73063f3e1456",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Activate a game · Check the current environment",
+    "marks": [
+      {
+        "box": [
+          364,
+          128,
+          356,
+          430
+        ],
+        "label": "Double-click a game card to activate it. Double-click the active game again to deactivate it."
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "Current environment and the Current badge identify the active game.",
+        "box": [
+          2074,
+          1138,
+          782,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          968,
+          784,
+          156
+        ],
+        "label": "Check the loader folder and Mod deployment folder before enabling a Mod."
+      }
+    ],
+    "source": "images/final-en/02-游戏配置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "source_sha256": "7084dd1d6ba22a03cb11a2715b248c489246ed659a3ec95c04d5d18255e291c5",
+    "image_sha256": "ae0470076a9984bb958aef4fc0419e992c551ad29c0029e98e86ef1dfc732b03",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Category Overview · Find categories and common actions",
+    "marks": [
+      {
+        "box": [
+          1408,
+          284,
+          320,
+          400
+        ],
+        "label": "Double-click a category card, such as 外观 (Appearance), to enter it before importing Mods."
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "The breadcrumb shows your current location. Click All to return to the category root.",
+        "box": [
+          408,
+          110,
+          58,
+          64
+        ]
+      },
+      {
+        "box": [
+          364,
+          188,
+          1616,
+          70
+        ],
+        "label": "Search by name, author or tag, and narrow the results with tag and type filters."
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "Use the preset selector to manage the current game's complete Mod loadout.",
+        "target_en": "Default (Default)",
+        "box": [
+          1336,
+          26,
+          320,
+          62
+        ]
+      }
+    ],
+    "source": "images/final-en/03-类别总览.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
