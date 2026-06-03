@@ -525,3 +525,501 @@ def test_import_save_failure_restores_complete_moved_container(library, tmp_path
     manager, node = library
     assert not manager.get_mods(node.id)
     assert not list(manager._get_character_library(node.id).glob("*/.d3dxmod"))
+
+
+def test_commit_rechecks_prepared_variant_files_before_index_publication(library, tmp_path):
+    source = _share(tmp_path / "Source")
+    service, request = _intake(library, source)
+    prepared = service.prepare(request)
+    store = ModVariantStore(prepared.body_path)
+    variants = store.list()
+    assert len(variants) == 1
+    store.path_for(variants[0].variant_id).unlink()
+    with pytest.raises((IntakeError, OSError, ValueError)):
+        service.commit(prepared)
+    assert not prepared.container_path.exists()
+    assert not library[0].get_mods(library[1].id)
+
+
+def test_export_member_write_failure_removes_partial_product(library, tmp_path, monkeypatch):
+    mod, store = _saved_mod(library, tmp_path)
+    before = _files(Path(mod.path).parent)
+    original = zipfile.ZipFile.writestr
+
+    def write(stream, name, data, *args, **kwargs):
+        if "/variants/" in str(name):
+            raise OSError("variant member failed")
+        return original(stream, name, data, *args, **kwargs)
+
+    monkeypatch.setattr(zipfile.ZipFile, "writestr", write)
+    output = tmp_path / "out"
+    result = ModExporter().export_one(ExportItem("Shared", mod.path), output, include_meta=True)
+    assert not result.ok and result.error
+    assert not list(output.iterdir())
+    assert _files(Path(mod.path).parent) == before
+
+
+def _update(library, tmp_path, variants=None):
+    from src.core.mod_update_transaction import make_update_plan
+    from src.core.mod_update_worker import prepare_update
+
+    old, store = _saved_mod(library, tmp_path)
+    source = _share(tmp_path / "Update", variants=variants, payload=b"new body")
+    archive = _archive(source, tmp_path, "zip")
+    plan = make_update_plan(library[0], old.mod_id, archive, {"version": "2"})
+    return old, store, plan, prepare_update(plan, lambda _event: None)
+
+
+def _private_state(library, mod, tmp_path):
+    from src.core import mod_runtime_prefs
+
+    manager, node = library
+    preferences = mod_runtime_prefs.RuntimePrefsStore()
+    state = preferences.state_for(mod.mod_id)
+    state.selected_variant_id = "white"
+    state.values = {r"$\portable\color": "6"}
+    path = tmp_path / "data" / "portable" / "mod_preferences.json"
+    assert mod_runtime_prefs.save(path, preferences)
+    preset = manager.preset_manager.create_preset("portable", "Outfit", snapshot={node.id: [mod.mod_id]})
+    manager.preset_manager.set_mod_variant(preset.id, mod.mod_id, "white")
+    return path, path.read_bytes(), preset.id, dict(preset.mod_variants)
+
+
+@pytest.mark.parametrize("operation", ["rename", "move"])
+def test_container_lifecycle_preserves_variants_and_private_state(library, tmp_path, operation):
+    manager, node = library
+    original, store = _saved_mod(library, tmp_path)
+    identity = original.mod_id
+    content_hash = original.content_hash
+    original_path = Path(original.path)
+    body_bytes = original_path.read_bytes()
+    variant_bytes = _files(store.path_for("white").parent)
+    private, private_bytes, preset_id, references = _private_state(library, original, tmp_path)
+
+    if operation == "rename":
+        updated = manager.rename_mod(identity, "Renamed", sync_folder=True)
+        assert updated is not None
+        assert updated.name == "Renamed"
+        assert updated.node_id == node.id
+    else:
+        destination = manager.add_character(name="Destination", node_type="character")
+        assert manager.move_mod(identity, destination.id)
+        updated = manager.get_mod(identity)
+        assert updated is not None
+        assert updated.node_id == destination.id
+
+    assert updated.mod_id == identity
+    assert updated.content_hash == content_hash
+    assert Path(updated.path) != original_path
+    assert not original_path.exists()
+    assert Path(updated.path).read_bytes() == body_bytes
+    restored = ModVariantStore(updated.path)
+    assert {variant.variant_id for variant in restored.list()} == {"white", "black"}
+    assert _files(restored.path_for("white").parent) == variant_bytes
+    marker = read_container_marker(Path(updated.path).parent)
+    assert marker is not None and marker["mod_id"] == identity
+    assert private.read_bytes() == private_bytes
+    assert manager.preset_manager.get_preset(preset_id).mod_variants == references
+
+
+def test_update_appends_imported_variants_and_preserves_local_bytes_and_references(library, tmp_path):
+    from src.core.mod_update_transaction import cleanup_update, commit_update
+
+    payload = [_variant().to_dict(), _variant("another", " WHITE ", "9").to_dict()]
+    old, store, plan, prepared = _update(library, tmp_path, payload)
+    originals = {v.variant_id: store.path_for(v.variant_id).read_bytes() for v in store.list()}
+    private, private_bytes, preset_id, references = _private_state(library, old, tmp_path)
+    try:
+        updated = commit_update(library[0], plan, prepared)
+        restored = ModVariantStore(updated.path)
+        assert {v.name for v in restored.list()} == {"White", "Black", "White (2)", "WHITE (3)"}
+        for identity, contents in originals.items():
+            assert restored.path_for(identity).read_bytes() == contents
+        incoming = [v for v in restored.list() if v.variant_id not in originals]
+        assert len(incoming) == 2
+        assert {v.variant_id for v in incoming}.isdisjoint({"white", "another"})
+        assert updated.content_hash != old.content_hash
+        assert private.read_bytes() == private_bytes
+        assert library[0].preset_manager.get_preset(preset_id).mod_variants == references
+    finally:
+        cleanup_update(plan)
+
+
+@pytest.mark.parametrize("failure", ["second-file", "metadata"])
+def test_update_failure_rolls_back_appended_variants_with_resource_moves(library, tmp_path, monkeypatch, failure):
+    from src.core import mod_update_transaction as transaction
+
+    payload = [_variant().to_dict(), _variant("another", "Other", "9").to_dict()]
+    old, store, plan, prepared = _update(library, tmp_path, payload)
+    body = Path(old.path)
+    original_body = body.read_bytes()
+    original_marker = (body.parent / ".d3dxmod").read_bytes()
+    original_variants = _files(body.parent / META_DIR / "variants")
+    if failure == "metadata":
+        monkeypatch.setattr(library[0], "_commit_mod_metadata", lambda _mod: False)
+    else:
+        original_replace = transaction.os.replace
+        written = []
+
+        def replace_file(source, target):
+            if (
+                Path(source).parent.name == "variants"
+                and Path(fs.normal_path(target)).parent == store.path_for("white").parent
+            ):
+                written.append(str(target))
+                if len(written) == 2:
+                    raise OSError("second append failed")
+            return original_replace(source, target)
+
+        monkeypatch.setattr(transaction.os, "replace", replace_file)
+    try:
+        with pytest.raises(OSError):
+            transaction.commit_update(library[0], plan, prepared)
+        assert body.read_bytes() == original_body
+        assert (body.parent / ".d3dxmod").read_bytes() == original_marker
+        assert _files(body.parent / META_DIR / "variants") == original_variants
+        assert library[0].get_mod(old.mod_id).content_hash == old.content_hash
+    finally:
+        transaction.cleanup_update(plan)
+
+
+@pytest.mark.parametrize("collision", ["id", "name"])
+def test_update_rechecks_late_local_variant_collisions(library, tmp_path, collision):
+    from src.core.mod_update_transaction import UpdateContextChanged, cleanup_update, commit_update
+
+    old, store, plan, prepared = _update(library, tmp_path)
+    assert len(prepared.get("variants", [])) == 1
+    staged = ModVariant.from_dict(prepared["variants"][0])
+    late = replace(
+        _variant(),
+        variant_id=staged.variant_id if collision == "id" else "late",
+        name=staged.name if collision == "name" else "Late local",
+    )
+    store.save(late)
+    before = _files(Path(old.path).parent / META_DIR / "variants")
+    body_bytes = Path(old.path).read_bytes()
+    try:
+        with pytest.raises(UpdateContextChanged, match="变体"):
+            commit_update(library[0], plan, prepared)
+        assert _files(Path(old.path).parent / META_DIR / "variants") == before
+        assert Path(old.path).read_bytes() == body_bytes
+    finally:
+        cleanup_update(plan)
+
+
+def test_invalid_update_variants_preserve_existing_local_files(library, tmp_path):
+    from src.core.mod_update_transaction import cleanup_update, make_update_plan
+    from src.core.mod_update_worker import prepare_update
+
+    old, store = _saved_mod(library, tmp_path)
+    variant = _variant().to_dict()
+    variant["variables"].pop()
+    archive = _archive(_share(tmp_path / "Update", [variant], payload=b"new"), tmp_path, "zip")
+    before = _files(Path(old.path).parent)
+    plan = make_update_plan(library[0], old.mod_id, archive, {})
+    try:
+        with pytest.raises((OSError, ValueError), match="变体"):
+            prepare_update(plan, lambda _event: None)
+    finally:
+        cleanup_update(plan)
+    assert _files(Path(old.path).parent) == before
+
+
+@pytest.mark.parametrize("entry", ["plan", "commit"])
+def test_direct_update_scope_blocks_competing_variant_and_preserves_async_token(library, tmp_path, monkeypatch, entry):
+    from src.core import mod_update_transaction as transaction
+    from src.core.library_protection import LibraryOperationBusy
+
+    old, store, plan, prepared = _update(library, tmp_path)
+    manager = library[0]
+    registry = manager._library_protection
+    asynchronous = "update:" + plan["job_id"]
+    registry.protect(asynchronous, paths=(Path(old.path).parent,), mod_ids=(old.mod_id,))
+    check = transaction._check_ownership
+
+    def ownership(*args):
+        check(*args)
+
+        def competing_variant():
+            with pytest.raises(LibraryOperationBusy):
+                with registry.variant_operation("competing", mod_ids=(old.mod_id,), excluding=(asynchronous,)):
+                    pass
+
+        with ThreadPoolExecutor(1) as pool:
+            pool.submit(competing_variant).result()
+
+    monkeypatch.setattr(transaction, "_check_ownership", ownership)
+    other = None
+    try:
+        if entry == "plan":
+            other = transaction.make_update_plan(manager, old.mod_id, plan["archive"], {})
+        else:
+            transaction.commit_update(manager, plan, prepared)
+        assert old.mod_id in registry.snapshot()[1]
+    finally:
+        registry.release(asynchronous)
+        if other:
+            transaction.cleanup_update(other)
+        transaction.cleanup_update(plan)
+
+
+def test_rebuild_restores_persistent_ids_without_changing_variants_or_private_state(library, tmp_path):
+    old, store = _saved_mod(library, tmp_path)
+    private, private_bytes, preset_id, references = _private_state(library, old, tmp_path)
+    before = _files(Path(old.path).parent)
+    assert library[0]._index.delete_mod(old.mod_id)
+    report = library[0].rebuild_index_from_filesystem()
+    assert report.registered == 1
+    rebuilt = library[0].get_mod(old.mod_id)
+    assert rebuilt is not None
+    assert {v.variant_id for v in ModVariantStore(rebuilt.path).list()} == {"white", "black"}
+    assert _files(Path(rebuilt.path).parent) == before
+    assert private.read_bytes() == private_bytes
+    assert library[0].preset_manager.get_preset(preset_id).mod_variants == references
+
+
+def test_rebuild_reports_broken_variant_but_preserves_original_bytes(library, tmp_path):
+    old, store = _saved_mod(library, tmp_path)
+    file = store.path_for("white")
+    file.write_bytes(b"{broken variant")
+    before = _files(Path(old.path).parent)
+    report = library[0].rebuild_index_from_filesystem()
+    assert any("white.json" in problem for problem in report.invalid_metadata)
+    assert _files(Path(old.path).parent) == before
+    assert library[0].get_mod(old.mod_id) is not None
+
+
+@pytest.mark.parametrize("identity", [None, "invalid"])
+def test_rebuild_does_not_invent_identity_for_container_with_saved_variants(library, tmp_path, identity):
+    old, store = _saved_mod(library, tmp_path)
+    assert library[0]._index.delete_mod(old.mod_id)
+    path = Path(old.path).parent / ".d3dxmod"
+    marker = json.loads(path.read_text(encoding="utf-8"))
+    marker["mod_id"] = identity
+    path.write_text(json.dumps(marker), encoding="utf-8")
+    before = _files(path.parent)
+    report = library[0].rebuild_index_from_filesystem()
+    assert report.invalid_metadata
+    assert not library[0].get_mods(library[1].id)
+    assert _files(path.parent) == before
+
+
+@pytest.mark.parametrize("duplicate", ["exact", "case-alias"])
+def test_archive_with_duplicate_variant_member_is_rejected_before_extraction(library, tmp_path, duplicate):
+    source = _share(tmp_path / "Shared")
+    archive = _archive(source, tmp_path, "zip")
+    member = "Shared/.d3dxmeta/variants/white.json"
+    if duplicate == "case-alias":
+        member = "Shared/.d3dxmeta/variants/WHITE.JSON"
+    with zipfile.ZipFile(archive, "a") as stream:
+        if duplicate == "exact":
+            with pytest.warns(UserWarning, match="Duplicate name"):
+                stream.writestr(member, json.dumps(_variant(value="8").to_dict()))
+        else:
+            stream.writestr(member, json.dumps(_variant(value="8").to_dict()))
+    before = archive.read_bytes()
+    service, request = _intake(library, archive)
+    with pytest.raises(IntakeError, match="变体"):
+        service.prepare(request)
+    assert archive.read_bytes() == before
+
+
+def test_archive_cannot_hide_variant_envelope_under_ambiguous_resource_roots(library, tmp_path):
+    source = _share(tmp_path / "Shared")
+    archive = tmp_path / "ambiguous.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        for relative, data in _files(source).items():
+            stream.writestr("Shared/" + relative, data)
+        stream.writestr("unrelated.bin", b"another top level")
+    service, request = _intake(library, archive)
+    with pytest.raises(IntakeError, match="变体"):
+        service.prepare(request)
+
+
+def test_update_cannot_drop_declared_variants_from_worker_result(library, tmp_path):
+    from src.core.mod_update_transaction import cleanup_update, commit_update
+
+    old, store, plan, prepared = _update(library, tmp_path)
+    assert prepared["variants"]
+    prepared["variants"] = []
+    before = Path(old.path).read_bytes()
+    try:
+        with pytest.raises((ValueError, OSError), match="变体"):
+            commit_update(library[0], plan, prepared)
+        assert Path(old.path).read_bytes() == before
+    finally:
+        cleanup_update(plan)
+
+
+def test_update_failed_variant_rollback_retains_recovery_files(library, tmp_path, monkeypatch):
+    from src.core import mod_update_transaction as transaction
+
+    old, store, plan, prepared = _update(library, tmp_path)
+    imported_id = prepared["variants"][0]["variant_id"]
+    original_replace = transaction.os.replace
+    monkeypatch.setattr(library[0], "_commit_mod_metadata", lambda _mod: False)
+
+    def fail_restoring_variant(source, target):
+        if Path(fs.normal_path(source)) == store.path_for(imported_id):
+            raise OSError("cannot restore imported variant")
+        return original_replace(source, target)
+
+    monkeypatch.setattr(transaction.os, "replace", fail_restoring_variant)
+    with pytest.raises(OSError):
+        transaction.commit_update(library[0], plan, prepared)
+    assert (Path(plan["work_root"]) / "recovery_required").is_file()
+    transaction.cleanup_update(plan)
+    assert Path(plan["work_root"]).is_dir()
+    assert store.path_for("white").is_file()
+    assert store.path_for(imported_id).is_file()
+
+
+def test_rediscovery_preserves_variant_ids_and_rejects_unknown_mod_identity(library, tmp_path):
+    old, store = _saved_mod(library, tmp_path)
+    manager, node = library
+    assert manager._index.delete_mod(old.mod_id)
+    service, request = _intake(library, Path(old.path), context="rediscovery")
+    prepared = service.prepare(request)
+    restored = service.commit(prepared)
+    assert restored.mod_id == old.mod_id
+    assert {variant.variant_id for variant in ModVariantStore(restored.path).list()} == {"white", "black"}
+    assert manager._index.delete_mod(old.mod_id)
+    marker_path = Path(old.path).parent / ".d3dxmod"
+    marker = json.loads(marker_path.read_text(encoding="utf-8"))
+    marker.pop("mod_id")
+    marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    before = _files(marker_path.parent)
+    service, request = _intake(library, Path(old.path), context="rediscovery")
+    with pytest.raises((IntakeError, ValueError), match="身份"):
+        service.prepare(request)
+    assert _files(marker_path.parent) == before
+
+
+def test_existing_container_with_malformed_variant_manifest_is_not_downgraded(library, tmp_path):
+    old, store = _saved_mod(library, tmp_path)
+    source = tmp_path / "Copied"
+    shutil.copytree(Path(old.path).parent, source)
+    (source / META_DIR / "info.json").write_text(
+        '{"kind":"' + MANIFEST_KIND + '", "variants":["variants/white.json"], "variants":[]}', encoding="utf-8"
+    )
+    service, request = _intake(library, source)
+    with pytest.raises(IntakeError, match="变体"):
+        service.prepare(request)
+
+
+def test_import_readback_failure_rolls_back_new_container(library, tmp_path, monkeypatch):
+    source = _share(tmp_path / "Source")
+    original_get = ModVariantStore.get
+
+    def get(store, identity):
+        variant = original_get(store, identity)
+        return replace(variant, name="Changed while writing")
+
+    monkeypatch.setattr(ModVariantStore, "get", get)
+    service, request = _intake(library, source, move_source=True)
+    before = _files(source)
+    with pytest.raises(ValueError, match="变体"):
+        service.prepare(request)
+    assert _files(source) == before
+    assert not library[0].get_mods(library[1].id)
+
+
+def test_variant_file_changes_do_not_change_resource_fingerprint(library, tmp_path):
+    old, store = _saved_mod(library, tmp_path)
+    original = Mod.compute_sha1(old.path)
+    store.save(replace(store.get("white"), name="Renamed", variables=_variant(value="5").variables))
+    store.save(_variant("extra", "Extra"))
+    store.delete("black")
+    assert Mod.compute_sha1(old.path) == original == old.content_hash
+
+
+@pytest.mark.parametrize("fmt", ["folder", "zip"])
+def test_exporting_complete_container_uses_its_resource_body(library, tmp_path, fmt):
+    old, store = _saved_mod(library, tmp_path)
+    result = ModExporter().export_one(
+        ExportItem("Shared", str(Path(old.path).parent)), tmp_path / "out", fmt=fmt, include_meta=True
+    )
+    assert result.ok, result.error
+    service, request = _intake(library, Path(result.out_path))
+    imported = service.commit(service.prepare(request))
+    assert imported.content_hash == old.content_hash
+    assert {v.name for v in ModVariantStore(imported.path).list()} == {"White", "Black"}
+
+
+def test_unreadable_original_declarations_cannot_validate_an_empty_variant(library, tmp_path, monkeypatch):
+    old, store = _saved_mod(library, tmp_path)
+    store.delete("black")
+    store.save(replace(store.get("white"), variables=()))
+    source = tmp_path / "Copied"
+    shutil.copytree(Path(old.path).parent, source)
+    list_contents = ArchiveService.list_contents
+    read_all = ArchiveService.read_all_inis
+
+    def unreadable_names(service, path):
+        return [] if Path(path).name == Path(old.path).name else list_contents(service, path)
+
+    def unreadable_inis(service, path):
+        return {} if Path(path).name == Path(old.path).name else read_all(service, path)
+
+    monkeypatch.setattr(ArchiveService, "list_contents", unreadable_names)
+    monkeypatch.setattr(ArchiveService, "read_all_inis", unreadable_inis)
+    service, request = _intake(library, source)
+    with pytest.raises(IntakeError, match="变体"):
+        service.prepare(request)
+
+
+@pytest.mark.parametrize("fmt", ["zip", "7z", "rar"])
+@pytest.mark.parametrize("is_directory", [False, True])
+def test_single_member_archive_extracts_a_directory(tmp_path, fmt, is_directory):
+    archive = _single_member_archive(tmp_path, fmt, is_directory=is_directory)
+    extracted = ArchiveService().extract(archive, tmp_path / "extracted")
+    assert extracted is not None and extracted.is_dir()
+    if is_directory:
+        assert extracted.name == "main.ini"
+        assert not list(extracted.iterdir())
+    else:
+        assert (extracted / "main.ini").read_text(encoding="utf-8") == EXPLICIT_INI
+
+
+@pytest.mark.parametrize("fmt", ["zip", "7z", "rar"])
+@pytest.mark.parametrize("as_folder", [False, True])
+@pytest.mark.parametrize("include_meta", [False, True])
+def test_single_root_ini_container_roundtrip(library, tmp_path, fmt, as_folder, include_meta):
+    manager, node = library
+    archive = _single_member_archive(tmp_path, fmt)
+    mod = manager.import_mod(str(archive), node.id)
+    assert mod is not None
+    assert set(ArchiveService().list_contents(mod.path)) == {"main.ini"}
+    variant = ModVariant(
+        "single",
+        "Single",
+        (
+            VariantVariable("main.ini", "color", "explicit", "2", "portable"),
+            VariantVariable("main.ini", "pattern", "explicit", "3", "portable"),
+        ),
+    )
+    ModVariantStore(mod.path).save(variant)
+    before = _files(Path(mod.path).parent)
+    result = ModExporter().export_one(
+        ExportItem("Shared", str(Path(mod.path).parent)),
+        tmp_path / "out",
+        fmt="folder" if as_folder else fmt,
+        include_meta=include_meta,
+    )
+    assert result.ok, result.error
+    output = Path(result.out_path)
+    extracted = output if output.is_dir() else ArchiveService().extract(output, tmp_path / "inspected")
+    assert extracted is not None and extracted.is_dir()
+    assert (extracted / "main.ini").read_text(encoding="utf-8") == EXPLICIT_INI
+    assert (extracted / META_DIR / "variants" / "single.json").is_file() is include_meta
+    service, request = _intake(library, output)
+    imported = service.commit(service.prepare(request))
+    assert imported.mod_id != mod.mod_id and imported.content_hash == mod.content_hash
+    restored = ModVariantStore(imported.path).list()
+    if include_meta:
+        assert len(restored) == 1
+        assert restored[0].variant_id != "single"
+        assert restored[0].variables == variant.variables
+    else:
+        assert restored == []
+    assert _files(Path(mod.path).parent) == before
