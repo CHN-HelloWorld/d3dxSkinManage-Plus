@@ -178,5 +178,70 @@
       48,
       194
     ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "source_sha256": "19859dcf843d33fdcf8e7cd30d5a2623ad67ed3882201320c34a1735f175e41a",
+    "image_sha256": "e31a6b36135ed0aed361e9be99d12208506d1cccfd377b801da38f8e06e5399b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Inspect a Mod · Information, state and actions",
+    "marks": [
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "Check the Mod name, enabled state and selected variant at the top of its details."
+      },
+      {
+        "box": [
+          2092,
+          1010,
+          732,
+          58
+        ],
+        "label": "Switch between Information, Keys and Variants to inspect each part of the Mod."
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Edit to change the name, author, tags and description.",
+        "box": [
+          2326,
+          1676,
+          122,
+          64
+        ]
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "An enabled Mod shows Disable. Disabling it keeps the original in your library.",
+        "box": [
+          2152,
+          1676,
+          162,
+          64
+        ]
+      }
+    ],
+    "source": "images/final-en/04-Mod信息.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
