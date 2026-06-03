@@ -1,0 +1,66 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "source_sha256": "860df0ef037ec36428213fce9928f819978c11dd8cab42de827c8aec81a96f9d",
+    "image_sha256": "b585f8b225098d9c86c626146857671b37e3bf7d2df6307dac9f2ba50a1dee97",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Add a game · Complete the form",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "Click Add game to open the new-game form on the right.",
+        "box": [
+          2618,
+          20,
+          234,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          798,
+          784,
+          156
+        ],
+        "label": "Enter the game name and English name. The names shown here are examples."
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "Set Mod folder to the deployment folder that your loader actually reads.",
+        "box": [
+          2248,
+          1118,
+          528,
+          60
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "Check the paths, then click Confirm to save the game configuration.",
+        "box": [
+          2074,
+          1198,
+          386,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/01-添加游戏.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  }
+]
