@@ -770,5 +770,110 @@
       48,
       194
     ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "source_sha256": "4efa62bd9bc764a62dc2c8ee25de002b0d850eef340e0b7542ae0fb389ec4b0a",
+    "image_sha256": "e9de8795231ba9d64fe073d0fee2a61070f3c66d78a04b1fa405c58e40615326",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Online proxy · Configure both switches",
+    "marks": [
+      {
+        "box": [
+          816,
+          328,
+          820,
+          94
+        ],
+        "label": "Enable the proxy in the online Mod proxy group."
+      },
+      {
+        "target": "前往代理配置",
+        "label": "Open the general proxy settings, enter the actual proxy address and enable its main switch.",
+        "box": [
+          1526,
+          606,
+          330,
+          68
+        ]
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "Use Mod updates on the left to configure update checks for local Mods.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final-en/15-在线设置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "source_sha256": "0eae031b3eb60fcd41eac5dbe31f0e85e502c94a9c3017b1e2f703b4b91c8b82",
+    "image_sha256": "890be55839d53f0f581a0392624d1c54736b59459548ed03e9965a63455709e9",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Application updates · Check for a new version",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "Check for application updates to view new releases and release notes.",
+        "box": [
+          1526,
+          440,
+          404,
+          68
+        ]
+      },
+      {
+        "box": [
+          816,
+          822,
+          820,
+          110
+        ],
+        "label": "Review the backup option. It backs up application files and does not replace a backup of your Mod data."
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "Choose a download source for your network. Version checks still require a valid release feed.",
+        "box": [
+          1526,
+          1224,
+          620,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/16-程序更新.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
