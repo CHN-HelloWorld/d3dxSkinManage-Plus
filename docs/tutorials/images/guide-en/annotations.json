@@ -451,5 +451,57 @@
       180,
       192
     ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "source_sha256": "6c580086af8b055d0127808803a74414c6820229f8f8c356bc5b090b18d82b12",
+    "image_sha256": "026e3d11c8a0c5bc89ffa6337c8ec352cee72f5d17430cd570997e6bb15e9365",
+    "source_size": [
+      1520,
+      1072
+    ],
+    "size": [
+      1616,
+      1684
+    ],
+    "title": "Edit a Mod · Update information and tags",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "Clear this option to change only the display name. Selecting it also renames the disk item.",
+        "box": [
+          48,
+          344,
+          418,
+          40
+        ]
+      },
+      {
+        "box": [
+          996,
+          368,
+          476,
+          218
+        ],
+        "label": "Add or adjust tags, and check the scope when changing a shared tag."
+      },
+      {
+        "target": "保存修改",
+        "label": "Click Save changes, or press Ctrl+Enter, to save your edits.",
+        "box": [
+          1202,
+          976,
+          274,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/09-编辑Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
