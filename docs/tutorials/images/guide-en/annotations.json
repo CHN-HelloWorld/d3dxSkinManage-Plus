@@ -598,5 +598,124 @@
       48,
       194
     ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "source_sha256": "2b7ba6ae147bf7ea119902e0a1f6a7629ac3eff95499a6ee7dddfe42c7f7175a",
+    "image_sha256": "35385f51e7edf5a29cc889a07e4285e24a57f681b8d7b59726d7cfe1b5ca7833",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Personalization · Theme, language and fonts",
+    "marks": [
+      {
+        "box": [
+          832,
+          334,
+          838,
+          194
+        ],
+        "label": "Choose a light, dark or system theme in the appearance card."
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "Choose your interface language from this list.",
+        "target_en": "English",
+        "box": [
+          1526,
+          954,
+          380,
+          72
+        ]
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "Open the language-pack folder to customize translations, then refresh the list.",
+        "box": [
+          1526,
+          1102,
+          426,
+          68
+        ]
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "Select an interface font and check that text and symbols display correctly.",
+        "box": [
+          1526,
+          1286,
+          526,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/12-设置个性化.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "source_sha256": "c972af2149c42794448d30c663a06402c6638fe0a3a5c40b73f603ea4b7c9684",
+    "image_sha256": "e09e7e9c707422e784f5183c08a9bcf1cda9ec156a9e85feff0edb0e94cbbfbb",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2590
+    ],
+    "title": "Shortcuts · Change the manager's key bindings",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "Open Settings → Shortcuts → Key bindings.",
+        "box": [
+          944,
+          58,
+          210,
+          76
+        ]
+      },
+      {
+        "box": [
+          2072,
+          410,
+          302,
+          52
+        ],
+        "label": "Click a binding to record a new shortcut. Follow the prompt if it conflicts with another action."
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "Restore resets only this shortcut. Reset at the bottom restores all application preferences after confirmation; game configurations and imported Mods are retained.",
+        "box": [
+          2526,
+          518,
+          108,
+          52
+        ]
+      }
+    ],
+    "source": "images/final-en/13-快捷键.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
