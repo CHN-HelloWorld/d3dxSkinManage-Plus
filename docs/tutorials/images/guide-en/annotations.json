@@ -717,5 +717,58 @@
       48,
       194
     ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "source_sha256": "b50386cf35616bc58148b1e202c55445290eca6892cacc5339f88fd014d9030b",
+    "image_sha256": "33d88f4b9b3579fdb9478b726714241fe307376c49299f6b0c07610fbd7f7048",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Import settings · Archive formats and conversion",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "Choose the library archive format used when importing folders.",
+        "box": [
+          1526,
+          472,
+          588,
+          72
+        ]
+      },
+      {
+        "box": [
+          816,
+          480,
+          820,
+          94
+        ],
+        "label": "Review Always use the import format. Enabling it may require extraction and recompression."
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "Use Export on the left for export formats, category folders and metadata options.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final-en/14-导入与导出.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
