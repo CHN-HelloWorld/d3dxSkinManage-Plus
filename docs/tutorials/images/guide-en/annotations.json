@@ -347,5 +347,109 @@
       48,
       194
     ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "source_sha256": "089da221ee5470ac4b1399109972358da9157136ed59054963e56a9ce8066ef9",
+    "image_sha256": "8b376ce83379a44b7d97bbe932b9dbd0c3a55ba9b0c7ad0a5becb7752b7eda8d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Variants · Save different looks for one Mod",
+    "marks": [
+      {
+        "box": [
+          2580,
+          1010,
+          240,
+          58
+        ],
+        "label": "Select a Mod and open Variants."
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "Save the current supported appearance state as a new named variant.",
+        "box": [
+          2092,
+          1050,
+          732,
+          84
+        ]
+      },
+      {
+        "box": [
+          2092,
+          1336,
+          732,
+          204
+        ],
+        "label": "Choose a saved look. The variant currently in use has a status marker."
+      }
+    ],
+    "source": "images/final-en/07-变体管理.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "source_sha256": "3814e662facad7a60f3c42ad3fffd98c639adb73cc317dbb25b5937a734ef6e1",
+    "image_sha256": "2fdcc03b656e95cb026073bfbff7138310c70506ee415258873e68da25deae6d",
+    "source_size": [
+      760,
+      864
+    ],
+    "size": [
+      1120,
+      1476
+    ],
+    "title": "Combination presets · Save and switch loadouts",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "Create a new combination preset here.",
+        "box": [
+          518,
+          26,
+          216,
+          60
+        ]
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "Click Apply beside a preset to switch to its complete loadout.",
+        "box": [
+          542,
+          314,
+          168,
+          60
+        ]
+      },
+      {
+        "box": [
+          26,
+          738,
+          294,
+          60
+        ],
+        "label": "Select a preset before renaming or copying it."
+      }
+    ],
+    "source": "images/final-en/08-组合预设.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      180,
+      192
+    ]
   }
 ]
