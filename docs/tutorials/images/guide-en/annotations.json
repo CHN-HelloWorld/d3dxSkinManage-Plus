@@ -503,5 +503,100 @@
       48,
       192
     ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "source_sha256": "ab98782ff4a8616e5b68d74e04f9d751e3aebcf7254dd89c536a79da1654caf6",
+    "image_sha256": "909eaa9dbcf2b34acd050915b284c6940184169269cd40009f3446b064dd9c51",
+    "source_size": [
+      1520,
+      840
+    ],
+    "size": [
+      1616,
+      1424
+    ],
+    "title": "Category presets · Import or export a category tree",
+    "marks": [
+      {
+        "box": [
+          48,
+          360,
+          694,
+          280
+        ],
+        "label": "Import a .d3dxcp file, then review the destination game and differences in the category tree."
+      },
+      {
+        "box": [
+          772,
+          360,
+          698,
+          280
+        ],
+        "label": "Export the category structure and optional category images. Mod archives are not included."
+      }
+    ],
+    "source": "images/final-en/10-分类预设.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "source_sha256": "56dc779323743167b6e76eb919ad8ab6c73a009d44fb93e97848a83852db3b68",
+    "image_sha256": "b4b48409b93697d8aaf0629a61bcf22cfc7149eb280f22dbbd6a3c640db525db",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "General settings · Deletion and task concurrency",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "Open Settings → General, then select a settings group on the left.",
+        "box": [
+          432,
+          58,
+          188,
+          76
+        ]
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "Choose permanent deletion or the Recycle Bin, and check the operation's scope before proceeding.",
+        "box": [
+          1526,
+          438,
+          610,
+          72
+        ]
+      },
+      {
+        "target": "自动推荐",
+        "label": "Start with Auto recommend if you are unsure, then adjust concurrency to suit your disk.",
+        "box": [
+          1770,
+          652,
+          260,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/11-设置常规.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
