@@ -243,5 +243,109 @@
       48,
       194
     ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "source_sha256": "3ea4b5f22630bd8022cae37e9399224e09afc9dcc5b1be93a94ed66a0afd6531",
+    "image_sha256": "79df721d4b8abc765e10e73a9af5a3943651e4e426de6d660606608c948d46d8",
+    "source_size": [
+      1360,
+      1080
+    ],
+    "size": [
+      1456,
+      1752
+    ],
+    "title": "Import Mods · Choose sources and confirm",
+    "marks": [
+      {
+        "box": [
+          24,
+          86,
+          394,
+          68
+        ],
+        "label": "Use Add Files or Add Folder to select one or more sources."
+      },
+      {
+        "box": [
+          872,
+          174,
+          460,
+          218
+        ],
+        "label": "Review each item's age rating and preview. The destination is the category you opened before importing."
+      },
+      {
+        "target": "确认导入",
+        "label": "Click Confirm Import, then follow progress in the task center at the lower right.",
+        "box": [
+          1076,
+          988,
+          260,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/05-导入Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "source_sha256": "ce1914010286ddbb0dfb0f3dd616fb1f7c7fd1e09566d8376bfd3d36cc6f2e9b",
+    "image_sha256": "4035e6ba8dea52be27219505155047630510b14ec20ef39955c635347d384295",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Mod keys · Record or edit a binding",
+    "marks": [
+      {
+        "box": [
+          2336,
+          1010,
+          238,
+          58
+        ],
+        "label": "Select a Mod and open Keys. These bindings belong to the Mod's INI files."
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "Click the current key to record a new binding, or use the edit icon to type one.",
+        "box": [
+          2414,
+          1174,
+          148,
+          60
+        ]
+      },
+      {
+        "target": "打开文件",
+        "label": "Open the INI file when you need to inspect the surrounding configuration.",
+        "box": [
+          2604,
+          1070,
+          210,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/06-按键设置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
