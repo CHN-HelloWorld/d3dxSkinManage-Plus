@@ -1515,5 +1515,55 @@
       48,
       194
     ]
+  },
+  {
+    "file": "29-在线详情.webp",
+    "source_sha256": "cf48bf3efc48a725b96f34443c30b082983f804edf6b90e53c4a33634f4251c1",
+    "image_sha256": "26f12be115e4589965be5af156738e65ec6f8a66bb78119a8622c5eb13f8f54d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Online details · Read the description and choose a file",
+    "marks": [
+      {
+        "box": [
+          1936,
+          160,
+          302,
+          62
+        ],
+        "label": "Read the author's information in Overview and Description first."
+      },
+      {
+        "box": [
+          1936,
+          1298,
+          796,
+          194
+        ],
+        "label": "Check filenames and sizes. Different files may be versions or optional extras."
+      },
+      {
+        "box": [
+          2770,
+          1316,
+          80,
+          70
+        ],
+        "label": "Click the download button beside the file you want, then choose its installation destination."
+      }
+    ],
+    "source": "images/final-en/29-在线详情.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
