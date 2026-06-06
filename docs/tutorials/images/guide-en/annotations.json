@@ -1309,5 +1309,114 @@
       48,
       194
     ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "source_sha256": "531197abb75e000b4483d8fec7dc28c1400d7bf67de267f43d888823f26f6130",
+    "image_sha256": "8a361b41b6ce0f35fee84346c299677e9a16632b836db8aef42eb3e74ff098a6",
+    "source_size": [
+      1520,
+      1480
+    ],
+    "size": [
+      1616,
+      2180
+    ],
+    "title": "Export a category tree · Name, images and location",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "Enter a preset name for sharing and check the selected game.",
+        "target_en": "示例游戏-category-preset",
+        "box": [
+          50,
+          252,
+          708,
+          72
+        ]
+      },
+      {
+        "target": "包含目录图片",
+        "label": "Include category images if needed. Review the complete export scope in the tree on the right.",
+        "box": [
+          50,
+          494,
+          708,
+          40
+        ]
+      },
+      {
+        "target": "选择…",
+        "label": "Choose an output location and check the resulting filename below.",
+        "box": [
+          584,
+          910,
+          174,
+          60
+        ]
+      },
+      {
+        "target": "开始导出",
+        "label": "Click Start export after completing all required fields.",
+        "box": [
+          1248,
+          1390,
+          222,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/25-分类导出.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "source_sha256": "51c1c818c5c2a5c0f31c6a94ce54efe82d8b2f61a8c79499c5204f2e638a230c",
+    "image_sha256": "5891f7ae610fe15cc866174ae8701b26b7773ea48fe6a0003e9d292708df413a",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Search settings · Jump to an option",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "Type a keyword such as cache in the settings search box.",
+        "target_en": "cache",
+        "box": [
+          2034,
+          172,
+          640,
+          68
+        ]
+      },
+      {
+        "box": [
+          406,
+          222,
+          2398,
+          550
+        ],
+        "label": "Click a result to open its group. Clear the search to return to normal browsing."
+      }
+    ],
+    "source": "images/final-en/26-设置搜索.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
