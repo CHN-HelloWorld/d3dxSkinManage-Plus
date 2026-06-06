@@ -1565,5 +1565,106 @@
       48,
       194
     ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "source_sha256": "fd08b72809b88169b6ecca01057d72d992a0458a7d2218dc3ed5088ac7998ece",
+    "image_sha256": "08102b79dd35cf7770fae487d9b4b9d49707255a0a4caf318b3b955969f95504",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Create a category ① · Open the creation dialog",
+    "marks": [
+      {
+        "box": [
+          18,
+          110,
+          280,
+          78
+        ],
+        "label": "Activate a game, then open Category Overview on the left."
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "On an empty page, click + New Category. With existing content, right-click a blank area and choose New Category.",
+        "box": [
+          822,
+          1072,
+          312,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/30-新建类别入口.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "source_sha256": "3939c3574126fcbabf8519cbb658c483a56b06d9d84eae7f0298b5667f33b481",
+    "image_sha256": "6182a7ef9524f308f5747ed6198491b42b867b39ce8a0c95566219895c58e7fd",
+    "source_size": [
+      1040,
+      1026
+    ],
+    "size": [
+      1136,
+      1818
+    ],
+    "title": "Create a category ② · Fill in and confirm",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "Enter a category name, such as 外观 (Appearance). Add an English name and image if needed.",
+        "target_en": "外观",
+        "box": [
+          370,
+          266,
+          620,
+          72
+        ]
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "Choose a node type. Categories allow multiple enabled Mods; Character/Object nodes enforce mutually exclusive appearances.",
+        "box": [
+          370,
+          534,
+          620,
+          68
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Confirm to create the category, then double-click its new card to enter it.",
+        "box": [
+          810,
+          916,
+          180,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/31-新建类别.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
