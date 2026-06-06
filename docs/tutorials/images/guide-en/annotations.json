@@ -1004,5 +1004,48 @@
       48,
       194
     ]
+  },
+  {
+    "file": "19-关于.webp",
+    "source_sha256": "1e898bfdcdc0f064194c6c2ea022157f4b6c745af6e33e784b05eda5bd1ec91c",
+    "image_sha256": "c9220a6e20b6fefa42e17e14b709699718aa9ebbffef6ccc7ec1358bee03d98e",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "About · Project information and short film",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "Click About at the lower left to open the project information.",
+        "box": [
+          0,
+          1632,
+          346,
+          74
+        ]
+      },
+      {
+        "box": [
+          1664,
+          1048,
+          308,
+          84
+        ],
+        "label": "Click Watch film to play the project film inside the page."
+      }
+    ],
+    "source": "images/final-en/19-关于.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
