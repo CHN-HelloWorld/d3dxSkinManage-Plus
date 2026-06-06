@@ -1,0 +1,1768 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "source_sha256": "860df0ef037ec36428213fce9928f819978c11dd8cab42de827c8aec81a96f9d",
+    "image_sha256": "b585f8b225098d9c86c626146857671b37e3bf7d2df6307dac9f2ba50a1dee97",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Add a game · Complete the form",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "Click Add game to open the new-game form on the right.",
+        "box": [
+          2618,
+          20,
+          234,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          798,
+          784,
+          156
+        ],
+        "label": "Enter the game name and English name. The names shown here are examples."
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "Set Mod folder to the deployment folder that your loader actually reads.",
+        "box": [
+          2248,
+          1118,
+          528,
+          60
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "Check the paths, then click Confirm to save the game configuration.",
+        "box": [
+          2074,
+          1198,
+          386,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/01-添加游戏.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "source_sha256": "aefaba1f17e6688b8f5a5ddf5d2921f0ec2a2291de90ea411c75016eedf876df",
+    "image_sha256": "72ac6d77ae4181ce10d8e1604cd97e484300f52e16d5c6fe50bd73063f3e1456",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Activate a game · Check the current environment",
+    "marks": [
+      {
+        "box": [
+          364,
+          128,
+          356,
+          430
+        ],
+        "label": "Double-click a game card to activate it. Double-click the active game again to deactivate it."
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "Current environment and the Current badge identify the active game.",
+        "box": [
+          2074,
+          1138,
+          782,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          968,
+          784,
+          156
+        ],
+        "label": "Check the loader folder and Mod deployment folder before enabling a Mod."
+      }
+    ],
+    "source": "images/final-en/02-游戏配置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "source_sha256": "7084dd1d6ba22a03cb11a2715b248c489246ed659a3ec95c04d5d18255e291c5",
+    "image_sha256": "ae0470076a9984bb958aef4fc0419e992c551ad29c0029e98e86ef1dfc732b03",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Category Overview · Find categories and common actions",
+    "marks": [
+      {
+        "box": [
+          1408,
+          284,
+          320,
+          400
+        ],
+        "label": "Double-click a category card, such as 外观 (Appearance), to enter it before importing Mods."
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "The breadcrumb shows your current location. Click All to return to the category root.",
+        "box": [
+          408,
+          110,
+          58,
+          64
+        ]
+      },
+      {
+        "box": [
+          364,
+          188,
+          1616,
+          70
+        ],
+        "label": "Search by name, author or tag, and narrow the results with tag and type filters."
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "Use the preset selector to manage the current game's complete Mod loadout.",
+        "target_en": "Default (Default)",
+        "box": [
+          1336,
+          26,
+          320,
+          62
+        ]
+      }
+    ],
+    "source": "images/final-en/03-类别总览.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "source_sha256": "19859dcf843d33fdcf8e7cd30d5a2623ad67ed3882201320c34a1735f175e41a",
+    "image_sha256": "e31a6b36135ed0aed361e9be99d12208506d1cccfd377b801da38f8e06e5399b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Inspect a Mod · Information, state and actions",
+    "marks": [
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "Check the Mod name, enabled state and selected variant at the top of its details."
+      },
+      {
+        "box": [
+          2092,
+          1010,
+          732,
+          58
+        ],
+        "label": "Switch between Information, Keys and Variants to inspect each part of the Mod."
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Edit to change the name, author, tags and description.",
+        "box": [
+          2326,
+          1676,
+          122,
+          64
+        ]
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "An enabled Mod shows Disable. Disabling it keeps the original in your library.",
+        "box": [
+          2152,
+          1676,
+          162,
+          64
+        ]
+      }
+    ],
+    "source": "images/final-en/04-Mod信息.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "source_sha256": "3ea4b5f22630bd8022cae37e9399224e09afc9dcc5b1be93a94ed66a0afd6531",
+    "image_sha256": "79df721d4b8abc765e10e73a9af5a3943651e4e426de6d660606608c948d46d8",
+    "source_size": [
+      1360,
+      1080
+    ],
+    "size": [
+      1456,
+      1752
+    ],
+    "title": "Import Mods · Choose sources and confirm",
+    "marks": [
+      {
+        "box": [
+          24,
+          86,
+          394,
+          68
+        ],
+        "label": "Use Add Files or Add Folder to select one or more sources."
+      },
+      {
+        "box": [
+          872,
+          174,
+          460,
+          218
+        ],
+        "label": "Review each item's age rating and preview. The destination is the category you opened before importing."
+      },
+      {
+        "target": "确认导入",
+        "label": "Click Confirm Import, then follow progress in the task center at the lower right.",
+        "box": [
+          1076,
+          988,
+          260,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/05-导入Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "source_sha256": "ce1914010286ddbb0dfb0f3dd616fb1f7c7fd1e09566d8376bfd3d36cc6f2e9b",
+    "image_sha256": "4035e6ba8dea52be27219505155047630510b14ec20ef39955c635347d384295",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Mod keys · Record or edit a binding",
+    "marks": [
+      {
+        "box": [
+          2336,
+          1010,
+          238,
+          58
+        ],
+        "label": "Select a Mod and open Keys. These bindings belong to the Mod's INI files."
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "Click the current key to record a new binding, or use the edit icon to type one.",
+        "box": [
+          2414,
+          1174,
+          148,
+          60
+        ]
+      },
+      {
+        "target": "打开文件",
+        "label": "Open the INI file when you need to inspect the surrounding configuration.",
+        "box": [
+          2604,
+          1070,
+          210,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/06-按键设置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "source_sha256": "089da221ee5470ac4b1399109972358da9157136ed59054963e56a9ce8066ef9",
+    "image_sha256": "8b376ce83379a44b7d97bbe932b9dbd0c3a55ba9b0c7ad0a5becb7752b7eda8d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Variants · Save different looks for one Mod",
+    "marks": [
+      {
+        "box": [
+          2580,
+          1010,
+          240,
+          58
+        ],
+        "label": "Select a Mod and open Variants."
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "Save the current supported appearance state as a new named variant.",
+        "box": [
+          2092,
+          1050,
+          732,
+          84
+        ]
+      },
+      {
+        "box": [
+          2092,
+          1336,
+          732,
+          204
+        ],
+        "label": "Choose a saved look. The variant currently in use has a status marker."
+      }
+    ],
+    "source": "images/final-en/07-变体管理.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "source_sha256": "3814e662facad7a60f3c42ad3fffd98c639adb73cc317dbb25b5937a734ef6e1",
+    "image_sha256": "2fdcc03b656e95cb026073bfbff7138310c70506ee415258873e68da25deae6d",
+    "source_size": [
+      760,
+      864
+    ],
+    "size": [
+      1120,
+      1476
+    ],
+    "title": "Combination presets · Save and switch loadouts",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "Create a new combination preset here.",
+        "box": [
+          518,
+          26,
+          216,
+          60
+        ]
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "Click Apply beside a preset to switch to its complete loadout.",
+        "box": [
+          542,
+          314,
+          168,
+          60
+        ]
+      },
+      {
+        "box": [
+          26,
+          738,
+          294,
+          60
+        ],
+        "label": "Select a preset before renaming or copying it."
+      }
+    ],
+    "source": "images/final-en/08-组合预设.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      180,
+      192
+    ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "source_sha256": "6c580086af8b055d0127808803a74414c6820229f8f8c356bc5b090b18d82b12",
+    "image_sha256": "026e3d11c8a0c5bc89ffa6337c8ec352cee72f5d17430cd570997e6bb15e9365",
+    "source_size": [
+      1520,
+      1072
+    ],
+    "size": [
+      1616,
+      1684
+    ],
+    "title": "Edit a Mod · Update information and tags",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "Clear this option to change only the display name. Selecting it also renames the disk item.",
+        "box": [
+          48,
+          344,
+          418,
+          40
+        ]
+      },
+      {
+        "box": [
+          996,
+          368,
+          476,
+          218
+        ],
+        "label": "Add or adjust tags, and check the scope when changing a shared tag."
+      },
+      {
+        "target": "保存修改",
+        "label": "Click Save changes, or press Ctrl+Enter, to save your edits.",
+        "box": [
+          1202,
+          976,
+          274,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/09-编辑Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "source_sha256": "ab98782ff4a8616e5b68d74e04f9d751e3aebcf7254dd89c536a79da1654caf6",
+    "image_sha256": "909eaa9dbcf2b34acd050915b284c6940184169269cd40009f3446b064dd9c51",
+    "source_size": [
+      1520,
+      840
+    ],
+    "size": [
+      1616,
+      1424
+    ],
+    "title": "Category presets · Import or export a category tree",
+    "marks": [
+      {
+        "box": [
+          48,
+          360,
+          694,
+          280
+        ],
+        "label": "Import a .d3dxcp file, then review the destination game and differences in the category tree."
+      },
+      {
+        "box": [
+          772,
+          360,
+          698,
+          280
+        ],
+        "label": "Export the category structure and optional category images. Mod archives are not included."
+      }
+    ],
+    "source": "images/final-en/10-分类预设.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "source_sha256": "56dc779323743167b6e76eb919ad8ab6c73a009d44fb93e97848a83852db3b68",
+    "image_sha256": "b4b48409b93697d8aaf0629a61bcf22cfc7149eb280f22dbbd6a3c640db525db",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "General settings · Deletion and task concurrency",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "Open Settings → General, then select a settings group on the left.",
+        "box": [
+          432,
+          58,
+          188,
+          76
+        ]
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "Choose permanent deletion or the Recycle Bin, and check the operation's scope before proceeding.",
+        "box": [
+          1526,
+          438,
+          610,
+          72
+        ]
+      },
+      {
+        "target": "自动推荐",
+        "label": "Start with Auto recommend if you are unsure, then adjust concurrency to suit your disk.",
+        "box": [
+          1770,
+          652,
+          260,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/11-设置常规.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "source_sha256": "2b7ba6ae147bf7ea119902e0a1f6a7629ac3eff95499a6ee7dddfe42c7f7175a",
+    "image_sha256": "35385f51e7edf5a29cc889a07e4285e24a57f681b8d7b59726d7cfe1b5ca7833",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Personalization · Theme, language and fonts",
+    "marks": [
+      {
+        "box": [
+          832,
+          334,
+          838,
+          194
+        ],
+        "label": "Choose a light, dark or system theme in the appearance card."
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "Choose your interface language from this list.",
+        "target_en": "English",
+        "box": [
+          1526,
+          954,
+          380,
+          72
+        ]
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "Open the language-pack folder to customize translations, then refresh the list.",
+        "box": [
+          1526,
+          1102,
+          426,
+          68
+        ]
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "Select an interface font and check that text and symbols display correctly.",
+        "box": [
+          1526,
+          1286,
+          526,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/12-设置个性化.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "source_sha256": "c972af2149c42794448d30c663a06402c6638fe0a3a5c40b73f603ea4b7c9684",
+    "image_sha256": "e09e7e9c707422e784f5183c08a9bcf1cda9ec156a9e85feff0edb0e94cbbfbb",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2590
+    ],
+    "title": "Shortcuts · Change the manager's key bindings",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "Open Settings → Shortcuts → Key bindings.",
+        "box": [
+          944,
+          58,
+          210,
+          76
+        ]
+      },
+      {
+        "box": [
+          2072,
+          410,
+          302,
+          52
+        ],
+        "label": "Click a binding to record a new shortcut. Follow the prompt if it conflicts with another action."
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "Restore resets only this shortcut. Reset at the bottom restores all application preferences after confirmation; game configurations and imported Mods are retained.",
+        "box": [
+          2526,
+          518,
+          108,
+          52
+        ]
+      }
+    ],
+    "source": "images/final-en/13-快捷键.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "source_sha256": "b50386cf35616bc58148b1e202c55445290eca6892cacc5339f88fd014d9030b",
+    "image_sha256": "33d88f4b9b3579fdb9478b726714241fe307376c49299f6b0c07610fbd7f7048",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Import settings · Archive formats and conversion",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "Choose the library archive format used when importing folders.",
+        "box": [
+          1526,
+          472,
+          588,
+          72
+        ]
+      },
+      {
+        "box": [
+          816,
+          480,
+          820,
+          94
+        ],
+        "label": "Review Always use the import format. Enabling it may require extraction and recompression."
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "Use Export on the left for export formats, category folders and metadata options.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final-en/14-导入与导出.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "source_sha256": "4efa62bd9bc764a62dc2c8ee25de002b0d850eef340e0b7542ae0fb389ec4b0a",
+    "image_sha256": "e9de8795231ba9d64fe073d0fee2a61070f3c66d78a04b1fa405c58e40615326",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Online proxy · Configure both switches",
+    "marks": [
+      {
+        "box": [
+          816,
+          328,
+          820,
+          94
+        ],
+        "label": "Enable the proxy in the online Mod proxy group."
+      },
+      {
+        "target": "前往代理配置",
+        "label": "Open the general proxy settings, enter the actual proxy address and enable its main switch.",
+        "box": [
+          1526,
+          606,
+          330,
+          68
+        ]
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "Use Mod updates on the left to configure update checks for local Mods.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final-en/15-在线设置.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "source_sha256": "0eae031b3eb60fcd41eac5dbe31f0e85e502c94a9c3017b1e2f703b4b91c8b82",
+    "image_sha256": "890be55839d53f0f581a0392624d1c54736b59459548ed03e9965a63455709e9",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Application updates · Check for a new version",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "Check for application updates to view new releases and release notes.",
+        "box": [
+          1526,
+          440,
+          404,
+          68
+        ]
+      },
+      {
+        "box": [
+          816,
+          822,
+          820,
+          110
+        ],
+        "label": "Review the backup option. It backs up application files and does not replace a backup of your Mod data."
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "Choose a download source for your network. Version checks still require a valid release feed.",
+        "box": [
+          1526,
+          1224,
+          620,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/16-程序更新.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "17-工具箱.webp",
+    "source_sha256": "65f3bf25f1f89c5c19ddb8a6203463732a6c62f21d76462ef35c9ef0829e7716",
+    "image_sha256": "cffc83ddc8b51501ebc54759d05167a0edf2cfa8bb1cf56b2469ce2eb0e782e3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Tools · Category presets and maintenance",
+    "marks": [
+      {
+        "target": "导入分类预设",
+        "badge": "above",
+        "label": "Import a category tree after reviewing new entries and conflicts.",
+        "box": [
+          456,
+          356,
+          406,
+          72
+        ]
+      },
+      {
+        "target": "导出分类预设",
+        "badge": "above",
+        "label": "Export the current game's complete category tree as a .d3dxcp file.",
+        "box": [
+          880,
+          356,
+          402,
+          72
+        ]
+      },
+      {
+        "target": "重建索引",
+        "class": "QPushButton",
+        "label": "Rebuild the index only if a normal refresh does not resolve the library issue.",
+        "box": [
+          2544,
+          670,
+          246,
+          72
+        ]
+      },
+      {
+        "target": "查看日志",
+        "class": "QPushButton",
+        "label": "Open the log viewer here when troubleshooting or reporting a problem.",
+        "box": [
+          2596,
+          808,
+          194,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/17-工具箱.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "18-插件.webp",
+    "source_sha256": "3dcd37e7926bb8fe70aa1bae7e9b1cb9fd90bf242328b374121da4d85d1fe329",
+    "image_sha256": "7345b3b143787c6e04c29933d8b4a40dce44b492757677b08b0503d3e17c0d23",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Plugins · Install, enable and manage",
+    "marks": [
+      {
+        "target": "安装插件",
+        "label": "Install a plugin archive here. After copying a plugin folder manually, click Rescan.",
+        "box": [
+          1990,
+          32,
+          264,
+          68
+        ]
+      },
+      {
+        "box": [
+          380,
+          394,
+          564,
+          120
+        ],
+        "label": "Select a plugin in the list to see its details on the right."
+      },
+      {
+        "box": [
+          2630,
+          176,
+          176,
+          68
+        ],
+        "label": "Check the source and permissions before enabling it. First-time activation asks you to confirm trust."
+      },
+      {
+        "target": "权限与来源 · 7 项权限",
+        "label": "Expand Permissions and source to review capabilities. Reload and uninstall are below the description.",
+        "target_en": "Permissions and source · 7 permissions",
+        "box": [
+          1044,
+          654,
+          1752,
+          98
+        ]
+      }
+    ],
+    "source": "images/final-en/18-插件.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "19-关于.webp",
+    "source_sha256": "1e898bfdcdc0f064194c6c2ea022157f4b6c745af6e33e784b05eda5bd1ec91c",
+    "image_sha256": "c9220a6e20b6fefa42e17e14b709699718aa9ebbffef6ccc7ec1358bee03d98e",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "About · Project information and short film",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "Click About at the lower left to open the project information.",
+        "box": [
+          0,
+          1632,
+          346,
+          74
+        ]
+      },
+      {
+        "box": [
+          1664,
+          1048,
+          308,
+          84
+        ],
+        "label": "Click Watch film to play the project film inside the page."
+      }
+    ],
+    "source": "images/final-en/19-关于.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "source_sha256": "ba0c221bf140bcba936802747d0b93ff65bd988d8cbd10d901023afc7d1b09fe",
+    "image_sha256": "d71b8dc380f1d3cd8d01ad3f78382af2a97f7f57ba31b2adc3bc3ba3834e0536",
+    "source_size": [
+      1400,
+      1280
+    ],
+    "size": [
+      1496,
+      2012
+    ],
+    "title": "Delete a game · Review what will be removed",
+    "marks": [
+      {
+        "box": [
+          50,
+          268,
+          1300,
+          226
+        ],
+        "label": "Check the resource counts, deployment count and size to confirm the selected game."
+      },
+      {
+        "box": [
+          50,
+          534,
+          1300,
+          426
+        ],
+        "label": "Review each item to be removed, and back up or export anything you want to keep."
+      },
+      {
+        "target": "永久删除",
+        "label": "Permanent deletion bypasses the Recycle Bin. Click Cancel if the scope is unclear.",
+        "box": [
+          1022,
+          1190,
+          328,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/20-删除游戏.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "source_sha256": "2723c513d007112e74477c889a5e3a153b8c159cad3a7ff6193c7c4b195178f2",
+    "image_sha256": "a875cebe6bc1729060bbf5ed4a77930e33ef9005ba225f16771dc58124741e7c",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Gallery · Find a Mod by its preview",
+    "marks": [
+      {
+        "box": [
+          382,
+          182,
+          562,
+          690
+        ],
+        "label": "Click a preview card to locate the Mod in Category Overview. Double-click to toggle its enabled state."
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "Choose how rated previews are displayed. This setting does not delete or disable Mods.",
+        "box": [
+          2564,
+          24,
+          284,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/21-画廊.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "source_sha256": "35c8bc77bb7bc217690eb12dce96b815b848792674d24717fe7e845cddc60133",
+    "image_sha256": "4ae666d4b3e9fc813f4e53cbf1be06785d2122f35fd8f358f3c27edd2b262596",
+    "source_size": [
+      1200,
+      1226
+    ],
+    "size": [
+      1296,
+      1986
+    ],
+    "title": "Add categories in bulk · One entry per row",
+    "marks": [
+      {
+        "box": [
+          294,
+          308,
+          466,
+          90
+        ],
+        "label": "Enter a category name and optional English name for each row."
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "Choose Category or Character/Object. The node type determines whether Mods can coexist.",
+        "box": [
+          712,
+          318,
+          332,
+          68
+        ]
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "Add another row here.",
+        "box": [
+          50,
+          986,
+          266,
+          76
+        ]
+      },
+      {
+        "target": "全部添加",
+        "label": "Check every row, then click Add all to create the entries at the current level.",
+        "box": [
+          930,
+          1116,
+          220,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/22-批量添加.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "source_sha256": "223ff19b6c872a16fe668630f08f7def82e7e6e448f0c45ef30f522f44e74742",
+    "image_sha256": "bc98526c0a72d534fb32d9db04f46213b5b3c7d23c875e046f2d18a2c5143e26",
+    "source_size": [
+      1780,
+      1120
+    ],
+    "size": [
+      1876,
+      1672
+    ],
+    "title": "Logs · Select the session before investigating",
+    "marks": [
+      {
+        "box": [
+          144,
+          22,
+          300,
+          68
+        ],
+        "label": "Choose the application session in which the problem occurred."
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "Keep All to include context before and after an error. A level filter shows only that level.",
+        "box": [
+          524,
+          22,
+          214,
+          68
+        ]
+      },
+      {
+        "target": "打开日志目录",
+        "label": "Open the log folder for complete files, or copy the current contents with Copy.",
+        "box": [
+          1300,
+          22,
+          314,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/23-日志.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "24-在线Mod.webp",
+    "source_sha256": "edc4bbbe2816d16d4c09a8f0471849f48f6cc3cf720d0ef86b1aff66534700f4",
+    "image_sha256": "dadbba2997328d2e67b4ce578e75d1e6b4dbb92721438336f2f15f666721dcb4",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Browse online Mods · Find an entry, then its files",
+    "marks": [
+      {
+        "box": [
+          348,
+          10,
+          1724,
+          64
+        ],
+        "label": "Search by keyword. Use the breadcrumb below to choose an online category."
+      },
+      {
+        "box": [
+          352,
+          182,
+          422,
+          536
+        ],
+        "label": "Click a Mod card to read its description and available downloads."
+      },
+      {
+        "target": "默认",
+        "class": "LeadingIconComboBox",
+        "label": "Use the sorting menu to order entries by newest, recently updated or popularity.",
+        "box": [
+          2066,
+          8,
+          348,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/24-在线Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "source_sha256": "531197abb75e000b4483d8fec7dc28c1400d7bf67de267f43d888823f26f6130",
+    "image_sha256": "8a361b41b6ce0f35fee84346c299677e9a16632b836db8aef42eb3e74ff098a6",
+    "source_size": [
+      1520,
+      1480
+    ],
+    "size": [
+      1616,
+      2180
+    ],
+    "title": "Export a category tree · Name, images and location",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "Enter a preset name for sharing and check the selected game.",
+        "target_en": "示例游戏-category-preset",
+        "box": [
+          50,
+          252,
+          708,
+          72
+        ]
+      },
+      {
+        "target": "包含目录图片",
+        "label": "Include category images if needed. Review the complete export scope in the tree on the right.",
+        "box": [
+          50,
+          494,
+          708,
+          40
+        ]
+      },
+      {
+        "target": "选择…",
+        "label": "Choose an output location and check the resulting filename below.",
+        "box": [
+          584,
+          910,
+          174,
+          60
+        ]
+      },
+      {
+        "target": "开始导出",
+        "label": "Click Start export after completing all required fields.",
+        "box": [
+          1248,
+          1390,
+          222,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/25-分类导出.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "source_sha256": "51c1c818c5c2a5c0f31c6a94ce54efe82d8b2f61a8c79499c5204f2e638a230c",
+    "image_sha256": "5891f7ae610fe15cc866174ae8701b26b7773ea48fe6a0003e9d292708df413a",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Search settings · Jump to an option",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "Type a keyword such as cache in the settings search box.",
+        "target_en": "cache",
+        "box": [
+          2034,
+          172,
+          640,
+          68
+        ]
+      },
+      {
+        "box": [
+          406,
+          222,
+          2398,
+          550
+        ],
+        "label": "Click a result to open its group. Clear the search to return to normal browsing."
+      }
+    ],
+    "source": "images/final-en/26-设置搜索.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "source_sha256": "287573879ea55d80ea4082a5f9590f2140dbb55a6584c40477ac1d41fcdc68ad",
+    "image_sha256": "58e790d69bf3b23c1c06893d631c4adec8f1ebbe1f91f4f43c6e0512212d0b0d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Images and cache · Memory versus disk",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "Open Settings → General → Images and cache.",
+        "box": [
+          432,
+          566,
+          344,
+          80
+        ]
+      },
+      {
+        "target": "清理图片内存",
+        "label": "Clear cached image memory. Images currently displayed stay available; other images reload when needed.",
+        "box": [
+          2442,
+          788,
+          334,
+          68
+        ]
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "Clear regenerable disk caches here; this is not the action for deleting original Mods.",
+        "box": [
+          2498,
+          1442,
+          278,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/27-图片与缓存.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "source_sha256": "64c906e013bb0f647006138dc512275ce53b2ce7881a13332de588361328dd0e",
+    "image_sha256": "31e0a2f56d5e05b505a254f135ebfe278a23977c9e993be38d64292d87f293b3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Window background · Choose a source",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "Open Settings → Personalization → Window background.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      },
+      {
+        "box": [
+          1506,
+          334,
+          444,
+          68
+        ],
+        "label": "Choose Close (off), Image, Video or WE scene, then supply the media or application path for that type."
+      }
+    ],
+    "source": "images/final-en/28-整窗背景.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "29-在线详情.webp",
+    "source_sha256": "cf48bf3efc48a725b96f34443c30b082983f804edf6b90e53c4a33634f4251c1",
+    "image_sha256": "26f12be115e4589965be5af156738e65ec6f8a66bb78119a8622c5eb13f8f54d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Online details · Read the description and choose a file",
+    "marks": [
+      {
+        "box": [
+          1936,
+          160,
+          302,
+          62
+        ],
+        "label": "Read the author's information in Overview and Description first."
+      },
+      {
+        "box": [
+          1936,
+          1298,
+          796,
+          194
+        ],
+        "label": "Check filenames and sizes. Different files may be versions or optional extras."
+      },
+      {
+        "box": [
+          2770,
+          1316,
+          80,
+          70
+        ],
+        "label": "Click the download button beside the file you want, then choose its installation destination."
+      }
+    ],
+    "source": "images/final-en/29-在线详情.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "source_sha256": "fd08b72809b88169b6ecca01057d72d992a0458a7d2218dc3ed5088ac7998ece",
+    "image_sha256": "08102b79dd35cf7770fae487d9b4b9d49707255a0a4caf318b3b955969f95504",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Create a category ① · Open the creation dialog",
+    "marks": [
+      {
+        "box": [
+          18,
+          110,
+          280,
+          78
+        ],
+        "label": "Activate a game, then open Category Overview on the left."
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "On an empty page, click + New Category. With existing content, right-click a blank area and choose New Category.",
+        "box": [
+          822,
+          1072,
+          312,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/30-新建类别入口.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "source_sha256": "3939c3574126fcbabf8519cbb658c483a56b06d9d84eae7f0298b5667f33b481",
+    "image_sha256": "6182a7ef9524f308f5747ed6198491b42b867b39ce8a0c95566219895c58e7fd",
+    "source_size": [
+      1040,
+      1026
+    ],
+    "size": [
+      1136,
+      1818
+    ],
+    "title": "Create a category ② · Fill in and confirm",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "Enter a category name, such as 外观 (Appearance). Add an English name and image if needed.",
+        "target_en": "外观",
+        "box": [
+          370,
+          266,
+          620,
+          72
+        ]
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "Choose a node type. Categories allow multiple enabled Mods; Character/Object nodes enforce mutually exclusive appearances.",
+        "box": [
+          370,
+          534,
+          620,
+          68
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Confirm to create the category, then double-click its new card to enter it.",
+        "box": [
+          810,
+          916,
+          180,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/31-新建类别.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "source_sha256": "235bb4ae9be46bccb62e851ed0406af48a127143afd5af67ee58cf7ee928a79e",
+    "image_sha256": "5f62d9c6cc4c4ac41141809b64ac59cb252f02ace30006a254673a9bc7ce92d9",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Inside a category · Import your first Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "The breadcrumb should show a specific category. This example uses the empty 待整理 (Inbox) category.",
+        "box": [
+          496,
+          110,
+          96,
+          64
+        ]
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "Click Import Mod, drop an archive or folder into the content area, or press Ctrl+I.",
+        "box": [
+          1282,
+          1052,
+          258,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/32-导入入口.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "source_sha256": "e87afdfe36dd7e824fe085c52fb99c80054bacf48cb84fa1712fafc426bc242a",
+    "image_sha256": "9c52ce6ee95f4aed2398b8d492514790935fd400bc379f830306b55c831d15ce",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Enable a Mod · Select it, then enable",
+    "marks": [
+      {
+        "box": [
+          720,
+          284,
+          320,
+          400
+        ],
+        "label": "Click the Mod you want to enable to show its details on the right."
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "Click Enable and wait for deployment. You can also double-click the card, or select it and press Space.",
+        "box": [
+          2156,
+          1676,
+          154,
+          64
+        ]
+      },
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "When deployment finishes, the state becomes Enabled and the action changes to Disable."
+      }
+    ],
+    "source": "images/final-en/33-启用Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  }
+]
