@@ -1141,5 +1141,121 @@
       48,
       194
     ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "source_sha256": "35c8bc77bb7bc217690eb12dce96b815b848792674d24717fe7e845cddc60133",
+    "image_sha256": "4ae666d4b3e9fc813f4e53cbf1be06785d2122f35fd8f358f3c27edd2b262596",
+    "source_size": [
+      1200,
+      1226
+    ],
+    "size": [
+      1296,
+      1986
+    ],
+    "title": "Add categories in bulk · One entry per row",
+    "marks": [
+      {
+        "box": [
+          294,
+          308,
+          466,
+          90
+        ],
+        "label": "Enter a category name and optional English name for each row."
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "Choose Category or Character/Object. The node type determines whether Mods can coexist.",
+        "box": [
+          712,
+          318,
+          332,
+          68
+        ]
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "Add another row here.",
+        "box": [
+          50,
+          986,
+          266,
+          76
+        ]
+      },
+      {
+        "target": "全部添加",
+        "label": "Check every row, then click Add all to create the entries at the current level.",
+        "box": [
+          930,
+          1116,
+          220,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/22-批量添加.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "source_sha256": "223ff19b6c872a16fe668630f08f7def82e7e6e448f0c45ef30f522f44e74742",
+    "image_sha256": "bc98526c0a72d534fb32d9db04f46213b5b3c7d23c875e046f2d18a2c5143e26",
+    "source_size": [
+      1780,
+      1120
+    ],
+    "size": [
+      1876,
+      1672
+    ],
+    "title": "Logs · Select the session before investigating",
+    "marks": [
+      {
+        "box": [
+          144,
+          22,
+          300,
+          68
+        ],
+        "label": "Choose the application session in which the problem occurred."
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "Keep All to include context before and after an error. A level filter shows only that level.",
+        "box": [
+          524,
+          22,
+          214,
+          68
+        ]
+      },
+      {
+        "target": "打开日志目录",
+        "label": "Open the log folder for complete files, or copy the current contents with Copy.",
+        "box": [
+          1300,
+          22,
+          314,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/23-日志.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
