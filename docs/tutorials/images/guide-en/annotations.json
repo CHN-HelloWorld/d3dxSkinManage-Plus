@@ -1418,5 +1418,102 @@
       48,
       194
     ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "source_sha256": "287573879ea55d80ea4082a5f9590f2140dbb55a6584c40477ac1d41fcdc68ad",
+    "image_sha256": "58e790d69bf3b23c1c06893d631c4adec8f1ebbe1f91f4f43c6e0512212d0b0d",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Images and cache · Memory versus disk",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "Open Settings → General → Images and cache.",
+        "box": [
+          432,
+          566,
+          344,
+          80
+        ]
+      },
+      {
+        "target": "清理图片内存",
+        "label": "Clear cached image memory. Images currently displayed stay available; other images reload when needed.",
+        "box": [
+          2442,
+          788,
+          334,
+          68
+        ]
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "Clear regenerable disk caches here; this is not the action for deleting original Mods.",
+        "box": [
+          2498,
+          1442,
+          278,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/27-图片与缓存.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "source_sha256": "64c906e013bb0f647006138dc512275ce53b2ce7881a13332de588361328dd0e",
+    "image_sha256": "31e0a2f56d5e05b505a254f135ebfe278a23977c9e993be38d64292d87f293b3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Window background · Choose a source",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "Open Settings → Personalization → Window background.",
+        "box": [
+          432,
+          390,
+          344,
+          80
+        ]
+      },
+      {
+        "box": [
+          1506,
+          334,
+          444,
+          68
+        ],
+        "label": "Choose Close (off), Image, Video or WE scene, then supply the media or application path for that type."
+      }
+    ],
+    "source": "images/final-en/28-整窗背景.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
