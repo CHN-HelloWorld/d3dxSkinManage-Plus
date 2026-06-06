@@ -875,5 +875,134 @@
       48,
       194
     ]
+  },
+  {
+    "file": "17-工具箱.webp",
+    "source_sha256": "65f3bf25f1f89c5c19ddb8a6203463732a6c62f21d76462ef35c9ef0829e7716",
+    "image_sha256": "cffc83ddc8b51501ebc54759d05167a0edf2cfa8bb1cf56b2469ce2eb0e782e3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Tools · Category presets and maintenance",
+    "marks": [
+      {
+        "target": "导入分类预设",
+        "badge": "above",
+        "label": "Import a category tree after reviewing new entries and conflicts.",
+        "box": [
+          456,
+          356,
+          406,
+          72
+        ]
+      },
+      {
+        "target": "导出分类预设",
+        "badge": "above",
+        "label": "Export the current game's complete category tree as a .d3dxcp file.",
+        "box": [
+          880,
+          356,
+          402,
+          72
+        ]
+      },
+      {
+        "target": "重建索引",
+        "class": "QPushButton",
+        "label": "Rebuild the index only if a normal refresh does not resolve the library issue.",
+        "box": [
+          2544,
+          670,
+          246,
+          72
+        ]
+      },
+      {
+        "target": "查看日志",
+        "class": "QPushButton",
+        "label": "Open the log viewer here when troubleshooting or reporting a problem.",
+        "box": [
+          2596,
+          808,
+          194,
+          72
+        ]
+      }
+    ],
+    "source": "images/final-en/17-工具箱.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "18-插件.webp",
+    "source_sha256": "3dcd37e7926bb8fe70aa1bae7e9b1cb9fd90bf242328b374121da4d85d1fe329",
+    "image_sha256": "7345b3b143787c6e04c29933d8b4a40dce44b492757677b08b0503d3e17c0d23",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "Plugins · Install, enable and manage",
+    "marks": [
+      {
+        "target": "安装插件",
+        "label": "Install a plugin archive here. After copying a plugin folder manually, click Rescan.",
+        "box": [
+          1990,
+          32,
+          264,
+          68
+        ]
+      },
+      {
+        "box": [
+          380,
+          394,
+          564,
+          120
+        ],
+        "label": "Select a plugin in the list to see its details on the right."
+      },
+      {
+        "box": [
+          2630,
+          176,
+          176,
+          68
+        ],
+        "label": "Check the source and permissions before enabling it. First-time activation asks you to confirm trust."
+      },
+      {
+        "target": "权限与来源 · 7 项权限",
+        "label": "Expand Permissions and source to review capabilities. Reload and uninstall are below the description.",
+        "target_en": "Permissions and source · 7 permissions",
+        "box": [
+          1044,
+          654,
+          1752,
+          98
+        ]
+      }
+    ],
+    "source": "images/final-en/18-插件.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
