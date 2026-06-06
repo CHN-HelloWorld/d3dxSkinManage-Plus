@@ -1047,5 +1047,99 @@
       48,
       194
     ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "source_sha256": "ba0c221bf140bcba936802747d0b93ff65bd988d8cbd10d901023afc7d1b09fe",
+    "image_sha256": "d71b8dc380f1d3cd8d01ad3f78382af2a97f7f57ba31b2adc3bc3ba3834e0536",
+    "source_size": [
+      1400,
+      1280
+    ],
+    "size": [
+      1496,
+      2012
+    ],
+    "title": "Delete a game · Review what will be removed",
+    "marks": [
+      {
+        "box": [
+          50,
+          268,
+          1300,
+          226
+        ],
+        "label": "Check the resource counts, deployment count and size to confirm the selected game."
+      },
+      {
+        "box": [
+          50,
+          534,
+          1300,
+          426
+        ],
+        "label": "Review each item to be removed, and back up or export anything you want to keep."
+      },
+      {
+        "target": "永久删除",
+        "label": "Permanent deletion bypasses the Recycle Bin. Click Cancel if the scope is unclear.",
+        "box": [
+          1022,
+          1190,
+          328,
+          60
+        ]
+      }
+    ],
+    "source": "images/final-en/20-删除游戏.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "source_sha256": "2723c513d007112e74477c889a5e3a153b8c159cad3a7ff6193c7c4b195178f2",
+    "image_sha256": "a875cebe6bc1729060bbf5ed4a77930e33ef9005ba225f16771dc58124741e7c",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Gallery · Find a Mod by its preview",
+    "marks": [
+      {
+        "box": [
+          382,
+          182,
+          562,
+          690
+        ],
+        "label": "Click a preview card to locate the Mod in Category Overview. Double-click to toggle its enabled state."
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "Choose how rated previews are displayed. This setting does not delete or disable Mods.",
+        "box": [
+          2564,
+          24,
+          284,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/21-画廊.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
