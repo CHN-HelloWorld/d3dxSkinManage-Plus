@@ -1666,5 +1666,103 @@
       48,
       192
     ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "source_sha256": "235bb4ae9be46bccb62e851ed0406af48a127143afd5af67ee58cf7ee928a79e",
+    "image_sha256": "5f62d9c6cc4c4ac41141809b64ac59cb252f02ace30006a254673a9bc7ce92d9",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "Inside a category · Import your first Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "The breadcrumb should show a specific category. This example uses the empty 待整理 (Inbox) category.",
+        "box": [
+          496,
+          110,
+          96,
+          64
+        ]
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "Click Import Mod, drop an archive or folder into the content area, or press Ctrl+I.",
+        "box": [
+          1282,
+          1052,
+          258,
+          68
+        ]
+      }
+    ],
+    "source": "images/final-en/32-导入入口.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "source_sha256": "e87afdfe36dd7e824fe085c52fb99c80054bacf48cb84fa1712fafc426bc242a",
+    "image_sha256": "9c52ce6ee95f4aed2398b8d492514790935fd400bc379f830306b55c831d15ce",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Enable a Mod · Select it, then enable",
+    "marks": [
+      {
+        "box": [
+          720,
+          284,
+          320,
+          400
+        ],
+        "label": "Click the Mod you want to enable to show its details on the right."
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "Click Enable and wait for deployment. You can also double-click the card, or select it and press Space.",
+        "box": [
+          2156,
+          1676,
+          154,
+          64
+        ]
+      },
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "When deployment finishes, the state becomes Enabled and the action changes to Disable."
+      }
+    ],
+    "source": "images/final-en/33-启用Mod.webp",
+    "language": "en-US",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
