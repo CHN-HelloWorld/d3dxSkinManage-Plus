@@ -304,3 +304,101 @@ class Config:
                 del node[key]
                 dropped.append(path)
         return dropped
+
+    @classmethod
+    def _value_ok(cls, path: str, value: Any, default_val: Any) -> bool:
+        # bool 是 int 的子类，必须先判 bool，否则 True 会被当合法整数放过
+        """按默认类型、选项枚举及资源上下限验证配置值，拒绝整数位置的布尔值。"""
+        if isinstance(default_val, bool):
+            if not isinstance(value, bool):
+                return False
+        elif isinstance(default_val, float):
+            # 时间戳一类的浮点键：JSON 只有一种数字类型，整数写法同样合法
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return False
+        elif isinstance(default_val, int):
+            if isinstance(value, bool) or not isinstance(value, int):
+                return False
+        elif isinstance(default_val, str):
+            if not isinstance(value, str):
+                return False
+        elif isinstance(default_val, list):
+            if not isinstance(value, list):
+                return False
+        if path == "general.language":
+            from src.utils.language_pack import valid_language_code
+
+            return valid_language_code(value)
+        if path == "mods.deploy_concurrency":
+            return 0 <= value <= MAX_DEPLOY_CONCURRENCY
+        if path in ("import.parallel_workers", "export.parallel_workers"):
+            return 0 <= value <= MAX_ARCHIVE_WORKERS
+        if path == "gamebanana.update_check.concurrency":
+            return 0 <= value <= MAX_UPDATE_CONCURRENCY
+        if path == "images.memory_cache_mb":
+            return MIN_IMAGE_CACHE_MB <= value <= MAX_IMAGE_CACHE_MB
+        allowed = cls._allowed_values(path)
+        return not (allowed and value not in allowed)
+
+    @classmethod
+    def _allowed_values(cls, path: str) -> tuple[str, ...] | None:
+        """返回配置项允许的枚举值，包含当前下载镜像；无枚举限制时返回 None。"""
+        if path == "images.memory_cache_mode":
+            return ("auto", "manual")
+        if path == "app_update.download_source":
+            # 镜像 key 由 constants 定义，就地取用避免两处白名单漂移
+            from src.utils.constants import APP_UPDATE_DOWNLOAD_MIRRORS
+
+            return ("auto", *(k for k, _name, _prefix in APP_UPDATE_DOWNLOAD_MIRRORS))
+        return cls._ENUMS.get(path)
+
+    def _rebuild_from_defaults(self, reason: str) -> None:
+        """备份无法解析的设置文件后恢复默认配置。
+
+        备份失败时保留原文件，本次运行使用默认值；仅处理程序设置文件。
+        """
+        logger.error("配置文件无效（%s），已备份并重建默认配置: %s", reason, self._config_path)
+        if backup_invalid_file(self._config_path) is None:
+            logger.error("备份失败，保留原文件不覆盖；本次以默认设置运行")
+            self._data = self._defaults_copy()
+            return
+        self._data = self._defaults_copy()
+        self._save()
+
+    def _save(self) -> bool:
+        """将路径转换为存储形式后原子保存配置，写入失败时记录日志并返回 False。"""
+        try:
+            write_json_atomic(self._config_path, self._map_file_paths(self._data, to_stored_path))
+        except OSError as e:
+            logger.error("配置保存失败: %s", e)
+            return False
+        logger.debug("配置已保存")
+        return True
+
+    # 读写
+
+    @staticmethod
+    def _lookup(root: Any, key: str) -> Any:
+        """按点号分隔的键读取嵌套字典，任一层缺失时返回专用缺失标记。"""
+        node = root
+        for k in key.split("."):
+            if isinstance(node, dict) and k in node:
+                node = node[k]
+            else:
+                return _MISSING
+        return node
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """按点分隔路径读取配置值。
+
+        依次采用用户值、内置默认值和调用方默认值。字典及列表以副本返回，
+        修改配置须通过 set 完成。例如 config.get("general.theme")。
+        """
+        for root in (self._data, self._DEFAULT_SETTINGS):
+            value = self._lookup(root, key)
+            if value is _MISSING:
+                continue
+            if isinstance(value, (dict, list)):
+                return json.loads(json.dumps(value))
+            return value
+        return default
