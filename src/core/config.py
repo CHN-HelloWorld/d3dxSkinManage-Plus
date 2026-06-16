@@ -402,3 +402,64 @@ class Config:
                 return json.loads(json.dumps(value))
             return value
         return default
+
+    def set(self, key: str, value: Any) -> None:
+        """按点号路径更新配置值并补建字典层级，更新模式版本、解析路径后保存。"""
+        keys = key.split(".")
+        node = self._data
+        for k in keys[:-1]:
+            if k not in node or not isinstance(node[k], dict):
+                node[k] = {}
+            node = node[k]
+        node[keys[-1]] = value
+        self._data["schema_version"] = SETTINGS_SCHEMA_VERSION
+        self._data = self._map_file_paths(self._data, resolve_stored_path)
+        self._save()
+
+    def get_all(self) -> dict:
+        """返回顶层配置字典的浅副本，嵌套值仍与当前配置共享。"""
+        return self._data.copy()
+
+    def set_atomic(self, key: str, value: Any) -> bool:
+        """单项事务写入：先写入磁盘再发布，失败不改变当前有效设置。"""
+        candidate = deepcopy(self._data)
+        node = candidate
+        keys = key.split(".")
+        for part in keys[:-1]:
+            if not isinstance(node.get(part), dict):
+                node[part] = {}
+            node = node[part]
+        node[keys[-1]] = deepcopy(value)
+        candidate["schema_version"] = SETTINGS_SCHEMA_VERSION
+        try:
+            write_json_atomic(self._config_path, self._map_file_paths(candidate, to_stored_path))
+        except OSError as exc:
+            logger.error("配置项 %s 保存失败，已保持原值: %s", key, exc)
+            return False
+        self._data = self._map_file_paths(candidate, resolve_stored_path)
+        return True
+
+    def reset(self) -> bool:
+        """恢复程序设置的默认值，成功返回 True。
+
+        仅处理 settings.json，游戏配置由独立存储管理。先持久化再发布到内存，
+        写入失败时返回 False 并保留当前状态，避免界面与磁盘配置不一致。
+        """
+        candidate = self._defaults_copy()
+        try:
+            write_json_atomic(self._config_path, candidate)
+        except OSError as e:
+            logger.error("恢复默认设置失败，已保持原有设置: %s", e)
+            return False
+        self._data = candidate
+        logger.info("程序设置已重置为默认值（游戏配置不受影响）")
+        return True
+
+    def reload(self) -> None:
+        """重新加载配置文件"""
+        self._load()
+
+    @classmethod
+    def instance(cls) -> Config:
+        """获取单例实例"""
+        return cls()
