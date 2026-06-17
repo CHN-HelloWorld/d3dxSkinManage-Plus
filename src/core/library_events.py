@@ -392,3 +392,89 @@ class LibraryEventService:
                 )
         self.locations.release(identity, old)
         self.locations.claim(identity, candidate)
+
+    def accept_source_claim(self, mod_id, old_container, new_container):
+        """所有者提交已验证的移动后撤销旧的缺失证据。"""
+        self.locations.release(mod_id, old_container)
+        self.locations.claim(mod_id, new_container)
+        self._missing.pop(mod_id, None)
+        self._missing_evidence.pop(mod_id, None)
+        getattr(self, "_cleanup_retry_after", {}).pop(mod_id, None)
+
+    def evidence_ready(self, mod_id):
+        """仅在内存中判断是否可以调度，不授权删除。"""
+        pending = self._missing.get(mod_id)
+        evidence = self._missing_evidence.get(mod_id)
+        return bool(
+            pending
+            and not self._tainted
+            and evidence
+            and evidence[0] <= self._completed_batch
+            and evidence[1] == self._root_identity
+        )
+
+    def recover_missing(self, mod_id):
+        """判断原生事件证据是否充分，实时文件检查由 confirm_missing 完成。
+
+        普通删除和创建事件仍需显式审计；此步骤不扫描相邻目录或重复读取最终根目录。
+        """
+        if not self.evidence_ready(mod_id):
+            return False
+        try:
+            target = self.paths.container_path(mod_id)
+            return not self.protected(str(target))
+        except (OSError, ValueError, KeyError, sqlite3.Error):
+            return False
+
+    def missing_retry_after_ms(self, mod_id, *, immediate=True):
+        """返回缺失确认所需等待毫秒数，原生证据充分时可立即重试，未安排时返回 None。"""
+        pending = self._missing.get(mod_id)
+        if immediate and self.evidence_ready(mod_id):
+            return 0
+        if pending and self.clock() < pending[0]:
+            return math.ceil((pending[0] - self.clock()) * 1000) + 1
+        return None
+
+    def recovery_token(self):
+        """返回监听代次、根身份和健康修订组成的恢复校验令牌。"""
+        return self.generation, self._root_identity, self._health_revision
+
+    def accept_recovery(self, token, *, scope_complete=False):
+        """仅在完整审计令牌仍有效且根身份未变时清除监听失效状态。"""
+        if scope_complete and token == self.recovery_token() and self._root_identity:
+            try:
+                info = Path(fs.native_path(self._watched_root)).stat()
+                if (info.st_dev, info.st_ino) != self._root_identity:
+                    return False
+            except OSError:
+                return False
+            self._tainted = False
+            return True
+        return False
+
+    def confirm_missing(self, mod_id, *, generation, scope_complete=False):
+        """完成移动认领审查后才授权调用方执行级联清理。
+
+        等待时间本身不能证明删除；范围完整性必须来自所有者成功完成的恢复检查。
+        部署和预设清理成功前保留索引记录。
+        """
+        pending = self._missing.get(mod_id)
+        if generation != self.generation or not scope_complete or not pending or self._tainted:
+            return False
+        # 原生身份凭据和已完成批次可替代等待期，但仍须重新校验根目录与每个目标。
+        if self.clock() < pending[0] and not self.evidence_ready(mod_id):
+            return False
+        try:
+            path = self.paths.container_path(mod_id)
+            root = self._root(str(path))[1]
+            root_info = Path(fs.native_path(root)).stat()
+            if self._root_identity is not None and (root_info.st_dev, root_info.st_ino) != self._root_identity:
+                return False
+            return (
+                directory_key(str(path)) == directory_key(pending[1])
+                and not self.protected(str(path))
+                and not self._exists(path)
+                and not any(self._exists(p) for p in self.locations.locations(mod_id))
+            )
+        except (OSError, KeyError):
+            return False
