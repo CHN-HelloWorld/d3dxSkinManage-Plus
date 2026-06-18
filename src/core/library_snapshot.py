@@ -169,3 +169,237 @@ class ScanLocation:
     path: str
     node_id: str
     skip_names: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class RelocatedSource:
+    """保存由持久身份重新定位得到的 Mod 正文路径及所属分类。"""
+
+    mod_id: str
+    body: str
+    node_id: str
+
+
+@dataclass(frozen=True)
+class ProbeRequest:
+    """冻结一次后台探测的路径、记录、缓存和事件范围，避免跨线程访问可变管理器。"""
+
+    token: ProbeToken
+    rows: tuple[LibraryRow, ...]
+    library_root: str
+    deploy_roots: tuple[str, ...]
+    cache_root: str
+    scan_locations: tuple[ScanLocation, ...]
+    inventory: DeploymentInventory
+    # 当前部署记录的冻结投影，用于变化检测。
+    records: tuple[tuple[str, str, str, str], ...] = ()
+    mode: str = "full"
+    source_inventory: object = None
+    changed_paths: tuple[str, ...] = ()
+    events: tuple = ()
+    force_source_audit: bool = False
+
+
+@dataclass(frozen=True)
+class CacheEntry:
+    """记录缓存对象的身份、时间、类型和重解析属性，供清理前重新核对。"""
+
+    path: str
+    inode: int
+    device: int
+    modified_ns: int
+    directory: bool
+    reparse: bool
+
+
+@dataclass(frozen=True)
+class CacheCandidate:
+    """保存待清理缓存路径及扫描时的对象凭据集合。"""
+
+    path: str
+    entries: tuple[CacheEntry, ...]
+
+
+@dataclass(frozen=True)
+class ProbeResult:
+    """汇总后台探测的路径状态、身份盘点和清理候选，并保留错误及取消状态。"""
+
+    request: ProbeRequest
+    checks: tuple[PathCheck, ...] = ()
+    inventory: DeploymentInventory = DeploymentInventory()
+    relocated: tuple[RelocatedSource, ...] = ()
+    cache_candidates: tuple[CacheCandidate, ...] = ()
+    source_signature: tuple[tuple[str, int, int], ...] = ()
+    error: str = ""
+    cancelled: bool = False
+    source_inventory: object = None
+
+    @property
+    def token(self):
+        """返回原探测请求的身份令牌，供所有者核对结果是否仍有效。"""
+        return self.request.token
+
+
+@dataclass(frozen=True)
+class ProbeApplyStep:
+    """描述探测发布的单步阶段、目标身份、变化状态和移除数量。"""
+
+    phase: str
+    item_id: str = ""
+    changed: bool = False
+    removed: int = 0
+
+
+def protected_cache_names(rows, cache_root: str, *, should_cancel=None) -> frozenset[str]:
+    """复用不可变记录的纯投影，不缓存文件系统证据。
+
+    调用方可能传入相对路径，因此根目录和工作目录参与缓存键。
+    引用、所有者、根目录或路径变化时，不复用旧保护范围。
+    """
+    root, cwd = path_key(cache_root), os.getcwd()
+    protected = set()
+    for row in rows:
+        if should_cancel is not None and should_cancel():
+            raise InterruptedError("Cache protection collection cancelled")
+        protected.update(_cached_protected_cache_names(row.mod_id, row.preview_images, root, cwd))
+    return frozenset(protected)
+
+
+@lru_cache(maxsize=32768)
+def _cached_protected_cache_names(mod_id: str, preview_images: tuple[str, ...], root: str, _cwd: str) -> frozenset[str]:
+    """仅缓存当前所有者的不可变名称，不依赖其他记录字段。"""
+    protected = {mod_id}
+    for image in preview_images:
+        if not image:
+            continue
+        key = path_key(image)
+        try:
+            if os.path.commonpath((root, key)) == root:
+                parts = Path(os.path.relpath(key, root)).parts
+                if parts and parts[0] not in (".", ".."):
+                    protected.add(parts[0])
+        except ValueError:
+            continue
+    # Windows 文件系统名称比较不区分大小写。
+    return frozenset(os.path.normcase(name) for name in protected)
+
+
+def strict_is_dir(path) -> bool:
+    """保留访问异常，不将其静默转换为路径不存在。"""
+    try:
+        return stat.S_ISDIR(os.stat(fs.native_path(path)).st_mode)
+    except (FileNotFoundError, NotADirectoryError):
+        return False
+
+
+def _source_directories(path, should_cancel):
+    """复用目录项类型，避免逐个查询子项元数据。"""
+    with os.scandir(fs.native_path(path)) as entries:
+        for entry in entries:
+            if should_cancel():
+                raise InterruptedError("Source relocation cancelled")
+            if not entry.name.startswith(".") and entry.is_dir():
+                yield Path(fs.normal_path(entry.path))
+
+
+def bounded_identity_reads(entries, read, should_cancel):
+    """按输入顺序执行身份读取，最多四个读取线程，每批最多提交 32 项。
+
+    关闭迭代器、取消或读取失败时等待活动任务结束；提前停止消费时须显式关闭生成器。
+    """
+    entries = iter(entries)
+    pool = ThreadPoolExecutor(max_workers=4, thread_name_prefix="source-identity")
+
+    def read_current(entry):
+        """在读取单个身份条目前后检查取消请求，防止继续发布已取消任务的结果。"""
+        if should_cancel():
+            raise InterruptedError("Source identity read cancelled")
+        result = read(entry)
+        if should_cancel():
+            raise InterruptedError("Source identity read cancelled")
+        return result
+
+    try:
+        while True:
+            if should_cancel():
+                raise InterruptedError("Source identity read cancelled")
+            batch = tuple(islice(entries, 32))
+            if not batch:
+                break
+            futures = [pool.submit(copy_context().run, read_current, entry) for entry in batch]
+            for future in futures:
+                if should_cancel():
+                    raise InterruptedError("Source identity read cancelled")
+                yield future.result()
+    finally:
+        try:
+            close = getattr(entries, "close", None)
+            if close is not None:
+                close()
+        finally:
+            # 辅助任务必须随探测结束，不能访问已经切换的文件库。
+            pool.shutdown(wait=True, cancel_futures=True)
+
+
+def plan_cache_removal(path: str, should_cancel) -> CacheCandidate:
+    """仅在工作线程枚举，不跟随目录联接或符号链接。"""
+    pending, entries = [path], []
+    while pending:
+        if should_cancel():
+            raise InterruptedError("Cache probe cancelled")
+        item = pending.pop()
+        info = os.lstat(fs.native_path(item))
+        directory = stat.S_ISDIR(info.st_mode)
+        reparse = stat.S_ISLNK(info.st_mode) or bool(getattr(info, "st_file_attributes", 0) & 0x400)
+        entries.append(CacheEntry(item, info.st_ino, info.st_dev, info.st_mtime_ns, directory, reparse))
+        if directory and not reparse:
+            pending.extend(str(child) for child in fs.list_children(item))
+    return CacheCandidate(path, tuple(reversed(entries)))
+
+
+def remove_cache_entry(entry: CacheEntry, ancestors: dict[str, CacheEntry]) -> bool:
+    """按当前清单执行有限删除，保留被替换或新增的内容供下次扫描。"""
+    try:
+        parent = Path(entry.path).parent
+        while path_key(str(parent)) in ancestors:
+            expected = ancestors[path_key(str(parent))]
+            current = os.lstat(fs.native_path(parent))
+            if (current.st_ino, current.st_dev) != (expected.inode, expected.device):
+                return False
+            parent = parent.parent
+        current = os.lstat(fs.native_path(entry.path))
+        if (current.st_ino, current.st_dev) != (entry.inode, entry.device):
+            return False
+        if not entry.directory and current.st_mtime_ns != entry.modified_ns:
+            return False
+        operation = os.rmdir if entry.directory else os.unlink
+        try:
+            operation(fs.native_path(entry.path))
+        except PermissionError:
+            # 预览副本可能保留 Windows 只读属性；修改权限并重试前重新核对身份，
+            # 不得修改已被替换的文件。
+            current = os.lstat(fs.native_path(entry.path))
+            if (current.st_ino, current.st_dev) != (entry.inode, entry.device) or entry.reparse:
+                return False
+            os.chmod(fs.native_path(entry.path), stat.S_IWRITE)
+            operation(fs.native_path(entry.path))
+        return True
+    except (FileNotFoundError, NotADirectoryError):
+        return True
+    except OSError:
+        return False
+
+
+def probe_library(request: ProbeRequest, *, should_cancel=lambda: False) -> ProbeResult:
+    """只读取文件系统，返回不持有数据库或管理器的不可变探测结果。"""
+    try:
+        if should_cancel():
+            return ProbeResult(request, cancelled=True)
+        from src.core.library_inventory import probe_with_inventory
+
+        return probe_with_inventory(request, should_cancel)
+    except InterruptedError:
+        return ProbeResult(request, cancelled=True)
+    except Exception as error:
+        # 读取失败不能作为空清单授权后续删除。
+        return ProbeResult(request, error=f"{type(error).__name__}: {error}")
