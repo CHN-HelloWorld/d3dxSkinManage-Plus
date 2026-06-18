@@ -86,3 +86,98 @@ class DuplicateIntakeError(IntakeError):
 
 class IntakeTargetMissingError(IntakeError):
     """导入期间目标目录或分类被移除。"""
+
+
+def intake_identity(context: str, marker: dict | None = None, *, used=()) -> tuple[str, str]:
+    """使用显式来源类型，不根据其他字段猜测来源。"""
+    now = datetime.now().isoformat()
+    if context == "external":
+        return new_mod_id(used), now
+    if context != "rediscovery":
+        raise IntakeError(f"unknown intake context: {context}")
+    marker = marker or {}
+    try:
+        identity = validate_mod_id(marker.get("mod_id"))
+    except IdentityConflict:
+        identity = new_mod_id(used)
+    timestamp = marker.get("imported_at")
+    return identity, timestamp if valid_imported_at(timestamp) else now
+
+
+@dataclass(frozen=True)
+class IntakePlanningSnapshot:
+    """冻结导入规划使用的游戏、目标目录及现有身份和内容摘要信息。"""
+
+    game_id: str
+    index_stamp: tuple
+    existing_hashes: frozenset[str]
+    existing_mod_ids: frozenset[str]
+
+
+@dataclass(frozen=True)
+class IntakeRequest:
+    """描述导入来源及可选原始文件名、目标和元数据，并携带来源版本和去重依据。"""
+
+    source_path: Path
+    game_id: str
+    node_id: str
+    display_name: str = ""
+    move_source: bool = False
+    destination_path: Path | None = None
+    target_format: str = ""
+    strict_format: bool | None = None
+    classification: tuple[str, ...] = ()
+    resource_dir: str = ""
+    auto_preview: bool = True
+    selected_preview_name: str = ""
+    excluded_previews: tuple[str, ...] = ()
+    age_rating: str = ""
+    gamebanana_metadata: dict | None = None
+    force_age_rating: str = ""
+    existing_hashes: frozenset[str] = frozenset()
+    existing_mod_ids: frozenset[str] = frozenset()
+    context: str = "external"
+    external_copy: bool = False
+    source_version: tuple | None = None
+    source_name: str = ""
+
+
+@dataclass
+class PreparedIntake:
+    """保存已准备的 Mod、文件产物、原始快照和预留资源，供提交或回滚使用。"""
+
+    original_path: Path
+    body_path: Path
+    container_path: Path
+    content_hash: str
+    share_manifest: dict | None
+    preview_paths: list[Path]
+    created_paths: list[Path]
+    source_was_moved: bool
+    request: IntakeRequest = field(repr=False)
+    mod: Mod = field(repr=False)
+    import_source: PreparedImportSource = field(repr=False)
+    preview_cache_path: Path | None = field(default=None, repr=False)
+    source_backup_path: Path | None = field(default=None, repr=False)
+    source_backup_root: Path | None = field(default=None, repr=False)
+    source_marker_snapshot: bytes | None = field(default=None, repr=False)
+    source_sidecar_snapshot: tuple[bool, bytes] | None = field(default=None, repr=False)
+    metadata_version: tuple[bytes | None, bytes | None] | None = field(default=None, repr=False)
+    written_marker: bytes | None = field(default=None, repr=False)
+    written_sidecar: bytes | None = field(default=None, repr=False)
+    operation_temp: Path | None = field(default=None, repr=False)
+    body_version: tuple | None = field(default=None, repr=False)
+    variants: tuple[ModVariant, ...] = field(default=(), repr=False)
+    #: 非空表示随包描述类元数据已整份丢弃（内容完好）；由任务中心明细行展示给用户。
+    metadata_notice: str = ""
+    committed: bool = field(default=False, init=False)
+
+
+class ModIntakeService:
+    """先准备文件，再提交一条数据库记录。"""
+
+    def __init__(self, manager: ModManager) -> None:
+        """绑定管理器并获取其共享身份预留表，以协调多个导入服务实例。"""
+        self._manager = manager
+        with _identity_lock:
+            self._identities = _identity_reservations.setdefault(manager, _IdentityReservations())
