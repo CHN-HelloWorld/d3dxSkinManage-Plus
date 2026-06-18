@@ -194,3 +194,240 @@ def variant_pool(keys) -> frozenset[str]:
     for key in keys:
         pool.update(key_variants(key))
     return frozenset(pool)
+
+
+def key_in_pool(key: str, pool) -> bool:
+    """该键在**任一等价解释**下是否落在 :func:`variant_pool` 里。"""
+    return any(v in pool for v in key_variants(key))
+
+
+def values_equal(left: str, right: str) -> bool:
+    """按数值或文本规则比较两个变量值。
+
+    双方均可解析为浮点数时比较数值，兼容上游 %.9g 输出中的等价表示；
+    其他情况使用不区分大小写的文本比较。
+    """
+    a, b = left.strip(), right.strip()
+    try:
+        fa, fb = float(a), float(b)
+    except ValueError:
+        return a.casefold() == b.casefold()
+    if fa == fb:
+        return True
+    # %.9g 只保留 9 位有效数字，容差按相对精度给，避免 1e-12 级抖动被当成用户改动
+    scale = max(abs(fa), abs(fb), 1.0)
+    return abs(fa - fb) <= scale * 1e-9
+
+
+# 解析
+
+
+def parse_persisted_values(text: str) -> dict[str, str]:
+    """读取 Constants 段中的持久变量键值。
+
+    同一规范键出现不同值时移除该键并报告诊断；重复的相同值可保留。
+    """
+    values: dict[str, str] = {}
+    conflicted: set[str] = set()
+    for _line_no, key, value, _m in _iter_persist_lines(text):
+        if key in conflicted:
+            continue
+        prev = values.get(key)
+        if prev is not None and not values_equal(prev, value):
+            values.pop(key, None)
+            conflicted.add(key)
+            logger.warning("d3dx_user.ini 同键冲突值，已丢弃该键: %s", key)
+            continue
+        values[key] = value
+    return values
+
+
+def duplicate_persisted_keys(text: str) -> tuple[str, ...]:
+    """重复键不能作为新的采集证据，即使值相同。"""
+    seen, duplicates = set(), set()
+    for _, key, _, _ in _iter_persist_lines(text):
+        if key in seen:
+            duplicates.add(key)
+        seen.add(key)
+    return tuple(sorted(duplicates))
+
+
+def _iter_persist_lines(text: str):
+    """产出 ``[Constants]`` 段内每个持久变量行：``(行号, 规范化键, 原始值, match)``。"""
+    section = ""
+    for line_no, line in enumerate(text.splitlines()):
+        m = _SECTION_RE.match(line)
+        if m:
+            section = m.group("name").strip().casefold()
+            continue
+        if section != CONSTANTS_SECTION.casefold():
+            continue
+        m = _PERSIST_LINE_RE.match(line)
+        if not m:
+            continue
+        key = m.group("key")
+        if not key.lstrip().startswith("$"):
+            continue
+        yield line_no, normalize_var_key(key), m.group("value").strip(), m
+
+
+# 稳定读取
+
+
+def read_stable(
+    path: str | Path,
+    *,
+    settle_seconds: float = 0.12,
+    attempts: int = 5,
+    sleep=time.sleep,
+) -> UserIniSnapshot | None:
+    """等待文件大小和修改时间稳定后读取并解析。
+
+    文件不存在时返回 None，保留已保存偏好；观察时间内持续变化时抛出 UserIniUnstableError，
+    避免以尚未写完的内容更新状态。
+    """
+    p = Path(fs.normal_path(path))
+    try:
+        initial = p.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as error:
+        raise UserIniUnstableError(f"{p}: {error}") from error
+    if not stat.S_ISREG(initial.st_mode):
+        raise UserIniUnstableError(tr("用户配置不是普通文件：{p}", p=p))
+
+    last: tuple[int, int, int] | None = None
+    for _ in range(max(1, attempts)):
+        try:
+            st = p.stat()
+        except FileNotFoundError:
+            return None
+        except OSError as error:
+            raise UserIniUnstableError(f"{p}: {error}") from error
+        fingerprint = (st.st_size, st.st_mtime_ns, st.st_ino)
+        if last == fingerprint:
+            break
+        last = fingerprint
+        sleep(settle_seconds)
+    else:
+        raise UserIniUnstableError(str(p))
+
+    try:
+        raw = fs.read_bytes(p)
+        after = p.stat()
+        if (after.st_size, after.st_mtime_ns, after.st_ino) != last or len(raw) != after.st_size:
+            raise UserIniUnstableError(tr("{p}: 文件在读取期间发生变化", p=p))
+    except OSError as e:
+        raise UserIniUnstableError(f"{p}: {e}") from e
+    text, encoding = decode_ini_bytes(raw)
+    return UserIniSnapshot(
+        path=p,
+        text=text,
+        sha256=hashlib.sha256(raw).hexdigest(),
+        encoding=encoding,
+        values=parse_persisted_values(text),
+    )
+
+
+# 局部改写
+
+
+def apply_values(text: str, updates: dict[str, str]) -> str:
+    """把 ``updates``（规范化键 -> 值）写入文本，返回新文本。
+
+    - 已存在的键**只替换值**，保留原有缩进、行内注释和换行风格。
+    - 缺失的键追加到 ``[Constants]`` 段末尾（上游只会写这一个段）；文本里没有该段时
+      在末尾补一个。
+    """
+    if not updates:
+        return text
+    pending = {normalize_var_key(k): v for k, v in updates.items()}
+    aliases = {}
+    for key in pending:
+        for alias in key_variants(key):
+            if alias in aliases and aliases[alias] != key:
+                raise ValueError(tr("目标持久变量存在编码别名冲突"))
+            aliases[alias] = key
+    seen = set()
+    newline = _detect_newline(text)
+    lines = text.splitlines(keepends=True)
+    entries = tuple(_iter_persist_lines(text))
+    canonical_lines = {}
+    for line_no, key, _value, _match in entries:
+        if key in pending:
+            canonical_lines.setdefault(key, line_no)
+
+    for line_no, key, value, m in entries:
+        # 与 remove_keys 使用相同的编码等价匹配，避免重复写入同一个逻辑键。
+        matches = {aliases[v] for v in key_variants(key) if v in aliases}
+        if len(matches) > 1:
+            raise ValueError(tr("目标持久变量存在编码别名冲突"))
+        matched = next(iter(matches), None)
+        if matched is None:
+            continue
+        preferred = canonical_lines.get(matched, line_no)
+        if matched in seen or preferred != line_no:
+            lines[line_no] = ""
+            continue
+        seen.add(matched)
+        new_value = pending[matched]
+        if key == matched and values_equal(value, new_value):
+            continue
+        ending = lines[line_no][len(lines[line_no].rstrip("\r\n")) :]
+        spelling = m.group("key").strip() if key == matched else matched
+        lines[line_no] = f"{m.group('indent')}{spelling} = {new_value}{m.group('trailer')}{ending}"
+
+    pending = {key: value for key, value in pending.items() if key not in seen}
+    result = "".join(lines)
+    if pending:
+        # 按原始物理行插入，保留无关内容中的混合换行。
+        physical = result.splitlines(keepends=True)
+        start, end = -1, len(physical)
+        for number, line in enumerate(physical):
+            section = _SECTION_RE.match(line.lstrip("\ufeff") if number == 0 else line)
+            if section:
+                if start < 0 and section.group("name").strip().casefold() == "constants":
+                    start = number
+                elif start >= 0:
+                    end = number
+                    break
+        addition = "".join(f"{key} = {value}{newline}" for key, value in pending.items())
+        if start < 0:
+            if result and not result.endswith(("\r", "\n")):
+                result += newline
+            result += f"[Constants]{newline}" + addition
+        else:
+            if end and not physical[end - 1].endswith(("\r", "\n")):
+                physical[end - 1] += newline
+            physical.insert(end, addition)
+            result = "".join(physical)
+    return result
+
+
+def remove_keys(text: str, keys) -> str:
+    """移除 [Constants] 中的目标偏好行，使加载器执行原有初始化逻辑。
+
+    不推导或改写声明初值、Constants 命令及 post 命令。
+    待删键和文件中的键可能来自不同编码解释，需通过 key_variants 等价匹配，
+    防止残留偏好覆盖初始值。
+    """
+    pool = variant_pool(keys)
+    if not pool:
+        return text
+    doomed = {line_no for line_no, key, _v, _m in _iter_persist_lines(text) if key_in_pool(key, pool)}
+    if not doomed:
+        return text
+    return "".join(ln for i, ln in enumerate(text.splitlines(keepends=True)) if i not in doomed)
+
+
+def sha256_of(text: str, encoding: str) -> str:
+    """按实际写入字节计算哈希，与 UserIniSnapshot.sha256 一致，供写后校验。"""
+    return hashlib.sha256(encode_ini_text(text, encoding)).hexdigest()
+
+
+# 内部
+
+
+def _detect_newline(text: str) -> str:
+    """优先识别文本中的 CRLF 换行，否则选用 LF 作为写回换行符。"""
+    return "\r\n" if "\r\n" in text else "\n"
