@@ -1651,3 +1651,95 @@ class ModManager:
             for mod_id in disabled:
                 self._emit("mod_disabled", mod_id=mod_id, game_id=self.current_game_id)
         return disabled
+
+    def reconcile_missing_deployments(
+        self, game_id: str | None = None, *, context: ReconcileContext | None = None
+    ) -> list[str]:
+        """确认物理身份后再判断部署是否消失。"""
+        gid = game_id or self.current_game_id
+        try:
+            if self._preset_manager.has_pending_apply(gid):
+                return []
+            return self.reconcile_deployment_locations(gid, context=context)
+        except Exception as error:
+            logger.warning("部署身份对账未完成，保留现有记录：%s", error)
+            return []
+
+    @library_mutation
+    def reconcile_deployment_locations(
+        self,
+        game_id: str | None = None,
+        *,
+        force: bool = False,
+        context: ReconcileContext | None = None,
+        locations=None,
+        rows=None,
+        records=None,
+    ) -> list[str]:
+        """刷新实际路径和状态，保留用户的预设选择。
+
+        每个游戏共用一次目录清单；身份冲突或根目录离线时，在写入数据库前停止。
+        """
+        gid = game_id or self.current_game_id
+        from src.core.deployment_reconcile import reconcile_deployment_records
+
+        result = reconcile_deployment_records(
+            self._index,
+            self._storage,
+            gid,
+            force=force,
+            rows=tuple(context.rows.values()) if context is not None else rows,
+            locations=locations,
+            records=records,
+        )
+        for mod in result.changed:
+            if context is not None:
+                context.update(mod)
+            if self._ini_sync is not None:
+                self._ini_sync.unregister_mod(mod.mod_id)
+                self._ini_sync_refs.pop(mod.mod_id, None)
+            if mod.is_enabled and gid == self.current_game_id:
+                self._register_ini_sync(mod.mod_id, mod.path, mod.deployed_path, (mod.mod_id,))
+            self._emit("mod_enabled" if mod.is_enabled else "mod_disabled", mod_id=mod.mod_id, game_id=gid)
+        return list(result.disabled_ids)
+
+    def _remember_deployment(self, mod: Mod, deploy_path: str | Path) -> None:
+        """只为真实部署目录记录路径；无部署目录的“仅索引启用”不记录源路径。"""
+        if self._storage.get_deploy_dir() is None:
+            mod.forget_deployment()
+            return
+        marker = read_deployment_identity(deploy_path)
+        if marker is None or marker["mod_id"] != mod.mod_id:
+            raise IdentityConflict(tr("部署目录身份不符：{deploy_path}", deploy_path=deploy_path))
+        mod.remember_deployment(deploy_path)
+
+    def _known_deploy_paths(self, mod: Mod, *, force: bool = False) -> list[Path]:
+        """按持久身份定位，不将同名的无关目录视为受管对象。"""
+        locations = self._storage.scan_deployments((mod.deployed_path,) if mod.deployed_path else (), force=force)
+        location = locations.get(mod.mod_id)
+        return [location.path] if location else []
+
+    def _remove_known_deployments(self, mod: Mod, *, capture_changes: bool, locations=None) -> bool:
+        """移除 Mod 所有已知部署位置；任一离线/占用即保留记录等待重试。"""
+        try:
+            targets = (
+                self._known_deploy_paths(mod, force=True)
+                if locations is None
+                else [locations[mod.mod_id].path]
+                if mod.mod_id in locations
+                else []
+            )
+        except (OSError, IdentityConflict) as error:
+            logger.warning("部署身份扫描失败，保留清理凭据 (%s): %s", mod.mod_id, error)
+            return False
+        for target in targets:
+            if not self._storage.undeploy_mod(
+                mod.path,
+                deploy_name=mod.folder_name,
+                capture_changes=capture_changes,
+                deploy_path=target,
+                mod_id=mod.mod_id,
+            ):
+                return False
+        mod.forget_deployment()
+        return True
