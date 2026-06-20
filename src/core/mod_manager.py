@@ -1092,3 +1092,171 @@ class ModManager:
         if game_id != self.current_game_id:
             return
         self._operation_trusted = (game_id, str(self._index.paths.roots.get(game_id, "")))
+
+    def require_mod_operation(self, mod_id, *, metadata=False, deployment=False, full=None, expected=None):
+        """确认源身份及可选元数据和部署，返回访问凭据；完整检查后重读索引以拒绝并发游戏或路径变化。"""
+        mod = self._index.get_mod(mod_id)
+        if mod is None:
+            raise OperationPreflightError(mod_id, "", tr("Mod 记录已不存在"))
+        if full is None:
+            full = getattr(self, "_operation_trusted", False) != (
+                self.current_game_id,
+                str(self._index.paths.roots.get(self.current_game_id, "")),
+            )
+
+        def check():
+            """对冻结的源路径、身份及内容哈希执行预检，供可选的后台检查执行器调用。"""
+            return confirm_source(mod.path, mod.mod_id, mod.content_hash, full=full, expected=expected)
+
+        runner = getattr(self, "operation_check_runner", None)
+        receipt = runner(check) if full and runner is not None else check()
+        current = self._index.get_mod(mod_id)
+        if (
+            current is None
+            or current.game_id != self.current_game_id
+            or current.path != mod.path
+            or current.content_hash != mod.content_hash
+        ):
+            raise OperationPreflightError(mod_id, mod.path, tr("确认期间 Mod 或游戏已变化"))
+        if metadata:
+            confirm_metadata(receipt, expected=mod)
+        if deployment and mod.deployed_path:
+            confirm_deployment(mod.mod_id, mod.deployed_path)
+        return receipt
+
+    def check_mod_operation(self, mod_id, **options):
+        """返回有效预检凭据；预检失败时发布操作错误并返回 None。"""
+        try:
+            return self.require_mod_operation(mod_id, **options)
+        except OperationPreflightError as error:
+            self.report_operation_failure(error)
+            return None
+
+    def check_node_operation(self, node_id, *, children=True, deleting=False):
+        """祖先移动改变子路径前检查整个子树。"""
+        from src.core.operation_preflight import confirm_delete_target, file_version
+
+        path = self._index.paths.node_path(node_id)
+        try:
+            for identity in self.get_subtree_ids(node_id) if children else (node_id,):
+                path = self._index.paths.node_path(identity)
+                try:
+                    file_version(path)
+                except (FileNotFoundError, NotADirectoryError):
+                    if deleting:
+                        continue
+                    raise
+                with access_file(path, write=True, directory=True):
+                    data = json.loads(fs.read_text(path / CATEGORY_MARKER_FILE, encoding="utf-8"))
+                    if not isinstance(data, dict) or data.get("id") != identity:
+                        raise ValueError(tr("类别身份与记录不一致"))
+                for mod in self.get_mods(node_id=identity) if children else ():
+                    if deleting:
+                        confirm_delete_target(mod)
+                    elif self.check_mod_operation(mod.mod_id, metadata=True, deployment=True) is None:
+                        return False
+            return True
+        except (OSError, ValueError) as error:
+            issue = failure("", path, error)
+            issue.node_id = node_id
+            self.report_operation_failure(issue)
+            return False
+
+    @protect_mod_operation(failure_value=None)
+    @library_mutation
+    def toggle_mod(self, mod_id: str, progress_cb=None) -> Mod | None:
+        """预检并固定源文件后切换启用状态，文件操作失败时报告错误并返回 None。"""
+        receipt = self.check_mod_operation(mod_id, metadata=True, deployment=True)
+        if receipt is None:
+            return None
+        try:
+            with access_file(receipt.path, pin=True):
+                receipt.recheck()
+                return self._toggle_mod(mod_id, progress_cb)
+        except OSError as error:
+            self.report_operation_failure(failure(mod_id, receipt.path, error))
+            return None
+
+    def _toggle_mod(self, mod_id: str, progress_cb=None) -> Mod | None:
+        """切换 Mod 启用状态
+
+        启用 → 部署到 3DMigoto Mods 目录 (junction/symlink/copy)
+        禁用 → 从 3DMigoto Mods 目录移除 (源文件不动)
+
+        progress_cb: 可选 ``progress_cb(frac: float)``，启用压缩档时上报解压进度
+            （卡片环形进度）；供后台部署线程驱动。
+        """
+        if self._preset_manager.has_pending_apply(self.current_game_id):
+            logger.warning("预设切换期间忽略 Mod 启停请求: %s", mod_id)
+            return None
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return None
+
+        receipt = self.check_mod_operation(mod_id, metadata=True, deployment=True)
+        if receipt is None:
+            return None
+
+        if mod.is_enabled:
+            # 禁用前先采集运行时变体，再将部署 INI 同步到覆盖文件并注销同步关系。
+            # 采集必须先于部署移除，否则变量声明消失后无法确认用户 INI 中的键归属。
+            self.variants.collect(trigger="mod_disable")
+            try:
+                self._ensure_ini_sync().reconcile_mod(mod.mod_id)
+            except Exception as e:
+                logger.warning("禁用前 ini 删前拉回失败: %s", e)
+            self._ensure_ini_sync().unregister_mod(mod.mod_id)
+            parked = None
+            if self._deployment_has_preset_refs(mod.mod_id, excluding_mod_id=mod.mod_id):
+                active = next(iter(self._known_deploy_paths(mod, force=True)), None)
+                if active is not None:
+                    parked = self._storage.park_deployment(active, mod.mod_id)
+            if parked is not None:
+                mod.remember_deployment(parked)
+            elif not self._remove_known_deployments(mod, capture_changes=True):
+                logger.error("取消部署失败，Mod 保持启用: %s", mod.name)
+                target = next(iter(self._known_deploy_paths(mod)), None)
+                if target is not None:
+                    self._register_ini_sync(mod.mod_id, mod.path, target, (mod.mod_id,))
+                return None
+            mod.disable()
+        else:
+            # 优先恢复已停放的部署，否则部署到 3DMigoto；未配置部署目录时拒绝启用。
+            if self._storage.get_deploy_dir() is None:
+                logger.warning("未配置「Mod 文件夹」，拒绝启用: %s", mod.name)
+                return None
+            deploy_path = self._restore_parked_deployment(mod)
+            if deploy_path is None:
+                try:
+                    deploy_path = self._storage.materialize_deployment(
+                        mod.path,
+                        mod.mod_id,
+                        mod.folder_name or Path(mod.path).stem,
+                        progress_cb=progress_cb,
+                    )
+                except Exception as e:
+                    logger.error("部署 Mod 到 3DMigoto 失败: %s", e)
+                    return None
+            if deploy_path is None:
+                logger.error("部署 Mod 到 3DMigoto 失败: %s", mod.name)
+                return None
+            if self.check_mod_operation(mod_id, full=False, expected=receipt) is None:
+                self._storage.park_deployment(deploy_path, mod_id)
+                return None
+            self._remember_deployment(mod, deploy_path)
+            mod.enable()
+            self._register_ini_sync(mod.mod_id, mod.path, deploy_path, (mod.mod_id,))
+
+        self._persist_mod_deployment_state(mod)
+
+        # 启用后恢复该 Mod 的变体：写容器 override 的 persist 初始值 + 从 d3dx_user.ini
+        # 删掉对应键（留着会盖掉初始值），再把 override 推到部署副本。必须在 update_mod
+        # 之后 —— 隐式 namespace 依赖 mod.deployed_path 已落库。
+        if mod.is_enabled:
+            if not self._restore_variants_after_enable(mod):
+                return None
+        else:
+            self._preset_manager.sync_mod_state(mod, game_id=self.current_game_id)
+
+        self._emit("mod_enabled" if mod.is_enabled else "mod_disabled", mod_id=mod_id, game_id=self.current_game_id)
+        return mod
