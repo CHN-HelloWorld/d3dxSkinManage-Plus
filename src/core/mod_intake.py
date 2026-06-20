@@ -181,3 +181,46 @@ class ModIntakeService:
         self._manager = manager
         with _identity_lock:
             self._identities = _identity_reservations.setdefault(manager, _IdentityReservations())
+
+    def _snapshot_mod_ids(self) -> frozenset[str]:
+        """在主线程读取游戏配置，准备线程仅使用冻结快照。"""
+        indexed = self._manager._index.get_mod_ids()
+        with _identity_lock:
+            self._identities.indexed = set(indexed)
+        return frozenset(indexed)
+
+    def planning_snapshot(self, game_id: str) -> IntakePlanningSnapshot:
+        """采集批量查重信息，不构造完整 Mod 对象。"""
+        index = self._manager._index
+        if index.in_transaction:
+            raise IntakeError("cannot capture intake planning snapshot in a transaction")
+        stamp = index.change_stamp
+        rows = (
+            index._db()
+            .execute("SELECT DISTINCT content_hash FROM mods WHERE game_id=? AND content_hash<>''", (game_id,))
+            .fetchall()
+        )
+        hashes = frozenset(row[0] for row in rows)
+        identities = self._snapshot_mod_ids()
+        if stamp != index.change_stamp:
+            raise IntakeError("index changed during planning snapshot capture")
+        return IntakePlanningSnapshot(game_id, stamp, hashes, identities)
+
+    def _reserve_mod_id(self, request: IntakeRequest, identity: str | None = None) -> str:
+        """在锁内生成或认领未占用身份，重复身份抛出冲突异常。"""
+        with _identity_lock:
+            occupied = self._identities.indexed | self._identities.inflight | request.existing_mod_ids
+            if identity is None:
+                identity = new_mod_id(occupied)
+            elif identity in occupied:
+                raise IdentityConflict(tr("mod_id 身份已被其他 Mod 占用: {identity}", identity=identity))
+            self._identities.inflight.add(identity)
+            return identity
+
+    def _release_mod_id(self, identity: str, *, committed: bool = False) -> None:
+        """释放在途身份预留；已提交身份同时加入已索引集合。"""
+        with _identity_lock:
+            if committed:
+                # 较早请求可能仍持有提交前的快照。
+                self._identities.indexed.add(identity)
+            self._identities.inflight.discard(identity)
