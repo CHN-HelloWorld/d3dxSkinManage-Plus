@@ -166,3 +166,133 @@ class ReconcileReport:
     def changed(self) -> bool:
         """是否有已生效的库状态变化（决定要不要刷新视图）。"""
         return bool(self.claimed or self.removed_sources or self.disabled_deployments)
+
+
+@dataclass
+class RebuildReport:
+    """索引重建的结果汇总。"""
+
+    registered: int = 0  # 重新登记的 Mod 数
+    classified: int = 0  # 成功归类的数
+    unclassified: int = 0  # 归为未分类的项目数。
+    orphans_removed: int = 0  # 对账清理的缺失资源数，由恢复流程汇总。
+    hash_mismatch: int = 0  # 内容与记录版本不一致的项目数。
+    invalid_metadata: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class DisablePlanEntry:
+    """单个 Mod 的禁用作业单，只包含可跨线程传递的值。
+
+    主线程预先决定停放或删除，后台任务按指令执行，不访问数据库及界面。
+    """
+
+    mod_id: str
+    display_name: str
+    body_path: str  # mod.path（源本体，禁用全程只读不写）
+    folder_name: str
+    deploy_targets: tuple[str, ...]  # _known_deploy_paths 的字符串化结果
+    park: bool  # True=停放（别的预设还引用它）；False=直接移除
+    source_receipt: object = None
+
+
+@dataclass
+class DisableStepResult:
+    """一个禁用作业单的执行结果（后台线程产出，主线程消费）。"""
+
+    mod_id: str
+    ok: bool = False
+    parked_path: str = ""  # 非空 = 已停放到该路径（而不是删掉）
+    error: str = ""
+    preflight_error: object = None
+    source_receipt: object = None
+    original_path: str = ""
+
+
+class ModManager:
+    """管理 Mod 导入、启用、禁用和删除。
+
+    所有操作按游戏编号隔离，源资源保存在应用资源库，启用内容通过链接或副本部署到目标目录。
+    """
+
+    _instance: ModManager | None = None
+
+    def __new__(cls) -> ModManager:
+        """返回进程内共享管理器实例，首次分配时标记为尚未初始化。"""
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self) -> None:
+        """首次构造时连接索引、存储和预设生命周期，建立资源保护并恢复分类发布事务。"""
+        if self._initialized:
+            return
+        self._initialized = True
+        self._library_epoch_lock = threading.RLock()
+        self._library_epoch = 0
+        self._library_mutations = 0
+        self._library_probe_events = None
+        self._config = Config()
+        self._game_service = GameService()
+        self._index = ModIndex()
+        self._storage = ModStorage()
+        self._archive = ArchiveService()
+        #: 单 Mod 变体状态门面，惰性建（见 :attr:`variants`）
+        self._variants = None
+
+        # Mod 部署目录由 UI 按「当前游戏」**显式配置的 mods_path** 下发，
+        # 见 MainWindow._apply_migoto_for_current_game → set_deploy_dir。
+        # 不由 3DMigoto 路径推导 `<migoto>/Mods`（那只是 d3dx.ini 的默认值，可被改掉）。
+
+        # 预设管理器（共享 ModIndex 与 ModStorage 实例）
+        from src.core.preset_manager import PresetManager
+
+        self._preset_manager = PresetManager(
+            mod_index=self._index,
+            mod_storage=self._storage,
+        )
+        self._preset_manager.set_deployment_lifecycle_callbacks(
+            before_io=self._before_preset_deployment_io,
+            after_commit=self._after_preset_deployment_commit,
+            after_rollback=self._after_preset_deployment_rollback,
+            on_invalidated=self._on_deployments_invalidated,
+            before_commit=self._before_preset_deployment_commit,
+            on_runtime_rollback=self._rollback_preset_variant_patch,
+            verify_configuration=lambda plan: self.variants.verify_preset_configuration(plan),
+            before_reconcile=lambda gid, **kwargs: self.reconcile_deployment_locations(gid, force=True, **kwargs),
+        )
+        # 组合仅级联引用；命名变体和私有工作状态独立保留。
+
+        # 插件事件观察者：解耦的回调列表，core 不依赖 Qt 或插件层。
+        # PluginManager 在构造时 add_event_listener 接入；动作点经 _emit 派发。
+        self._event_listeners: list = []
+
+        # ini 双向同步器（源 override ↔ 部署副本）。启用 Mod 时 register、
+        # 禁用前 reconcile_mod 拉回再 unregister、退出 stop。惰性建，避免无部署时白起 Observer。
+        self._ini_sync = None
+        # 部署→源 override 同步发生时的通知回调（UI 用来刷新按键面板）。
+        # 在 watchdog 后台线程被调用 → UI 侧回调必须自行跨线程 marshal 到主线程。
+        self._ini_sync_notify = None
+        self._ini_sync_refs: dict[str, tuple[str, ...]] = {}
+        # 外部删除源容器后若部署文件暂被占用，Mod 记录会作为耐久清理凭据保留；UI 据此
+        # 安排短间隔重试，应用重启后首次文件系统对账也会继续处理。
+        self._pending_source_cleanup = False
+        # 记录已准备但尚未提交的 Mod 身份，使孤立文件清理保留对应缓存。
+        # 登记由纳管服务在准备、提交和回滚时维护，后台访问须加锁。
+        self._inflight_mod_ids: set[str] = set()
+        self._inflight_lock = threading.Lock()
+        from src.core.library_protection import LibraryProtection
+
+        self._library_protection = LibraryProtection()
+        # 启动监控和导入前恢复分类发布，未解决的凭据继续保护对应路径。
+        self.category_preset_recovery_errors = ()
+        if self._index._conn is not None:
+            from src.core.category_preset_service import CategoryPresetService
+
+            self.category_preset_recovery_errors = CategoryPresetService(self).recover_pending()
+            if self.category_preset_recovery_errors:
+                logger.error("分类预设有未完成恢复的路径：%s", "、".join(self.category_preset_recovery_errors))
+        # 重建索引本轮登记的在途 id（plan 分配 → apply 落库后注销）。重建也会在入库前
+        # 把预览提取到 preview_cache/<new_id>/，与导入共用上面那套豁免。
+        self._rebuild_inflight_ids: set[str] = set()
