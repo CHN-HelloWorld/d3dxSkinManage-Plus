@@ -564,3 +564,136 @@ class ModManager:
                 node.thumbnail = str(self._index.paths.resolve_image(node.id, json.loads(node.thumbnail)))
             result.append(node)
         return result
+
+    @library_mutation
+    def add_character(
+        self, name: str, name_en: str = "", game_id: str | None = None, parent_id: str = "", node_type: str = "category"
+    ) -> Node | None:
+        """同时创建分类记录、目录和标记；失败回滚记录及本次新建空目录，返回 None。"""
+        gid = game_id or self.current_game_id
+        if not _is_valid_category_name(name) or node_type not in _CATEGORY_NODE_TYPES:
+            return None
+        conn = self._index._db()
+        destination = None
+        created = False
+        try:
+            parent = self._get_character_library(parent_id, gid, create=False)
+            destination = parent / name
+            if fs.exists(destination):
+                raise FileExistsError(destination)
+            node = Node(
+                id=str(uuid.uuid4()),
+                game_id=gid,
+                name=name,
+                name_en=name_en,
+                parent_id=parent_id or None,
+                directory_name=name,
+                node_type=node_type,
+            )
+            conn.execute(
+                "INSERT INTO nodes(id,game_id,parent_id,directory_name,name,name_en,node_type) VALUES(?,?,?,?,?,?,?)",
+                (node.id, gid, node.parent_id, name, name, name_en, node_type),
+            )
+            fs.ensure_dir(destination)
+            created = True
+            if not self._ensure_category_marker(node.id, gid):
+                raise OSError(tr("类别 marker 写入失败"))
+            conn.commit()
+            return node
+        except Exception as error:
+            conn.rollback()
+            if created and destination is not None:
+                try:
+                    marker = destination / CATEGORY_MARKER_FILE
+                    if fs.is_file(marker):
+                        fs.unlink(marker)
+                    if fs.is_empty_dir(destination):
+                        fs.rmdir(destination)
+                except OSError:
+                    logger.exception("恢复类别创建失败")
+            logger.error("创建类别失败: %s", error)
+            return None
+
+    def _ensure_category_marker(self, node_id: str, game_id: str | None = None) -> bool:
+        """由节点记录生成并校验标记，以同目录临时文件原子替换，失败返回 False 并清理临时文件。"""
+        row = (
+            self._index._db()
+            .execute("SELECT * FROM nodes WHERE id=? AND game_id=?", (node_id, game_id or self.current_game_id))
+            .fetchone()
+        )
+        if row is None:
+            return False
+        temporary = None
+        try:
+            payload = {
+                "schema": CATEGORY_SCHEMA_VERSION,
+                "kind": CATEGORY_KIND,
+                "id": node_id,
+                "name": row["name"],
+                "name_en": row["name_en"],
+                "node_type": row["node_type"],
+                "sort_order": row["sort_order"],
+                "thumbnail": json.loads(row["thumbnail"]) if row["thumbnail"] else None,
+            }
+            self._validate_category_marker(payload)
+            target = self._get_character_library(node_id, game_id) / CATEGORY_MARKER_FILE
+            temporary = target.with_name(target.name + "." + uuid.uuid4().hex + ".tmp")
+            fs.write_text(temporary, json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+            os.replace(fs.native_path(temporary), fs.native_path(target))
+            return True
+        except Exception as error:
+            logger.error("写入类别 marker 失败: %s", error)
+            return False
+        finally:
+            if temporary is not None:
+                try:
+                    fs.unlink(temporary, missing_ok=True)
+                except OSError:
+                    pass
+
+    @staticmethod
+    def _read_category_marker(dir_path: str | Path) -> dict | None:
+        """读取并校验分类标记；文件缺失返回 None，读取或格式无效时抛出元数据错误。"""
+        marker = Path(dir_path) / CATEGORY_MARKER_FILE
+        try:
+            data = json.loads(fs.read_text(marker, encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except (OSError, ValueError) as error:
+            raise InvalidManagedMetadataError(
+                tr("无法读取类别 marker: {marker}: {error}", marker=marker, error=error)
+            ) from error
+        return ModManager._validate_category_marker(data)
+
+    @staticmethod
+    def _validate_category_marker(data: object) -> dict:
+        """校验分类身份、类型及节点内缩略图引用，补齐可选字段；无效结构抛出元数据错误。"""
+        from src.core.library_schema import valid_relative
+
+        if not isinstance(data, dict) or data.get("kind") != CATEGORY_KIND:
+            raise InvalidManagedMetadataError(tr("类别 marker kind 无效"))
+        if not isinstance(data.get("id"), str) or not data["id"].strip():
+            raise InvalidManagedMetadataError(tr("类别 marker id 无效"))
+        if not isinstance(data.get("node_type"), str) or data.get("node_type") not in _CATEGORY_NODE_TYPES:
+            raise InvalidManagedMetadataError(tr("类别 marker node_type 无效"))
+        if not isinstance(data.get("name"), str):
+            raise InvalidManagedMetadataError(tr("类别 marker name 无效"))
+        if not isinstance(data.get("name_en"), str):
+            data["name_en"] = ""
+        if type(data.get("sort_order")) is not int:
+            data["sort_order"] = 0
+        image = data.get("thumbnail")
+        if image is not None and (
+            not isinstance(image, dict) or image.get("scope") != "node" or not valid_relative(image.get("path"))
+        ):
+            raise InvalidManagedMetadataError(tr("类别 thumbnail 必须是节点内逻辑引用"))
+        return data
+
+    def _refresh_markers_from_db(self, game_id: str | None = None) -> int:
+        """以 DB 当前角色树为真相源，刷新全部类别 marker。"""
+        gid = game_id or self.current_game_id
+        n = 0
+        for c in self.get_characters(gid):
+            if self._ensure_category_marker(c.id, gid):
+                n += 1
+        return n
