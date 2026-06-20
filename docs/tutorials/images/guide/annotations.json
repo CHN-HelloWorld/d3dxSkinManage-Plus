@@ -1,0 +1,66 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "source_sha256": "f01e40607369e280d9322abadbdb66165abd8e2c1ff795b5a58382caf2961017",
+    "image_sha256": "333fdb8352b26f55020634b24979946f165f9915cf02cc1ffbc59c775b283ec3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "添加游戏 · 填写后确认",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "点击「添加游戏」，右侧会出现新游戏的填写区域。",
+        "box": [
+          2640,
+          20,
+          212,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          798,
+          784,
+          156
+        ],
+        "label": "填写游戏名称和英文名称；图中的名称仅作示例。"
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "「Mod 文件夹」填写加载器实际读取的部署目录。",
+        "box": [
+          2230,
+          1118,
+          546,
+          60
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "检查路径后点击「确认」，保存游戏配置。",
+        "box": [
+          2074,
+          1198,
+          386,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/01-添加游戏.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  }
+]
