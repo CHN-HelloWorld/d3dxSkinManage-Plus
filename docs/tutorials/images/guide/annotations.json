@@ -177,5 +177,70 @@
       48,
       194
     ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "source_sha256": "d7dd025571e196242a096b18e3000ddaa8cb4343f41334f7351488ccc4c5ce28",
+    "image_sha256": "6aa5095d7b0a1704bf66eb03ab916ec0c9b7633be9b430bd2bb7035f290826bd",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "查看 Mod · 信息、状态与操作",
+    "marks": [
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "在详情顶部核对 Mod 名称、启用状态及所用变体。"
+      },
+      {
+        "box": [
+          2092,
+          1010,
+          732,
+          58
+        ],
+        "label": "切换「信息」「按键」「变体」标签，查看对应内容。"
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "点击「编辑」修改名称、作者、标签和描述等信息。",
+        "box": [
+          2292,
+          1752,
+          124,
+          64
+        ]
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "已启用时按钮显示「禁用」；禁用后 Mod 仍保留在资源库。",
+        "box": [
+          2156,
+          1752,
+          124,
+          64
+        ]
+      }
+    ],
+    "source": "images/final/04-Mod信息.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
