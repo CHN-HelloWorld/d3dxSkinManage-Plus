@@ -697,3 +697,206 @@ class ModManager:
             if self._ensure_category_marker(c.id, gid):
                 n += 1
         return n
+
+    @library_mutation
+    def rebuild_character_tree_from_markers(self, game_id: str | None = None) -> int:
+        """通过显式审计恢复物理层级与唯一标记身份。"""
+        gid = game_id or self.current_game_id
+        root = self._get_character_library("", gid, create=False)
+        found = []
+        for directory, children, files in fs.walk(root):
+            children[:] = sorted(c for c in children if not c.startswith("."))
+            path = Path(directory)
+            if path == root:
+                continue
+            if CATEGORY_MARKER_FILE not in files:
+                children[:] = []
+                continue
+            try:
+                marker = self._read_category_marker(path)
+                if marker:
+                    found.append((path, marker))
+            except InvalidManagedMetadataError as error:
+                children[:] = []
+                logger.warning("节点 marker 无法核验: %s", error)
+        counts = {}
+        for path, marker in found:
+            counts[marker["id"]] = counts.get(marker["id"], 0) + 1
+        parent_ids = {root: None}
+        conn = self._index._db()
+        added = 0
+        for path, marker in sorted(found, key=lambda pair: len(pair[0].parts)):
+            identity = marker["id"]
+            if counts[identity] != 1 or path.parent not in parent_ids:
+                logger.warning("节点身份重复或父级未确认: %s", path)
+                continue
+            existing = conn.execute("SELECT game_id FROM nodes WHERE id=?", (identity,)).fetchone()
+            if existing is not None and existing["game_id"] != gid:
+                logger.warning("跨游戏节点身份冲突: %s", identity)
+                continue
+            try:
+                conn.execute(
+                    (
+                        "INSERT INTO nodes(id,game_id,parent_id,directory_name,name,name_en,node_type,sor"
+                        "t_order,thumbnail) VALUES(?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
+                        "parent_id=excluded.parent_id,directory_name=excluded.directory_name"
+                    ),
+                    (
+                        identity,
+                        gid,
+                        parent_ids[path.parent],
+                        path.name,
+                        marker["name"],
+                        marker["name_en"],
+                        marker["node_type"],
+                        marker["sort_order"],
+                        json.dumps(marker["thumbnail"], ensure_ascii=False) if marker.get("thumbnail") else "",
+                    ),
+                )
+                parent_ids[path] = identity
+                added += existing is None
+            except Exception as error:
+                logger.warning("恢复节点位置失败 (%s): %s", identity, error)
+        conn.commit()
+        return added
+
+    @protect_node_operation
+    @library_mutation
+    def update_character(self, char_id: str, name: str, name_en: str = "", node_type: str | None = None) -> bool:
+        """更新分类名称和类型并同步目录及标记，失败恢复原件；提交后修复后代部署引用。"""
+        if not self.check_node_operation(char_id):
+            return False
+        gid = self.current_game_id
+        current = self.get_character(char_id, gid)
+        if current is None or not _is_valid_category_name(name):
+            return False
+        kind = current.node_type if node_type is None else node_type
+        if kind not in _CATEGORY_NODE_TYPES:
+            return False
+        conn = self._index._db()
+        old_path = self._get_character_library(char_id, gid, create=False)
+        new_path = old_path.parent / name
+        moved = False
+        marker = old_path / CATEGORY_MARKER_FILE
+        marker_bytes = None
+        try:
+            marker_bytes = fs.read_bytes(marker)
+            if old_path != new_path and fs.exists(new_path):
+                raise FileExistsError(new_path)
+            conn.execute(
+                "UPDATE nodes SET name=?,name_en=?,directory_name=?,node_type=? WHERE id=?",
+                (name, name_en, name, kind, char_id),
+            )
+            if old_path != new_path:
+                os.rename(fs.native_path(old_path), fs.native_path(new_path))
+                moved = True
+            if not self._ensure_category_marker(char_id, gid):
+                raise OSError(tr("刷新类别 marker 失败"))
+            conn.commit()
+        except Exception as error:
+            conn.rollback()
+            try:
+                if moved:
+                    os.rename(fs.native_path(new_path), fs.native_path(old_path))
+                if marker_bytes is not None:
+                    fs.write_bytes(marker, marker_bytes)
+            except OSError:
+                logger.exception("类别改名恢复失败")
+            logger.error("类别更新失败: %s", error)
+            return False
+        return self._repair_deployment_links_for_subtree(char_id)
+
+    @library_mutation
+    def update_character_thumbnail(self, char_id: str, thumbnail_path: str) -> bool:
+        """将外部缩略图复制为节点资产并保存逻辑引用，空路径清除选择；失败尝试恢复标记及新增文件。"""
+        if not self.check_node_operation(char_id, children=False):
+            return False
+        conn = self._index._db()
+        node = self.get_character(char_id)
+        if node is None:
+            return False
+        copied = None
+        marker = self._get_character_library(char_id, create=False) / CATEGORY_MARKER_FILE
+        old_marker = None
+        try:
+            old_marker = fs.read_bytes(marker)
+            reference = None
+            if thumbnail_path:
+                root = self._get_character_library(char_id, create=False)
+                image = Path(thumbnail_path)
+                try:
+                    relative = image.relative_to(root)
+                except ValueError:
+                    # 将外部选择的资源保存为节点拥有的资产。
+                    copied = root / META_DIR / ("thumbnail-" + uuid.uuid4().hex + image.suffix)
+                    fs.ensure_dir(copied.parent)
+                    shutil.copy2(fs.native_path(image), fs.native_path(copied))
+                    relative = copied.relative_to(root)
+                from src.core.library_schema import valid_relative
+
+                if not valid_relative(relative.as_posix()):
+                    raise ValueError(tr("缩略图路径越界"))
+                reference = {"scope": "node", "path": relative.as_posix()}
+            conn.execute(
+                "UPDATE nodes SET thumbnail=? WHERE id=?",
+                (json.dumps(reference, ensure_ascii=False) if reference else "", char_id),
+            )
+            if not self._ensure_category_marker(char_id):
+                raise OSError(tr("缩略图 marker 写入失败"))
+            conn.commit()
+            return True
+        except Exception as error:
+            conn.rollback()
+            if old_marker is not None:
+                fs.write_bytes(marker, old_marker)
+            if copied is not None:
+                fs.unlink(copied, missing_ok=True)
+            logger.error("更新缩略图失败: %s", error)
+            return False
+
+    @protect_node_operation
+    @library_mutation
+    def delete_character(self, char_id: str) -> bool:
+        """递归删除子分类及 Mod 后清除组合引用和目录，任一步失败返回 False，已完成的子删除不回退。"""
+        node = self.get_character(char_id)
+        if node is None:
+            return False
+        if not self.check_node_operation(char_id, deleting=True):
+            return False
+        try:
+            path = self._get_character_library(char_id, create=False)
+            children = self._index._db().execute("SELECT id FROM nodes WHERE parent_id=?", (char_id,)).fetchall()
+            for child in children:
+                if not self.delete_character(child["id"]):
+                    return False
+            for mod in self._index.get_mods_by_character(char_id):
+                if not self.delete_mod(mod.mod_id):
+                    return False
+            self._preset_manager.cascade_delete_character(char_id, self.current_game_id)
+            if fs.exists(path):
+                fs.rmtree(path)
+            self._index._db().execute("DELETE FROM nodes WHERE id=?", (char_id,))
+            self._index._db().commit()
+            return True
+        except Exception as error:
+            self._index._db().rollback()
+            logger.error("删除类别失败: %s", error)
+            return False
+
+    def get_characters_for_ui(self, game_id: str | None = None) -> list[dict]:
+        """获取角色数据 (适配 UI)"""
+        chars = self.get_characters(game_id)
+        return [
+            {
+                "id": c.id,
+                "name": c.name,
+                "name_en": c.name_en,
+                "game_id": c.game_id,
+                "thumbnail": c.thumbnail,
+                "mod_count": c.mod_count,
+                "enabled_count": c.enabled_count,
+                "parent_id": c.parent_id,
+                "node_type": c.node_type,
+            }
+            for c in chars
+        ]
