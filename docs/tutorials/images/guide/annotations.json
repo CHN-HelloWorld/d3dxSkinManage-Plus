@@ -242,5 +242,109 @@
       48,
       194
     ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "source_sha256": "429ca6f63c86ad4580d18067799e63d0a06fd9b4d71ebaf1a71d8726f706169b",
+    "image_sha256": "757cdf647f3f28fc73772530e8afa6ffd17c20893fa98ee37a88349e4ea59d51",
+    "source_size": [
+      1360,
+      1080
+    ],
+    "size": [
+      1456,
+      1632
+    ],
+    "title": "导入 Mod · 选择来源并确认",
+    "marks": [
+      {
+        "box": [
+          24,
+          86,
+          394,
+          68
+        ],
+        "label": "用「添加文件」或「添加文件夹」选择来源，也可一次加入多个。"
+      },
+      {
+        "box": [
+          872,
+          174,
+          460,
+          218
+        ],
+        "label": "逐项检查年龄分级和预览图；导入目标是打开窗口前所在的类别。"
+      },
+      {
+        "target": "确认导入",
+        "label": "确认后开始导入，在主窗口右下角任务中心查看进度。",
+        "box": [
+          1164,
+          988,
+          172,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/05-导入Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "source_sha256": "3dc7a240fa86677b2220e4f4fea20399ba9b6916448bba3007cf1dc7b9c22376",
+    "image_sha256": "834c7b2c01d1f518dde3927629a066abbbd914f70e90a3f0d1b4a2a0442ef1af",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Mod 按键 · 录制或手动编辑",
+    "marks": [
+      {
+        "box": [
+          2336,
+          1010,
+          238,
+          58
+        ],
+        "label": "选中 Mod 后切换到「按键」标签。这里修改的是 Mod 的 INI 按键。"
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "点击当前键位录制新按键；旁边的编辑图标可手动输入。",
+        "box": [
+          2414,
+          1206,
+          148,
+          60
+        ]
+      },
+      {
+        "target": "打开文件",
+        "label": "需要检查上下文时，打开对应 INI 文件查看。",
+        "box": [
+          2614,
+          1102,
+          200,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/06-按键设置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
