@@ -296,3 +296,31 @@ class ModManager:
         # 重建索引本轮登记的在途 id（plan 分配 → apply 落库后注销）。重建也会在入库前
         # 把预览提取到 preview_cache/<new_id>/，与导入共用上面那套豁免。
         self._rebuild_inflight_ids: set[str] = set()
+
+    @library_mutation
+    def register_inflight_mod_id(self, mod_id: str) -> None:
+        """标记某 mod_id 的受管文件已写入磁盘、尚未入库（孤儿清理须豁免）。"""
+        if not mod_id:
+            return
+        with self._inflight_lock:
+            self._inflight_mod_ids.add(str(mod_id))
+
+    def apply_local_source_events(self, events):
+        """将局部源库事件交给发布层验证并更新索引，返回该批事件的发布结果。"""
+        from src.core.library_publication import source_events
+
+        return source_events(self, events)
+
+    def protect_library_operation(self, token, *, paths=(), mod_ids=(), exclusive=False):
+        """按令牌登记操作涉及的路径和 Mod，可申请独占保护以阻止冲突操作。"""
+        self._library_protection.protect(token, paths=paths, mod_ids=mod_ids, exclusive=exclusive)
+
+    def release_library_operation(self, token):
+        """释放令牌对应的资源保护，允许后续扫描或操作处理这些路径。"""
+        self._library_protection.release(token)
+
+    def is_library_path_protected(self, path):
+        """按当前索引路径和保护快照判断目标是否与在途操作重叠。"""
+        from src.core.library_protection import path_protected, protection_snapshot
+
+        return path_protected(self._index.paths, path, protection_snapshot(self))
