@@ -805,3 +805,165 @@ class ModIntakeService:
             finally:
                 self._manager.release_library_operation("intake:" + mod_id)
             raise
+
+    def commit(
+        self,
+        prepared: PreparedIntake,
+        *,
+        rollback_on_error: bool = True,
+    ) -> Mod:
+        """重新验证目标、正文和变体文件，在同一索引事务中检查身份与内容冲突并写入 Mod。
+
+        提交前失败按参数回滚准备结果；成功后标记已提交、释放在途登记并清理临时文件及通知导入事件。"""
+        try:
+            if (
+                prepared.request.context == "rediscovery"
+                and self._metadata_version(prepared.container_path) != prepared.metadata_version
+            ):
+                raise IntakeError("source metadata changed before intake commit")
+            # 软件内删除可能因文件占用留下物理目录，分类记录也必须仍然存在。
+            self._validate_target(prepared.request, check_character=True)
+            if (
+                prepared.body_version is not None
+                and capture_source_version(prepared.body_path) != prepared.body_version
+            ):
+                raise IntakeError("managed body changed before intake commit")
+            self._validate_container(
+                prepared.container_path,
+                prepared.body_path,
+                prepared.content_hash,
+                prepared.mod.mod_id,
+            )
+            verify_variant_files(prepared.body_path, prepared.variants)
+            # 与 ModIndex 共用必填字段规则；校验失败进入导入回滚并向进度面板报告。
+            reason = validate_mod_record(prepared.mod, prepared.request.game_id)
+            if reason:
+                raise IntakeError(f"invalid managed record: {reason}")
+            if prepared.request.context == "rediscovery" and prepared.metadata_notice:
+                sidecar_path = prepared.container_path / ".d3dxmeta" / "info.json"
+                try:
+                    prepared.source_sidecar_snapshot = (True, sidecar_path.read_bytes())
+                except FileNotFoundError:
+                    prepared.source_sidecar_snapshot = (False, b"")
+                if not self._manager._write_mod_sidecar(prepared.mod, repair_invalid=True):
+                    raise IntakeError("failed to restore source descriptions")
+                prepared.written_sidecar = self._read_metadata_bytes(sidecar_path)
+            old_game = self._manager._index.game_id
+            self._manager._index.game_id = prepared.request.game_id
+            try:
+                with self._manager._index.transaction():
+                    # 在插入记录的同一事务中重新核对全部索引约束，中间不执行事件回调或文件写入。
+                    owner = self._manager._index.get_mod(prepared.mod.mod_id)
+                    if owner is not None:
+                        raise IdentityConflict(
+                            tr("mod_id 身份已被其他 Mod 占用: {display_name}", display_name=owner.display_name),
+                        )
+                    existing = self._manager._index.find_by_content_hash(
+                        prepared.content_hash,
+                        prepared.request.game_id,
+                    )
+                    if (
+                        existing is not None
+                        and prepared.request.context == "external"
+                        and not prepared.request.external_copy
+                    ):
+                        raise DuplicateIntakeError(
+                            f"content already exists: {existing.display_name}",
+                        )
+                    occupied = self._manager._index.find_mod_id_by_path(
+                        prepared.mod.path,
+                        prepared.request.game_id,
+                    )
+                    if occupied is not None:
+                        raise DuplicateIntakeError(f"path already managed: {prepared.mod.display_name}")
+                    added = self._manager._index.add_mod(
+                        prepared.mod,
+                        commit=False,
+                    )
+                    if not added:
+                        raise IntakeError("failed to add Mod to the index")
+            finally:
+                self._manager._index.game_id = old_game
+        except Exception:
+            if rollback_on_error:
+                self.rollback(prepared)
+            raise
+
+        prepared.committed = True
+        try:
+            self._release_mod_id(prepared.mod.mod_id, committed=True)
+            # 已入库 → 索引本身就能保护它，注销在途登记。
+            self._manager.unregister_inflight_mod_id(prepared.mod.mod_id)
+            prepared.import_source.cleanup()
+            if prepared.source_backup_root is not None:
+                fs.rmtree(prepared.source_backup_root, ignore_errors=True)
+            self._manager._emit(
+                "mod_imported",
+                mod_id=prepared.mod.mod_id,
+                node_id=prepared.mod.node_id,
+                game_id=prepared.request.game_id,
+            )
+        finally:
+            if prepared.operation_temp is not None:
+                fs.rmtree(prepared.operation_temp, ignore_errors=True)
+            self._manager.release_library_operation("intake:" + prepared.mod.mod_id)
+        return prepared.mod
+
+    def rollback(self, prepared: PreparedIntake) -> None:
+        """撤销尚未提交的导入准备，并确保清理操作临时目录及释放路径保护。"""
+        try:
+            self._rollback(prepared)
+        finally:
+            if prepared.operation_temp is not None:
+                fs.rmtree(prepared.operation_temp, ignore_errors=True)
+            self._manager.release_library_operation("intake:" + prepared.mod.mod_id)
+
+    def _rollback(self, prepared: PreparedIntake) -> None:
+        """移除本次产物和在途登记，按写入快照恢复原始元数据与移动来源；已提交结果不撤销。"""
+        if prepared.committed:
+            return
+        self._release_mod_id(prepared.mod.mod_id)
+        # 本轮产物即将全部删除，在途登记随之注销（放在最前，异常也不残留登记）。
+        try:
+            self._manager.unregister_inflight_mod_id(prepared.mod.mod_id)
+        except Exception:
+            pass
+        for path in reversed(prepared.created_paths):
+            if fs.is_dir(path):
+                fs.rmtree(path, ignore_errors=True)
+            elif fs.exists(path):
+                fs.unlink(path, missing_ok=True)
+        if prepared.preview_cache_path is not None and prepared.request.context == "external":
+            fs.rmtree(prepared.preview_cache_path, ignore_errors=True)
+        if (
+            prepared.source_marker_snapshot is not None
+            and prepared.written_marker is not None
+            and self._read_metadata_bytes(prepared.container_path / ".d3dxmod") == prepared.written_marker
+        ):
+            self._restore_marker(prepared.container_path, prepared.source_marker_snapshot)
+        if (
+            prepared.source_sidecar_snapshot is not None
+            and prepared.written_sidecar is not None
+            and self._read_metadata_bytes(prepared.container_path / ".d3dxmeta" / "info.json")
+            == prepared.written_sidecar
+        ):
+            existed, snapshot = prepared.source_sidecar_snapshot
+            path = prepared.container_path / ".d3dxmeta" / "info.json"
+            if existed:
+                self._restore_metadata(path, snapshot)
+            else:
+                fs.unlink(path, missing_ok=True)
+        self._restore_source(
+            prepared.original_path,
+            prepared.source_backup_path,
+            prepared.source_backup_root,
+        )
+        prepared.import_source.cleanup()
+
+    @staticmethod
+    def _read_metadata_bytes(path: Path) -> bytes | None:
+        """读取元数据原始字节，文件不存在时返回 None。"""
+        try:
+            return path.read_bytes()
+        except FileNotFoundError:
+            return None
