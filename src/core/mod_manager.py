@@ -368,3 +368,41 @@ class ModManager:
         """在锁内复制尚未提交的 Mod 身份集合，供缓存清理排除正在准备的资源。"""
         with self._inflight_lock:
             return set(self._inflight_mod_ids)
+
+    # 插件事件
+
+    def add_event_listener(self, listener) -> None:
+        """注册事件观察者: listener(event: str, **payload)。由 PluginManager 调用。"""
+        if listener not in self._event_listeners:
+            self._event_listeners.append(listener)
+
+    def remove_event_listener(self, listener) -> None:
+        """运行时关闭时释放观察者，可重复调用。"""
+        if listener in self._event_listeners:
+            self._event_listeners.remove(listener)
+
+    def _emit(self, event: str, **payload) -> None:
+        """向所有观察者派发事件（在主线程同步调用；观察者自身已熔断保护）。"""
+        if self._library_probe_events is not None:
+            self._library_probe_events.append((event, payload))
+            return
+        for listener in list(self._event_listeners):
+            try:
+                listener(event, **payload)
+            except Exception:
+                logger.exception("事件观察者处理 '%s' 抛错", event)
+
+    @property
+    def preset_manager(self):
+        """暴露给 UI 层的预设管理器"""
+        return self._preset_manager
+
+    # Library 路径
+
+    def _res_dir(self, game_id: str | None = None) -> str:
+        """返回指定游戏在 data 下使用的资源目录名。
+
+        未单独配置时使用游戏编号，资源目录重命名后更新映射；所有游戏资源路径均通过此入口解析。
+        """
+        gid = game_id or self.current_game_id
+        return self._game_service.get_resource_dir(gid)
