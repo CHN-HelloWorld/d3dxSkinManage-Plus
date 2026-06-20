@@ -324,3 +324,47 @@ class ModManager:
         from src.core.library_protection import path_protected, protection_snapshot
 
         return path_protected(self._index.paths, path, protection_snapshot(self))
+
+    def confirm_local_missing(self, *, purge=None):
+        """复核局部发布中缺失的源资源，并按清理策略处理可确认的缺失记录。"""
+        from src.core.library_publication import confirm_missing
+
+        return confirm_missing(self, purge=purge)
+
+    def apply_local_deployment_events(self, events):
+        """将局部部署变化交给发布层复核，更新部署状态并返回发布结果。"""
+        from src.core.library_publication import deployment_events
+
+        return deployment_events(self, events)
+
+    def get_nodes_for_ui(self, ids):
+        """按输入顺序去重并读取节点，将存在节点转换为含计数和缩略图的界面数据字典。"""
+        nodes = [self.get_character(nid) for nid in dict.fromkeys(ids)]
+        return [
+            dict(
+                id=node.id,
+                name=node.name,
+                name_en=node.name_en,
+                game_id=node.game_id,
+                parent_id=node.parent_id or "",
+                thumbnail=node.thumbnail,
+                node_type=node.node_type,
+                mod_count=node.mod_count,
+                enabled_count=node.enabled_count,
+            )
+            for node in nodes
+            if node is not None
+        ]
+
+    @library_mutation
+    def unregister_inflight_mod_id(self, mod_id: str) -> None:
+        """撤销在途标记（commit 后由索引接管保护，回滚后产物已删）。"""
+        if not mod_id:
+            return
+        with self._inflight_lock:
+            self._inflight_mod_ids.discard(str(mod_id))
+
+    def inflight_mod_ids(self) -> set[str]:
+        """在锁内复制尚未提交的 Mod 身份集合，供缓存清理排除正在准备的资源。"""
+        with self._inflight_lock:
+            return set(self._inflight_mod_ids)
