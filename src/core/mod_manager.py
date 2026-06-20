@@ -1339,3 +1339,107 @@ class ModManager:
         name = self._storage.active_name_from_parked(mod.deployed_path, mod.mod_id)
         target = self._storage.active_deployment_path(mod.mod_id, name)
         return self._storage.restore_parked_deployment(mod.deployed_path, target.name)
+
+    def _deployment_has_preset_refs(
+        self,
+        mod_id: str,
+        *,
+        excluding_mod_id: str = "",
+    ) -> bool:
+        """检查当前游戏是否仍有组合引用该部署，可排除当前组合即将移除的指定成员。"""
+        ids = {mod_id}
+        current_id = self._preset_manager.get_current(self.current_game_id).id
+        for preset in self._preset_manager.get_all_presets(self.current_game_id):
+            refs = set(preset.enabled_mod_ids)
+            if preset.id == current_id and excluding_mod_id:
+                refs.discard(excluding_mod_id)
+            if ids.intersection(refs):
+                return True
+        return False
+
+    def _persist_mod_deployment_state(
+        self,
+        mod: Mod,
+        *,
+        commit: bool = True,
+        game_id: str = "",
+    ) -> None:
+        """将路径及启用状态投影为部署记录，可由调用方延迟数据库提交。"""
+        validate_mod_id(mod.mod_id)
+        state = DeploymentState.ABSENT
+        if mod.deployed_path:
+            state = DeploymentState.ACTIVE if mod.is_enabled else DeploymentState.DISABLED
+        self._index.upsert_deployment(
+            DeploymentRecord(
+                mod_id=mod.mod_id,
+                state=state,
+                actual_path=mod.deployed_path,
+            ),
+            commit=commit,
+        )
+
+    @protect_mod_operation(failure_value=None)
+    @library_mutation
+    def finalize_enable(
+        self, mod_id: str, deploy_ok: bool, *, deploy_path: str = "", source_receipt=None, preparation=None
+    ) -> Mod | None:
+        """复核后台部署对应的源凭据及准备上下文，再提交启用；部署失败或文件预检失败返回 None。"""
+        if not deploy_ok:
+            return None
+        try:
+            receipt = self.require_mod_operation(mod_id, full=source_receipt is None, expected=source_receipt)
+            with access_file(receipt.path, pin=True):
+                receipt.recheck()
+                if preparation is not None:
+                    preparation.validate(self, mod_id, deploy_path)
+                return self._finalize_enable(mod_id, deploy_ok, deploy_path=deploy_path, preparation=preparation)
+        except OSError as error:
+            self.report_operation_failure(failure(mod_id, deploy_path, error))
+            return None
+
+    def _finalize_enable(self, mod_id: str, deploy_ok: bool, *, deploy_path: str = "", preparation=None) -> Mod | None:
+        """在主线程提交已完成的部署，更新索引、预设和事件。
+
+        后台部署失败或未配置部署目录时返回 None，不改变启用状态。
+        """
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return None
+        if not deploy_ok:
+            logger.error("后台部署失败，Mod 保持禁用: %s", mod.name)
+            return None
+        if self.check_mod_operation(mod_id, full=False) is None:
+            return None
+        if self._storage.get_deploy_dir() is None:
+            logger.warning("未配置「Mod 文件夹」，拒绝启用: %s", mod.name)
+            return None
+        try:
+            if deploy_path:
+                target = Path(deploy_path)
+                if self._storage._path_key(target.parent) != self._storage._path_key(
+                    self._storage.get_deploy_dir()
+                ) or target.name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper()):
+                    raise IdentityConflict(tr("后台部署返回了无效的启用目录：{target}", target=target))
+            else:
+                location = self._storage.scan_deployments(force=True).get(mod.mod_id)
+                if location is None or not location.active:
+                    logger.error("后台部署未产生匹配的 mod_id：%s", mod.mod_id)
+                    return None
+                target = location.path
+            # 工作线程已完成全量清单扫描，发布前只重新验证返回的身份。
+            self._remember_deployment(mod, target)
+        except (OSError, IdentityConflict) as error:
+            logger.error("后台部署身份校验失败：%s", error)
+            return None
+        mod.enable()
+        # 后台部署已完成, 登记 ini 双向同步 (deploy target 由 storage 按 INV-1 推算)
+        if preparation is None:
+            self._persist_mod_deployment_state(mod)
+            self._register_ini_sync(mod.mod_id, mod.path, target, (mod.mod_id,))
+        # 异步部署提交后也须恢复变体状态，与同步启用流程保持一致。
+        if preparation is not None:
+            preparation.publish(self, mod)
+        elif not self._restore_variants_after_enable(mod):
+            return None
+        self._emit("mod_enabled", mod_id=mod_id, game_id=self.current_game_id)
+        return mod
