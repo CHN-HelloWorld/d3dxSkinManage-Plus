@@ -406,3 +406,62 @@ class ModManager:
         """
         gid = game_id or self.current_game_id
         return self._game_service.get_resource_dir(gid)
+
+    def _get_library_root(self, game_id: str | None = None) -> Path:
+        """获取指定游戏的 Mod library 根目录: data/[resource_dir]/mods/"""
+        library = get_data_dir() / self._res_dir(game_id) / "mods"
+        fs.ensure_dir(library)
+        return library
+
+    def _get_character_library(self, node_id: str, game_id: str | None = None, create: bool = True) -> Path:
+        """解析指定游戏的节点或库根目录，可按需创建；节点跨游戏时抛出 ValueError。"""
+        gid = game_id or self.current_game_id
+        if node_id:
+            row = self._index.paths._node(node_id)
+            if row[1] != gid:
+                raise ValueError(tr("节点不属于指定游戏"))
+            path = self._index.paths.node_path(node_id)
+        else:
+            path = self._index.paths.roots[gid]
+        if create:
+            fs.ensure_dir(path)
+        return path
+
+    # 游戏隔离
+
+    @library_mutation
+    def set_game(self, game_id: str) -> None:
+        """切换当前游戏"""
+        self.invalidate_operation_trust()
+        self._deferred_source_events = {}
+        self._deferred_deployment_events = {}
+        self._local_source_events = None
+        # 索引打开后仍可新建游戏，通知监听者前更新资源根，供分类、图片和后台扫描解析路径。
+        if self._index._conn is not None:
+            self._index.refresh_paths()
+        self._game_service.current_game_id = game_id
+        self._index.game_id = game_id
+        logger.info("已切换游戏: %s", game_id)
+        self._emit("game_changed", game_id=game_id)
+
+    @property
+    def current_game_id(self) -> str:
+        """读取游戏服务当前选择的游戏 ID，作为省略游戏参数时的操作范围。"""
+        return self._game_service.current_game_id
+
+    # 角色/对象 Mod 限制
+
+    def find_character_ancestor(self, char_id: str, game_id: str | None = None) -> Node | None:
+        """向上查找最近的 node_type='character' 祖先节点"""
+        gid = game_id or self.current_game_id
+        all_chars = self.get_characters(gid)
+        char_map = {c.id: c for c in all_chars}
+        current = char_id
+        while current:
+            c = char_map.get(current)
+            if not c:
+                break
+            if c.node_type == "character":
+                return c
+            current = c.parent_id
+        return None
