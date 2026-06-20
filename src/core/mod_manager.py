@@ -1260,3 +1260,82 @@ class ModManager:
 
         self._emit("mod_enabled" if mod.is_enabled else "mod_disabled", mod_id=mod_id, game_id=self.current_game_id)
         return mod
+
+    # 拆分启用（后台解压 + 主线程提交）
+
+    @property
+    def variants(self) -> ModVariantManager:
+        """单 Mod 变体状态门面（``d3dx_user.ini`` ↔ 容器 override ↔ mod_preferences.json）。
+
+        惰性创建。未配 3DMigoto 路径或 resource_dir 为空时其方法全部安静 no-op。
+        """
+        if self._variants is None:
+            from src.core.mod_variant_manager import ModVariantManager
+
+            self._variants = ModVariantManager(self)
+        return self._variants
+
+    def _restore_variants_after_enable(self, mod: Mod) -> bool:
+        """同时发布配置、成员和选择状态，启用失败时停放部署副本。"""
+        if not mod.mod_id:
+            return False
+        try:
+            registry = getattr(self, "_library_protection", None)
+            owner_token = registry.current_mod_operation_token(mod.mod_id) if registry else ""
+            outcome = self.variants.restore(
+                [mod.mod_id], operation_token="deploy:" + mod.mod_id, owner_token=owner_token, include_members=True
+            )
+        except Exception as error:
+            if self._ini_sync is not None:
+                self._ini_sync.unregister_mod(mod.mod_id)
+                self._ini_sync_refs.pop(mod.mod_id, None)
+            parked = self._storage.park_deployment(mod.deployed_path, mod.mod_id)
+            if parked is not None:
+                mod.remember_deployment(parked)
+                mod.disable()
+                self._persist_mod_deployment_state(mod)
+            self.variants.invalidate(mod.mod_id)
+            self.report_operation_failure(
+                OperationPreflightError(mod.mod_id, mod.path, tr("启用时配置未完成：") + str(error))
+            )
+            return False
+        if outcome.needs_reload_hint:
+            self._emit(
+                "variant_restored",
+                mod_id=mod.mod_id,
+                game_id=self.current_game_id,
+                applied=len(outcome.applied),
+                removed_keys=outcome.removed_keys,
+            )
+        return True
+
+    def needs_async_deploy(self, mod_id: str) -> bool:
+        """判断启用操作是否需要后台部署，避免主线程执行耗时文件操作。"""
+        mod = self._index.get_mod(mod_id)
+        if not mod or mod.is_enabled or not mod.path:
+            return False
+        if self._storage.get_deploy_dir() is None:
+            return False
+        # 首次部署和停放副本恢复均由工作线程定位身份，调度时不枚举部署目录。
+        return is_resident_archive(Path(mod.path))
+
+    def _is_parked_deployment_available(self, mod: Mod) -> bool:
+        """确认记录路径是可访问的停放目录，且部署标记仍属于该 Mod。"""
+        if not mod.deployed_path:
+            return False
+        parked = Path(mod.deployed_path)
+        if not parked.name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper()):
+            return False
+        if self._storage.deployment_path_state(parked) is not True:
+            return False
+        marker = read_deployment_identity(parked)
+        return marker is not None and marker["mod_id"] == mod.mod_id
+
+    def _restore_parked_deployment(self, mod: Mod) -> Path | None:
+        """恢复预设停放缓存；非缓存路径和离线/缺失缓存均返回 None。"""
+        self.require_mod_operation(mod.mod_id, deployment=True)
+        if not self._is_parked_deployment_available(mod):
+            return None
+        name = self._storage.active_name_from_parked(mod.deployed_path, mod.mod_id)
+        target = self._storage.active_deployment_path(mod.mod_id, name)
+        return self._storage.restore_parked_deployment(mod.deployed_path, target.name)
