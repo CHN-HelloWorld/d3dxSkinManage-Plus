@@ -967,3 +967,60 @@ class ModIntakeService:
             return path.read_bytes()
         except FileNotFoundError:
             return None
+
+    @staticmethod
+    def _metadata_version(container: Path) -> tuple[bytes | None, bytes | None]:
+        """以容器标记和旁置描述的完整字节组成元数据版本。"""
+        return (
+            ModIntakeService._read_metadata_bytes(container / ".d3dxmod"),
+            ModIntakeService._read_metadata_bytes(container / ".d3dxmeta" / "info.json"),
+        )
+
+    @staticmethod
+    def _restore_marker(container: Path, snapshot: bytes) -> None:
+        """恢复采集的原始内容，包括原本不完整的标记。"""
+        ModIntakeService._restore_metadata(container / ".d3dxmod", snapshot)
+
+    @staticmethod
+    def _restore_metadata(path: Path, snapshot: bytes) -> None:
+        """通过同目录临时文件和原子替换恢复元数据快照，写入后刷新磁盘。"""
+        descriptor, temporary = tempfile.mkstemp(prefix=".intake-metadata-", dir=fs.native_path(path.parent))
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                stream.write(snapshot)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, fs.native_path(path))
+        finally:
+            fs.unlink(temporary, missing_ok=True)
+
+    @staticmethod
+    def _restore_source(
+        original: Path,
+        backup: Path | None,
+        backup_root: Path | None,
+    ) -> None:
+        """将已移动的备份恢复到原位置，并清理本次来源备份目录。"""
+        if backup is not None and fs.exists(backup):
+            fs.ensure_dir(original.parent)
+            os.replace(fs.native_path(backup), fs.native_path(original))
+        if backup_root is not None:
+            fs.rmtree(backup_root, ignore_errors=True)
+
+    @staticmethod
+    def _validate_container(
+        container: Path,
+        body: Path,
+        content_hash: str,
+        mod_id: str,
+    ) -> None:
+        """核对受管容器格式、正文名称、摘要及持久身份，任一不符时拒绝提交。"""
+        if not is_mod_container(container):
+            raise IntakeError(f"invalid managed container: {container}")
+        marker = read_container_marker(container)
+        if marker is None or marker.get("body") != body.name:
+            raise IntakeError(f"container body mismatch: {container}")
+        if marker.get("content_hash") != content_hash:
+            raise IntakeError(f"container hash mismatch: {container}")
+        if read_source_mod_id(body) != mod_id:
+            raise IdentityConflict(tr("源 Mod 的 mod_id 身份发生变化: {container}", container=container))
