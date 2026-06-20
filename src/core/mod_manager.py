@@ -1443,3 +1443,211 @@ class ModManager:
             return None
         self._emit("mod_enabled", mod_id=mod_id, game_id=self.current_game_id)
         return mod
+
+    # 批量禁用：一次性预计算 + 后台文件 IO + 单事务落库
+
+    def create_deployment_preparation(self, *, trigger: str, mod_ids=None, plan=None):
+        """冻结部署前所需的配置准备上下文，供工作线程处理和提交时重新验证。"""
+        from src.core.deployment_preparation import DeploymentPreparation
+
+        return DeploymentPreparation(self, trigger=trigger, mod_ids=mod_ids, plan=plan)
+
+    @library_mutation
+    def prepare_disable_batch(self, mod_ids, *, preparation=None) -> list[DisablePlanEntry]:
+        """在主线程准备整批禁用操作，返回后台可消费的作业单。
+
+        运行变量只采集一次，预设引用预先汇总。按处理顺序更新引用集合，
+        据此确定各项是停放部署还是删除，避免重复扫描和无效停放。
+        """
+        entries: list[DisablePlanEntry] = []
+        if self._preset_manager.has_pending_apply(self.current_game_id):
+            logger.warning("预设切换期间忽略批量禁用请求")
+            return entries
+
+        mods = []
+        for mod_id in mod_ids:
+            mod = self._index.get_mod(str(mod_id))
+            if mod is not None and mod.is_enabled:
+                mods.append(mod)
+        if not mods:
+            return entries
+        receipts = {}
+        for mod in mods:
+            # 工作线程已计算当前源文件的摘要，提交前核对版本与身份，避免再次打开阻塞整个窗口的文件检查。
+            previous = preparation.receipts.get(mod.mod_id) if preparation is not None else None
+            options = dict(metadata=True, deployment=True)
+            if previous is not None:
+                options.update(full=False, expected=previous)
+            receipt = self.check_mod_operation(mod.mod_id, **options)
+            if receipt is None:
+                return []
+            receipts[mod.mod_id] = receipt
+
+        # 整批部署移除前只采集一次运行时变体，保留采集时的变量归属。
+        if preparation is None:
+            self.variants.collect(trigger="mod_disable")
+        # 同步器在**主线程**惰性建好，后台线程只用不建（_ensure_ini_sync 无锁，
+        # 后台建 watchdog Observer 会和主线程抢）。
+        self._ensure_ini_sync()
+
+        gid = self.current_game_id
+        current_preset = self._preset_manager.get_current(gid)
+        current_refs = set(current_preset.enabled_mod_ids)
+        other_refs: set[str] = set()
+        for preset in self._preset_manager.get_all_presets(gid):
+            if preset.id != current_preset.id:
+                other_refs |= set(preset.enabled_mod_ids)
+
+        for mod in mods:
+            siblings = {mod.mod_id}
+            park = bool(siblings & other_refs) or bool(siblings & (current_refs - {mod.mod_id}))
+            entries.append(
+                DisablePlanEntry(
+                    mod_id=mod.mod_id,
+                    display_name=mod.display_name,
+                    body_path=str(mod.path),
+                    folder_name=mod.folder_name or "",
+                    deploy_targets=((mod.deployed_path,) if mod.deployed_path else ())
+                    if preparation is None
+                    else (
+                        (str(preparation.locations[mod.mod_id].path),) if mod.mod_id in preparation.locations else ()
+                    ),
+                    park=park,
+                    source_receipt=receipts[mod.mod_id],
+                )
+            )
+            # 与顺序执行时 sync_mod_state 的副作用对齐：本 Mod 已不再被当前预设引用。
+            current_refs.discard(mod.mod_id)
+        return entries
+
+    @library_mutation
+    def disable_batch_step(self, entry: DisablePlanEntry) -> DisableStepResult:
+        """在后台固定并复核源文件，执行单项禁用后返回主线程所需凭据，文件异常封装为失败结果。"""
+        try:
+            receipt = entry.source_receipt or confirm_source(entry.body_path, entry.mod_id)
+            with access_file(receipt.path, pin=True):
+                receipt.recheck()
+                result = self._disable_batch_step(entry)
+                receipt.recheck()
+                result.source_receipt = receipt
+                result.original_path = entry.deploy_targets[0] if entry.deploy_targets else ""
+                return result
+        except OSError as error:
+            issue = failure(entry.mod_id, entry.body_path, error)
+            return DisableStepResult(entry.mod_id, error=str(issue), preflight_error=issue)
+
+    def _disable_batch_step(self, entry: DisablePlanEntry) -> DisableStepResult:
+        """在工作线程执行单项禁用的文件操作。
+
+        先保存部署 INI 的最新修改，再注销同步并停放或移除部署。
+        不访问数据库、预设或界面控件，不修改源本体；同步管理器通过内部锁协调访问。
+        """
+        result = DisableStepResult(mod_id=entry.mod_id)
+        try:
+            if entry.source_receipt is not None:
+                entry.source_receipt.recheck()
+            else:
+                confirm_source(entry.body_path, entry.mod_id)
+            # 作业在队列中等待时，路径可能已被替换。同步 INI 前需确认目录仍属于目标 Mod。
+            for target in entry.deploy_targets:
+                state = self._storage.deployment_path_state(target)
+                if state is None:
+                    raise OSError(tr("部署所在磁盘/共享当前不可用：{target}", target=target))
+                if state:
+                    try:
+                        self._storage._check_deployment_identity(target, entry.mod_id)
+                    except ValueError:
+                        # 身份失效后撤销旧同步关系，避免后续回调写入其他 Mod 的配置。
+                        self._on_deployments_invalidated((entry.mod_id,))
+                        raise
+        except Exception as e:
+            if isinstance(e, OperationPreflightError):
+                result.preflight_error = e
+            result.error = tr("部署身份无法确认：{e}", e=e)
+            logger.warning("取消批量禁用 (%s): %s", entry.display_name, e)
+        if not result.error:
+            try:
+                self._ensure_ini_sync().reconcile_mod(entry.mod_id)
+            except Exception as e:
+                logger.warning("禁用前 ini 删前拉回失败 (%s): %s", entry.display_name, e)
+        if result.error:
+            return result
+        try:
+            self._ensure_ini_sync().unregister_mod(entry.mod_id)
+        except Exception as e:
+            logger.warning("注销 ini 同步失败 (%s): %s", entry.display_name, e)
+        if result.error:
+            return result
+
+        try:
+            if entry.park and entry.deploy_targets:
+                parked = self._storage.park_deployment(entry.deploy_targets[0], entry.mod_id)
+                if parked is not None:
+                    result.ok = True
+                    result.parked_path = str(parked)
+                    return result
+                # 停放失败时执行直接移除，与 toggle_mod 的处理一致。
+            for target in entry.deploy_targets:
+                if not self._storage.undeploy_mod(
+                    entry.body_path,
+                    deploy_name=entry.folder_name,
+                    capture_changes=True,
+                    deploy_path=target,
+                    mod_id=entry.mod_id,
+                ):
+                    result.error = tr("部署副本移除失败（身份变化 / 磁盘不可用 / 文件被占用 / ini 回收失败）")
+                    return result
+            result.ok = True
+        except Exception as e:
+            logger.error("禁用文件 IO 失败 (%s): %s", entry.display_name, e)
+            result.error = str(e)
+        return result
+
+    @library_mutation
+    def commit_disable_batch(self, results) -> list[str]:
+        """在主线程批量提交已完成的禁用结果，返回实际禁用的 Mod 编号。
+
+        共用一个数据库事务及一次预设写入；失败项目保留原状态，供后续重试。
+        """
+        results = list(results)
+        for result in results:
+            if result is not None and result.ok and result.source_receipt is not None:
+                try:
+                    result.source_receipt.recheck()
+                except OperationPreflightError as error:
+                    result.ok = False
+                    result.preflight_error = error
+                    result.error = str(error)
+                    if result.parked_path and result.original_path:
+                        try:
+                            self._storage._check_deployment_identity(result.parked_path, result.mod_id)
+                            if not os.path.lexists(result.original_path):
+                                os.replace(result.parked_path, result.original_path)
+                        except (OSError, ValueError) as rollback_error:
+                            logger.error("禁用回滚失败: %s", rollback_error)
+            if result is not None and result.preflight_error is not None:
+                self.report_operation_failure(result.preflight_error)
+        pending = [r for r in results if r is not None and r.ok]
+        disabled: list[str] = []
+        if pending:
+            with self._index.transaction():
+                for r in pending:
+                    mod = self._index.get_mod(r.mod_id)
+                    if mod is None:
+                        continue
+                    if r.parked_path:
+                        mod.remember_deployment(r.parked_path)
+                    else:
+                        mod.forget_deployment()
+                    mod.disable()
+                    self._index.add_mod(mod, commit=False)
+                    self._persist_mod_deployment_state(mod, commit=False)
+                    disabled.append(mod.mod_id)
+        if disabled:
+            try:
+                self._preset_manager.strip_mod_ids(disabled, self.current_game_id)
+            except Exception as e:
+                logger.warning("批量禁用同步预设失败: %s", e)
+            for mod_id in disabled:
+                self._emit("mod_disabled", mod_id=mod_id, game_id=self.current_game_id)
+        return disabled
