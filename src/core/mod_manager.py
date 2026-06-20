@@ -962,3 +962,133 @@ class ModManager:
             return self._index.get_all_mods("")
         finally:
             self._index.game_id = old_gid
+
+    @library_mutation
+    def import_mod(
+        self,
+        source_path: str,
+        node_id: str = "",
+        name: str = "",
+        auto_preview: bool = True,
+        *,
+        gb_meta: GbInstallMetadata | None = None,
+        force_age_rating: AgeRating | None = None,
+        import_format: str | None = None,
+        strict_format: bool | None = None,
+    ) -> Mod | None:
+        """通过纳管事务导入文件夹或归档，成功返回默认禁用的 Mod。
+
+        node_id 指定目标类别，name 和 auto_preview 控制名称与预览。
+        gb_meta 保存在线安装来源及版本，force_age_rating 仅覆盖默认分级。
+        import_format 和 strict_format 可覆盖全局格式设置。
+        """
+        if not source_path:
+            logger.error("import_mod 缺少 source_path 参数")
+            return None
+        src = Path(fs.normal_path(source_path))
+        if not fs.exists(src):
+            logger.error("源文件不存在: %s", src)
+            return None
+
+        from src.core.mod_intake import (
+            DuplicateIntakeError,
+            IntakeError,
+            ModIntakeService,
+        )
+
+        service = ModIntakeService(self)
+        try:
+            request = service.plan_request(
+                source_path=src,
+                game_id=self.current_game_id,
+                node_id=node_id,
+                display_name=name,
+                target_format=import_format,
+                strict_format=strict_format,
+                auto_preview=auto_preview,
+                gamebanana_metadata=(gb_meta.to_dict() if gb_meta is not None else None),
+                force_age_rating=(force_age_rating.value if force_age_rating else ""),
+            )
+            return service.commit(service.prepare(request))
+        except DuplicateIntakeError as e:
+            logger.warning("内容一致，已跳过: %s", e)
+            return None
+        except (IntakeError, IdentityConflict, InterruptedError) as e:
+            logger.error("导入 Mod 失败 (%s): %s", src, e)
+            return None
+
+    def _apply_share_envelope(self, mod: Mod, manifest: dict | None, staged_previews: list[Path]) -> None:
+        """用分享信封还原元数据与预览图。
+
+        元数据采取「仅在本地为空时填充」策略，避免覆盖用户自动检测/手填的值；
+        标签做合并去重；信封中的补充预览图直接写入新容器的
+        ``.d3dxmeta/previews`` 后追加到 ``mod.preview_images``。
+        """
+        if manifest:
+            sname = (manifest.get("name") or "").strip()
+            # 仅当用户未自定义显示名（仍等于文件夹名）时，采用信封里的名称
+            if sname and mod.name == mod.folder_name:
+                mod.name = sname
+            info = manifest.get("info") or {}
+            if info.get("author") and not mod.info.author:
+                mod.info.author = info["author"]
+            if info.get("description") and not mod.info.description:
+                mod.info.description = info["description"]
+            if info.get("version") and not mod.info.version:
+                mod.info.version = info["version"]
+            if info.get("url") and not mod.info.url:
+                mod.info.url = info["url"]
+            if info.get("tags"):
+                existing = set(mod.info.tags)
+                for tag in info["tags"]:
+                    if isinstance(tag, str) and tag not in existing:
+                        mod.info.tags.append(tag)
+                        existing.add(tag)
+            ar = info.get("age_rating")
+            # 仅当本地仍是默认分级 G 时采用信封值，避免覆盖用户导入时显式所选分级
+            if ar and mod.info.age_rating == AgeRating.G:
+                try:
+                    mod.info.age_rating = AgeRating(ar)
+                except ValueError:
+                    logger.debug("信封 age_rating 非法，忽略: %s", ar)
+
+            # 恢复 GameBanana 更新来源（仅当本地尚无关联时），使重新导入的 Mod 仍可检测更新
+            cd = info.get("custom_data") or {}
+            gb = cd.get("gamebanana") or {}
+            if gb.get("mod_id") and not (mod.info.custom_data.get("gamebanana") or {}).get("mod_id"):
+                mod.info.custom_data["gamebanana"] = dict(gb)
+
+        if staged_previews:
+            preview_dir = resolve_previews_dir(mod.path)
+            if preview_dir is None:
+                logger.error("导入信封预览图失败：Mod 未处于当前格式容器中: %s", mod.path)
+                return
+            preview_dir.mkdir(parents=True, exist_ok=True)
+            for sp in staged_previews:
+                try:
+                    dst = preview_dir / sp.name
+                    k = 1
+                    while dst.exists():
+                        dst = preview_dir / f"{sp.stem}_{k}{sp.suffix}"
+                        k += 1
+                    shutil.copy2(str(sp), str(dst))
+                    if str(dst) not in mod.preview_images:
+                        mod.preview_images.append(str(dst))
+                except OSError as e:
+                    logger.warning("还原分享预览图失败: %s", e)
+
+    def report_operation_failure(self, error):
+        """记录预检错误并撤销库信任，再发布带 Mod 和当前游戏身份的操作失败事件。"""
+        logger.warning("%s", error)
+        self.invalidate_operation_trust()
+        self._emit("operation_failed", mod_id=error.mod_id, game_id=self.current_game_id, error=error)
+
+    def invalidate_operation_trust(self):
+        """撤销当前库的快速预检资格，使后续默认操作重新进行完整确认。"""
+        self._operation_trusted = False
+
+    def accept_operation_trust(self, game_id):
+        """仅为仍是当前游戏的库根目录登记已验证身份，游戏已切换时忽略。"""
+        if game_id != self.current_game_id:
+            return
+        self._operation_trusted = (game_id, str(self._index.paths.roots.get(game_id, "")))
