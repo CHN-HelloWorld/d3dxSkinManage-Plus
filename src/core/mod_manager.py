@@ -900,3 +900,65 @@ class ModManager:
             }
             for c in chars
         ]
+
+    # Mod 操作
+
+    def get_mods(self, node_id: str | None = None, game_id: str | None = None) -> list[Mod]:
+        """获取 Mod 列表"""
+        gid = game_id or self.current_game_id
+        old_gid = self._index.game_id
+        self._index.game_id = gid
+        if node_id:
+            result = self._index.get_mods_by_character(node_id)
+        else:
+            result = self._index.get_all_mods(gid)
+        self._index.game_id = old_gid
+        return result
+
+    def get_mod(self, mod_id: str) -> Mod | None:
+        """按全局 Mod ID 查询索引，缺失时返回 None；需要游戏隔离的调用方须另行校验归属。"""
+        return self._index.get_mod(mod_id)
+
+    def get_enabled_mod_ids(self, parent_id: str = "", game_id: str | None = None) -> list[str]:
+        """查询目录子树中的已启用标识，不构造界面数据。"""
+        gid = self.current_game_id if game_id is None else game_id
+        if not gid:
+            return []
+        sql = (
+            "SELECT m.mod_id FROM mods m JOIN deployment_records d ON d.mod_id=m.mod_id "
+            "WHERE m.game_id=? AND d.state='active'"
+        )
+        params = [gid]
+        if parent_id:
+            node_ids = self.get_subtree_ids(parent_id, gid)
+            sql += " AND m.node_id IN (" + ",".join("?" for _ in node_ids) + ")"
+            params.extend(node_ids)
+        cursor = self._index._db().execute(sql + " ORDER BY m.name,m.mod_id", params)
+        try:
+            return [row[0] for row in cursor]
+        finally:
+            cursor.close()
+
+    def get_character_conflict_mods(
+        self,
+        character_ids,
+        *,
+        deploying_ids=(),
+        excluding_mod_id: str = "",
+    ) -> list[Mod]:
+        """当前游戏角色子树中的已启用/在途兄弟，供互斥提示及禁用。"""
+        return self._index.get_character_conflict_mods(
+            self.current_game_id, character_ids, deploying_ids=deploying_ids, excluding_mod_id=excluding_mod_id
+        )
+
+    def get_mods_all_games(self) -> list[Mod]:
+        """查询全部游戏的 Mod，供共享下载文件的安装状态判断使用。
+
+        临时取消索引的游戏筛选，查询完成后恢复原筛选条件。
+        """
+        old_gid = self._index.game_id
+        self._index.game_id = ""
+        try:
+            return self._index.get_all_mods("")
+        finally:
+            self._index.game_id = old_gid
