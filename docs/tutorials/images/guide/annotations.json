@@ -62,5 +62,120 @@
       48,
       194
     ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "source_sha256": "c75e99d3d287a2c9386480c4ba6e2583bc7e0263befac2cf56031a1fc89b7b53",
+    "image_sha256": "c245a86fff7522b7f18e059008a92f783c9d1058241032e571771b14bd3d4f7b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "激活游戏 · 看清当前环境",
+    "marks": [
+      {
+        "box": [
+          364,
+          128,
+          356,
+          430
+        ],
+        "label": "双击游戏卡片激活；再次双击当前游戏会取消激活。"
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "出现「当前环境」，且卡片标有「当前」，表示已激活。",
+        "box": [
+          2074,
+          1138,
+          782,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          968,
+          784,
+          156
+        ],
+        "label": "启用 Mod 前核对加载器目录与 Mod 部署目录。"
+      }
+    ],
+    "source": "images/final/02-游戏配置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "source_sha256": "8a6f2484331aa2ff22b587d0ef3c0065e4f089cb2c023c49e92dc05bbc532e60",
+    "image_sha256": "1674a4a745b5b1b978ce13e09618c04c0f9ef212cc53a447b0f8d6b5148b00d7",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "类别总览 · 找到分类与常用入口",
+    "marks": [
+      {
+        "box": [
+          1408,
+          284,
+          320,
+          400
+        ],
+        "label": "双击类别卡片进入，例如「外观」。进入类别后才能导入 Mod。"
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "面包屑显示当前层级；点击「全部」返回分类根目录。",
+        "box": [
+          382,
+          110,
+          72,
+          64
+        ]
+      },
+      {
+        "box": [
+          364,
+          188,
+          1616,
+          70
+        ],
+        "label": "按名称、作者、标签搜索，或用标签和类型条件缩小范围。"
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "从上方预设入口管理当前游戏的整套 Mod 搭配。",
+        "box": [
+          1546,
+          26,
+          320,
+          62
+        ]
+      }
+    ],
+    "source": "images/final/03-类别总览.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
