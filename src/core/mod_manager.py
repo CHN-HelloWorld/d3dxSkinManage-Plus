@@ -465,3 +465,102 @@ class ModManager:
                 return c
             current = c.parent_id
         return None
+
+    def get_subtree_ids(self, root_id: str, game_id: str | None = None) -> list[str]:
+        """获取以 root_id 为根的所有子孙节点 ID（包括 root_id 本身）"""
+        gid = game_id or self.current_game_id
+        all_chars = self.get_characters(gid)
+        children_map: dict[str, list[str]] = {}
+        for c in all_chars:
+            children_map.setdefault(c.parent_id, []).append(c.id)
+        result = [root_id]
+        queue = [root_id]
+        while queue:
+            parent = queue.pop(0)
+            for child_id in children_map.get(parent, []):
+                result.append(child_id)
+                queue.append(child_id)
+        return result
+
+    def enforce_single_mod(self, mod_id: str) -> list[str]:
+        """角色/对象下启用 Mod 时，禁用同一角色/对象子树下的其他所有 Mod。
+        返回被禁用的 Mod ID 列表。"""
+        mod = self._index.get_mod(mod_id)
+        if not mod or not mod.node_id:
+            return []
+        # 查找最近的 character 祖先
+        char_ancestor = self.find_character_ancestor(mod.node_id)
+        if not char_ancestor:
+            return []
+        # 找到角色子树下所有 node_id
+        subtree_ids = self.get_subtree_ids(char_ancestor.id)
+        # 禁用子树中其他所有已启用的 Mod
+        disabled = []
+        for cid in subtree_ids:
+            sibling_mods = self.get_mods(node_id=cid)
+            for m in sibling_mods:
+                if m.mod_id != mod_id and m.is_enabled:
+                    if not self._remove_known_deployments(m, capture_changes=True):
+                        logger.warning("单角色互斥时取消部署失败，保留启用: %s", m.display_name)
+                        continue
+                    m.disable()
+                    self._persist_mod_deployment_state(m)
+                    disabled.append(m.mod_id)
+
+        # 同步到当前预设
+        try:
+            if disabled:
+                self._preset_manager.strip_mod_ids(disabled, self.current_game_id)
+        except Exception as e:
+            logger.warning("preset strip_mod_ids 失败: %s", e)
+
+        return disabled
+
+    # 角色 CRUD
+
+    def get_character(self, node_id: str, game_id: str | None = None) -> Node | None:
+        """查询指定游戏节点及直属 Mod 计数，并解析缩略图逻辑引用；节点缺失时返回 None。"""
+        gid = game_id or self.current_game_id
+        row = (
+            self._index._db()
+            .execute(
+                "SELECT n.*,COUNT(m.mod_id) AS mod_count,"
+                "COALESCE(SUM(d.state='active'),0) AS enabled_count "
+                "FROM nodes n LEFT JOIN mods m ON m.node_id=n.id "
+                "LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+                "WHERE n.id=? AND n.game_id=? GROUP BY n.id",
+                (node_id, gid),
+            )
+            .fetchone()
+        )
+        if row is None:
+            return None
+        node = Node.from_row(row)
+        node.mod_count, node.enabled_count = row["mod_count"], row["enabled_count"]
+        if node.thumbnail:
+            node.thumbnail = str(self._index.paths.resolve_image(node.id, json.loads(node.thumbnail)))
+        return node
+
+    def get_characters(self, game_id: str | None = None) -> list[Node]:
+        """按排序值和名称列出游戏节点，附带直属 Mod 及活动部署计数和实际缩略图路径。"""
+        gid = game_id or self.current_game_id
+        rows = (
+            self._index._db()
+            .execute(
+                "SELECT n.*,COUNT(m.mod_id) AS mod_count,"
+                "COALESCE(SUM(d.state='active'),0) AS enabled_count "
+                "FROM nodes n LEFT JOIN mods m ON m.node_id=n.id "
+                "LEFT JOIN deployment_records d ON d.mod_id=m.mod_id "
+                "WHERE n.game_id=? GROUP BY n.id ORDER BY n.sort_order,n.name",
+                (gid,),
+            )
+            .fetchall()
+        )
+        result = []
+        for row in rows:
+            node = Node.from_row(row)
+            node.mod_count, node.enabled_count = row["mod_count"], row["enabled_count"]
+            if node.thumbnail:
+                node.thumbnail = str(self._index.paths.resolve_image(node.id, json.loads(node.thumbnail)))
+            result.append(node)
+        return result
