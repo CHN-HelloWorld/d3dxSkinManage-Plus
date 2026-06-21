@@ -1044,5 +1044,99 @@
       48,
       194
     ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "source_sha256": "9a6953b75c35818a73b357af77547fb879e5190ba7924c55af073722341ee8b6",
+    "image_sha256": "12836458eddde3873f7dc3894ba4433412dfd355daa05ab2def83f4256974b09",
+    "source_size": [
+      1400,
+      1280
+    ],
+    "size": [
+      1496,
+      1832
+    ],
+    "title": "删除游戏 · 先核对范围",
+    "marks": [
+      {
+        "box": [
+          50,
+          268,
+          1300,
+          226
+        ],
+        "label": "先看资源数量、部署数量及大小，确认选中的是目标游戏。"
+      },
+      {
+        "box": [
+          50,
+          534,
+          1300,
+          426
+        ],
+        "label": "逐项阅读将删除的内容，重要资源提前备份或导出。"
+      },
+      {
+        "target": "永久删除",
+        "label": "「永久删除」不会放入回收站；不确定时点击「取消」。",
+        "box": [
+          1178,
+          1190,
+          172,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/20-删除游戏.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "source_sha256": "8019b8f142b5bf1021c68d3da04ef12bb21757674be28a7adb1f3a5d032a18b3",
+    "image_sha256": "4f85cedaa669ec023b0bba53d4da9aa52670af471e3fe66cccc2e7d7c176ed9b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "画廊 · 从预览图找到 Mod",
+    "marks": [
+      {
+        "box": [
+          382,
+          182,
+          562,
+          690
+        ],
+        "label": "单击预览卡片定位到总览；双击可以切换该 Mod 的启用状态。"
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "在右上角选择分级预览的显示方式，不会因此删除或禁用 Mod。",
+        "box": [
+          2582,
+          24,
+          266,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/21-画廊.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
