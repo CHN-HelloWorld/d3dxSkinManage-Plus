@@ -1138,5 +1138,121 @@
       48,
       194
     ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "source_sha256": "bae15a8bc51d7830740f474f1aadd62a96ca3c4e69d3cc30c3a1e44a145e73d8",
+    "image_sha256": "400feccbfea9429d095c28324b0c70b63507d872c7c9cb9b03cff1b7e1f9c6f0",
+    "source_size": [
+      1200,
+      1226
+    ],
+    "size": [
+      1296,
+      1866
+    ],
+    "title": "批量添加类别 · 每行独立填写",
+    "marks": [
+      {
+        "box": [
+          294,
+          308,
+          466,
+          90
+        ],
+        "label": "每行分别填写类别名称和可选英文名。"
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "为这一项选择类别或角色/对象，互斥规则由节点类型决定。",
+        "box": [
+          780,
+          318,
+          264,
+          68
+        ]
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "点击这里追加下一行。",
+        "box": [
+          50,
+          986,
+          196,
+          76
+        ]
+      },
+      {
+        "target": "全部添加",
+        "label": "检查所有行后点击「全部添加」，创建在当前层级。",
+        "box": [
+          930,
+          1116,
+          220,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/22-批量添加.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "source_sha256": "3cec7b64f0d62ba6e79fea36381afcbde72336f28751b4e4ce38c01a21c6f9a3",
+    "image_sha256": "817e2dd6d2a1ec97d2b743b94340cd291670314d76c2e7d99e60a7e522308a5c",
+    "source_size": [
+      1680,
+      1120
+    ],
+    "size": [
+      1776,
+      1672
+    ],
+    "title": "查看日志 · 选会话再查问题",
+    "marks": [
+      {
+        "box": [
+          144,
+          22,
+          300,
+          68
+        ],
+        "label": "先选问题发生时的启动会话。"
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "需要错误前后文时保留「全部」；单级筛选只显示对应级别。",
+        "box": [
+          526,
+          22,
+          214,
+          68
+        ]
+      },
+      {
+        "target": "打开日志目录",
+        "label": "点击「打开日志目录」获取完整文件，或用右侧「复制」复制当前内容。",
+        "box": [
+          1262,
+          22,
+          264,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/23-日志.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
