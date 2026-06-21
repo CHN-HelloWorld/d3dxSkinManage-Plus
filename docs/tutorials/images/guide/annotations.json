@@ -1254,5 +1254,57 @@
       48,
       192
     ]
+  },
+  {
+    "file": "24-在线Mod.webp",
+    "source_sha256": "0e6bb527acc04117d75332ae01c71e06a410e3017bce69dc4d35b5cd8d0b588c",
+    "image_sha256": "00b5dd02220bc4d2f8b3333f0b84c15c12c544196a79603fb36277bf068de917",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "在线浏览 · 先找条目，再看文件",
+    "marks": [
+      {
+        "box": [
+          348,
+          10,
+          1724,
+          64
+        ],
+        "label": "输入关键词搜索；下方面包屑用于选择在线分类。"
+      },
+      {
+        "box": [
+          352,
+          182,
+          422,
+          536
+        ],
+        "label": "点击 Mod 卡片打开详情，查看说明和可下载文件。"
+      },
+      {
+        "target": "默认",
+        "class": "LeadingIconComboBox",
+        "label": "在排序菜单中选择最新、最近更新或热度等顺序。",
+        "box": [
+          2200,
+          8,
+          232,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/24-在线Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
