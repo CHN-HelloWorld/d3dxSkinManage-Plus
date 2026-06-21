@@ -715,5 +715,58 @@
       48,
       194
     ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "source_sha256": "855e3cdeac3dce2d3ec3d91624825c405f6847fae2d3cd853b15de40b5323b78",
+    "image_sha256": "63523c4b9179e67606f71548a74ee63d2ea434894194831c5b5d0fefe7ea31ea",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "导入设置 · 格式和转换规则",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "选择导入文件夹时使用的库内压缩格式。",
+        "box": [
+          1500,
+          346,
+          470,
+          72
+        ]
+      },
+      {
+        "box": [
+          816,
+          480,
+          820,
+          94
+        ],
+        "label": "检查「强制统一为导入格式」；开启时可能需要解压后重新压缩。"
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "导出的格式、分类目录和元数据选项在左侧「导出」分组。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final/14-导入与导出.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
