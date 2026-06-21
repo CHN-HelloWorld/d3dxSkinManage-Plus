@@ -1001,5 +1001,48 @@
       48,
       194
     ]
+  },
+  {
+    "file": "19-关于.webp",
+    "source_sha256": "1e031a83cf2cf2aadf32eab786dff0f756fd8adda4beda77fb5aba2c46d5bc7f",
+    "image_sha256": "164fe8adb3e6bf4e48fdcea86981088fa37c991ab2d54523c3ad87120511e96e",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "关于 · 项目介绍与短片",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "点击左下角「关于」进入项目介绍。",
+        "box": [
+          0,
+          1632,
+          320,
+          74
+        ]
+      },
+      {
+        "box": [
+          1664,
+          1048,
+          308,
+          84
+        ],
+        "label": "「播放短片」打开页面内的项目故事播放器。"
+      }
+    ],
+    "source": "images/final/19-关于.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
