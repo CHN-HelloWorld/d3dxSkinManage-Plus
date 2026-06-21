@@ -502,5 +502,100 @@
       48,
       192
     ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "source_sha256": "ad1f703ce1b52a9c25491fa8c4409075b5d40bcd571ec7c612158173c7f45c7e",
+    "image_sha256": "c8f98b4ec05be99d01ec000693ea719cfa9fc66d6a8153a4d658d12cbb25c254",
+    "source_size": [
+      1520,
+      840
+    ],
+    "size": [
+      1616,
+      1304
+    ],
+    "title": "分类预设 · 导入和导出分类树",
+    "marks": [
+      {
+        "box": [
+          48,
+          360,
+          694,
+          280
+        ],
+        "label": "「导入分类预设」读取 .d3dxcp，随后核对目标游戏及分类差异。"
+      },
+      {
+        "box": [
+          772,
+          360,
+          698,
+          280
+        ],
+        "label": "「导出分类预设」分享分类结构与可选目录图片，不包含 Mod 本体。"
+      }
+    ],
+    "source": "images/final/10-分类预设.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "source_sha256": "3943a0b21a523a65363b1c90d6accc7d15a9425bb9a629b8ab9b0bf5e4074a7d",
+    "image_sha256": "422907ac14c654cfe3da40466406099084972416da77c1c097c7656cbd39eeb8",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "常规设置 · 删除方式与并发任务",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "进入「设置 → 常规」，在左侧选择具体设置分组。",
+        "box": [
+          406,
+          60,
+          140,
+          76
+        ]
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "在删除方式中选择直接删除或回收站；操作前确认所选范围。",
+        "box": [
+          1500,
+          330,
+          420,
+          72
+        ]
+      },
+      {
+        "target": "自动推荐",
+        "label": "并发数量不确定时使用「自动推荐」，再按实际磁盘表现调整。",
+        "box": [
+          1756,
+          528,
+          148,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/11-设置常规.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
