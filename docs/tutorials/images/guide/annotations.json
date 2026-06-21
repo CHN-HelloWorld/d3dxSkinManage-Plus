@@ -597,5 +597,123 @@
       48,
       194
     ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "source_sha256": "c61f98f73dfdf495753b8c174d6861a3b4faaf1fbd72a422d6cbf1dfea854958",
+    "image_sha256": "5c21589c525458dd085a1a88064654081732ee80131594f2cd51c28665bb1b6f",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "个性化 · 主题、语言与字体",
+    "marks": [
+      {
+        "box": [
+          832,
+          334,
+          838,
+          194
+        ],
+        "label": "在外观卡片中选择浅色、深色或跟随系统的主题。"
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "从语言列表切换界面语言。",
+        "box": [
+          1500,
+          830,
+          380,
+          72
+        ]
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "需要自定义翻译时打开语言包文件夹，修改后刷新列表。",
+        "box": [
+          1500,
+          960,
+          288,
+          68
+        ]
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "在字体列表选择界面字体，检查中文和符号的显示效果。",
+        "box": [
+          1500,
+          1144,
+          526,
+          72
+        ]
+      }
+    ],
+    "source": "images/final/12-设置个性化.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "source_sha256": "e4e2bb20404af7dfc93d65c66b4266efb3640538090c664e51034359ed4417b4",
+    "image_sha256": "e66b7fc2a9ab9f6a361e164514788a4cb1f22647980ad67de59d813ea4eb15ca",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "快捷键 · 修改管理器的操作绑定",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "进入「设置 → 快捷键 → 按键绑定」。",
+        "box": [
+          746,
+          60,
+          168,
+          76
+        ]
+      },
+      {
+        "box": [
+          2072,
+          410,
+          302,
+          52
+        ],
+        "label": "点击某项当前键位录制新绑定；发生冲突时按提示处理。"
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "「还原」只重置这一项快捷键；页面底部「恢复默认」经确认后重置所有程序偏好，保留游戏配置和已导入的 Mod。",
+        "box": [
+          2500,
+          410,
+          108,
+          52
+        ]
+      }
+    ],
+    "source": "images/final/13-快捷键.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
