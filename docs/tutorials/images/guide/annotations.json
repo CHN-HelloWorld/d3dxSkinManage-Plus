@@ -450,5 +450,57 @@
       180,
       192
     ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "source_sha256": "7cd50a2ce98faca4edc0f9ca6c35fe208a3cb884823a68b5d63e329296907229",
+    "image_sha256": "102d54a6b1c975a6f58b32fd84bfcdd5d02e876166b9ef42094940a7a30a172a",
+    "source_size": [
+      1520,
+      1072
+    ],
+    "size": [
+      1616,
+      1624
+    ],
+    "title": "编辑 Mod · 修改信息与标签",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "只想修改显示名时取消此项；勾选会同步重命名磁盘对象。",
+        "box": [
+          48,
+          344,
+          360,
+          40
+        ]
+      },
+      {
+        "box": [
+          996,
+          368,
+          476,
+          218
+        ],
+        "label": "在标签区添加或调整标签，注意共用标签的修改范围。"
+      },
+      {
+        "target": "保存修改",
+        "label": "点击「保存修改」提交本次编辑；Ctrl+Enter 也可保存。",
+        "box": [
+          1266,
+          976,
+          210,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/09-编辑Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
