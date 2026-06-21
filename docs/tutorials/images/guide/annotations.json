@@ -346,5 +346,109 @@
       48,
       194
     ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "source_sha256": "9b379d54bfd6b5798cd6ef2cea3be6f36efd51c78f0dec3bc7f419b7b0f64864",
+    "image_sha256": "bb0740ec383b9b7d0663cbebe212cb404325261306323fcc0faf65764aa2c7e6",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "保存外观方案 · 为一个 Mod 管理多种变体",
+    "marks": [
+      {
+        "box": [
+          2580,
+          1010,
+          240,
+          58
+        ],
+        "label": "选中 Mod 后切换到「变体」标签。"
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "把当前可保存的外观状态另存为一个命名方案。",
+        "box": [
+          2092,
+          1082,
+          732,
+          84
+        ]
+      },
+      {
+        "box": [
+          2092,
+          1336,
+          732,
+          204
+        ],
+        "label": "在已保存的方案中选择外观；当前使用的方案会显示状态标记。"
+      }
+    ],
+    "source": "images/final/07-变体管理.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "source_sha256": "6a795c836e7d1037021306b088f07c225d801baeaca665412fa7531419f37fc0",
+    "image_sha256": "83c58047be34f999c2235de5fb04994eb6e9efe9bc671aa269f55daaf5e0c918",
+    "source_size": [
+      760,
+      864
+    ],
+    "size": [
+      1120,
+      1416
+    ],
+    "title": "组合预设 · 保存与切换搭配",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "从这里新建一套组合预设。",
+        "box": [
+          554,
+          26,
+          180,
+          60
+        ]
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "点击目标预设旁的「应用」，切换整套搭配。",
+        "box": [
+          542,
+          314,
+          168,
+          60
+        ]
+      },
+      {
+        "box": [
+          26,
+          738,
+          294,
+          60
+        ],
+        "label": "先选择预设，再按需要重命名或复制。"
+      }
+    ],
+    "source": "images/final/08-组合预设.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      180,
+      192
+    ]
   }
 ]
