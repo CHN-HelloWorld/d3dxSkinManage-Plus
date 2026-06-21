@@ -768,5 +768,110 @@
       48,
       194
     ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "source_sha256": "7869113c90b41b239687c71099c0fa13e3266748d5316a53dc75cf290eb7dc60",
+    "image_sha256": "46f0d5223f2f5fd0362a874a4ca2a97ac0ee328df04c53396c7fd6127ad03088",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "在线功能代理 · 配置两个入口",
+    "marks": [
+      {
+        "box": [
+          816,
+          328,
+          820,
+          94
+        ],
+        "label": "在「在线 Mod 代理」中打开「启用代理」。"
+      },
+      {
+        "target": "前往代理配置",
+        "label": "打开常规网络代理配置，填写实际代理并启用总开关。",
+        "box": [
+          1500,
+          464,
+          236,
+          68
+        ]
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "本地 Mod 的更新检查偏好在左侧「Mod 更新」分组。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final/15-在线设置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "source_sha256": "1050b9aabc8a53543db9abe46fe1edb55d5f768300de799cd7e1c6eb614f0d8e",
+    "image_sha256": "21040d7fcfe9bfd130bf598efa5bcfc77cce993a3bf231f2775eeb96ba154663",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "程序更新 · 检查管理器的新版本",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "点击「检查程序更新」，查看管理器的新版本和更新说明。",
+        "box": [
+          1500,
+          332,
+          236,
+          68
+        ]
+      },
+      {
+        "box": [
+          816,
+          822,
+          820,
+          110
+        ],
+        "label": "确认更新前备份选项；它备份程序文件，不能代替个人 Mod 数据备份。"
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "按网络情况选择下载源；获取版本仍需发行渠道提供有效更新源。",
+        "box": [
+          1500,
+          1048,
+          470,
+          72
+        ]
+      }
+    ],
+    "source": "images/final/16-程序更新.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
