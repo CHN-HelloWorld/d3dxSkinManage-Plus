@@ -1306,5 +1306,112 @@
       48,
       194
     ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "source_sha256": "c536b920ade90dd6a115b9874b2bc9f0a35de3966996177ca31e412af7f7c20e",
+    "image_sha256": "94d8e77c1728988679c6dd6b50c9d0fb3f41d470dbb041543eda4ded7389340b",
+    "source_size": [
+      1520,
+      1480
+    ],
+    "size": [
+      1616,
+      2120
+    ],
+    "title": "导出分类树 · 名称、图片和输出位置",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "填写分享用的预设名称，并核对当前游戏。",
+        "box": [
+          50,
+          252,
+          662,
+          72
+        ]
+      },
+      {
+        "target": "包含目录图片",
+        "label": "按需要勾选目录图片；右侧树中核对完整导出范围。",
+        "box": [
+          50,
+          494,
+          662,
+          40
+        ]
+      },
+      {
+        "target": "选择…",
+        "label": "先选择输出位置，检查下方最终文件名。",
+        "box": [
+          578,
+          910,
+          134,
+          60
+        ]
+      },
+      {
+        "target": "开始导出",
+        "label": "所有必要信息填好后，点击「开始导出」。",
+        "box": [
+          1306,
+          1390,
+          164,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/25-分类导出.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "source_sha256": "f78fa1f2a82e8cb1c4ed5b038fd8b9032c2022b80c5836c2e3f67631ec7a4e73",
+    "image_sha256": "bf7b5d6a85325ddcd859f11ab43ee2211f2c1d9aed88c2330daf0bd9190d04f4",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "设置搜索 · 直接定位选项",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "在设置搜索框输入关键词，例如「缓存」。",
+        "box": [
+          2158,
+          64,
+          516,
+          68
+        ]
+      },
+      {
+        "box": [
+          406,
+          222,
+          2398,
+          550
+        ],
+        "label": "点击结果跳转到对应分组；清空搜索词后恢复常规浏览。"
+      }
+    ],
+    "source": "images/final/26-设置搜索.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
