@@ -1660,5 +1660,103 @@
       48,
       192
     ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "source_sha256": "4551defc3389314e284236adde7ca1077273b9c60326951dde6ce353b87dcf53",
+    "image_sha256": "d094d388fda38915e9c0fa47416b61df0152afbb523f8dd5c71d8c9436d5fe39",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "进入类别后 · 导入第一个 Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "面包屑应显示一个具体类别。图中以空的「待整理」类别演示。",
+        "box": [
+          490,
+          110,
+          96,
+          64
+        ]
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "点击「导入 Mod」，或把压缩包/文件夹拖入内容区；也可按 Ctrl+I。",
+        "box": [
+          1242,
+          1052,
+          226,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/32-导入入口.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "source_sha256": "d5f26af101e92f76a986f32ef62ba4aa925bb30a0a5272b56dd0ab51e9693c04",
+    "image_sha256": "4783efdd468f067fc5a2f2cdf84d00820806b45569af7a524327e5562d355be4",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "启用 Mod · 选中后点击启用",
+    "marks": [
+      {
+        "box": [
+          720,
+          284,
+          320,
+          400
+        ],
+        "label": "单击选中要启用的 Mod，右侧会显示它的详情。"
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "点击「启用」，等待部署结束；也可双击卡片或单选后按空格。",
+        "box": [
+          2156,
+          1752,
+          124,
+          64
+        ]
+      },
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "完成后，这里的状态变为「已启用」，下方按钮变为「禁用」。"
+      }
+    ],
+    "source": "images/final/33-启用Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
