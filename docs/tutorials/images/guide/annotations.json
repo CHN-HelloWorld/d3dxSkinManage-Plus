@@ -1413,5 +1413,102 @@
       48,
       194
     ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "source_sha256": "26434ad4f206ed46fcda582530e442b23c9bdf972e0601ed15ee05fb99d7e9d0",
+    "image_sha256": "35df3b9e1d22f1fbddf8f136891d6868c15a76927f72a9ffcbe84ff9b777d9ff",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "图片与缓存 · 分清内存和磁盘缓存",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "进入「设置 → 常规 → 图片与缓存」。",
+        "box": [
+          406,
+          458,
+          344,
+          80
+        ]
+      },
+      {
+        "target": "清理图片内存",
+        "label": "清理当前图片内存，后续查看时会重新读取。",
+        "box": [
+          2540,
+          650,
+          236,
+          68
+        ]
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "清理可再生的磁盘缓存，不用这个入口删除原始 Mod。",
+        "box": [
+          2540,
+          1276,
+          236,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/27-图片与缓存.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "source_sha256": "0b62b252337607712bdf258988439672e2d78c87ce87933f0075a5d55943f0a6",
+    "image_sha256": "4b4ab61099326e0256dfcf6e52069a06ed84c67cb92b0c45bbcc01ae4040b1bc",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "整窗背景 · 选择背景类型",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "进入「设置 → 个性化 → 整窗背景」。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      },
+      {
+        "box": [
+          1506,
+          334,
+          444,
+          68
+        ],
+        "label": "选择关闭、图片、视频或 WE 场景，再填写该类型的素材或程序路径。"
+      }
+    ],
+    "source": "images/final/28-整窗背景.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
   }
 ]
