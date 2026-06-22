@@ -1560,5 +1560,105 @@
       48,
       194
     ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "source_sha256": "5911adc983824a170dc8f25a9ca4db7b7d00422469e5be3542119d734170d63b",
+    "image_sha256": "242a66cf2dab9149bcad98701e30e3bc7c7d1863b2fdaa5b890b6b3a00237042",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "新建类别 ① · 打开创建入口",
+    "marks": [
+      {
+        "box": [
+          18,
+          110,
+          280,
+          78
+        ],
+        "label": "激活游戏后，进入左侧「类别总览」。"
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "空页面点击「+ 新建类别」。已有内容时，在空白处右键选择「新建类别」。",
+        "box": [
+          926,
+          1072,
+          240,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/30-新建类别入口.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "source_sha256": "4293b10346b0caefecf898b97ef38d2d7cc31ef2a148d15cf39396594202f0ca",
+    "image_sha256": "f17ca8ce29a9f4e99d0eae35831e6e41bdde184595730a5199cff8b7a8fedffd",
+    "source_size": [
+      1040,
+      1026
+    ],
+    "size": [
+      1136,
+      1638
+    ],
+    "title": "新建类别 ② · 填写并确认",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "填写类别名称，例如「外观」；英文名与图片可按需要补充。",
+        "box": [
+          370,
+          266,
+          620,
+          72
+        ]
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "选择节点类型：普通类别可同时启用多个 Mod，角色/对象用于互斥外观。",
+        "box": [
+          370,
+          534,
+          620,
+          68
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "点击「确认」创建，再双击新出现的类别卡片进入。",
+        "box": [
+          810,
+          916,
+          180,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/31-新建类别.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
   }
 ]
