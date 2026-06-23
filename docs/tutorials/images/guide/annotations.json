@@ -1,0 +1,1762 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "source_sha256": "f01e40607369e280d9322abadbdb66165abd8e2c1ff795b5a58382caf2961017",
+    "image_sha256": "333fdb8352b26f55020634b24979946f165f9915cf02cc1ffbc59c775b283ec3",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "添加游戏 · 填写后确认",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "点击「添加游戏」，右侧会出现新游戏的填写区域。",
+        "box": [
+          2640,
+          20,
+          212,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          798,
+          784,
+          156
+        ],
+        "label": "填写游戏名称和英文名称；图中的名称仅作示例。"
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "「Mod 文件夹」填写加载器实际读取的部署目录。",
+        "box": [
+          2230,
+          1118,
+          546,
+          60
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "检查路径后点击「确认」，保存游戏配置。",
+        "box": [
+          2074,
+          1198,
+          386,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/01-添加游戏.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "source_sha256": "c75e99d3d287a2c9386480c4ba6e2583bc7e0263befac2cf56031a1fc89b7b53",
+    "image_sha256": "c245a86fff7522b7f18e059008a92f783c9d1058241032e571771b14bd3d4f7b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "激活游戏 · 看清当前环境",
+    "marks": [
+      {
+        "box": [
+          364,
+          128,
+          356,
+          430
+        ],
+        "label": "双击游戏卡片激活；再次双击当前游戏会取消激活。"
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "出现「当前环境」，且卡片标有「当前」，表示已激活。",
+        "box": [
+          2074,
+          1138,
+          782,
+          68
+        ]
+      },
+      {
+        "box": [
+          2072,
+          968,
+          784,
+          156
+        ],
+        "label": "启用 Mod 前核对加载器目录与 Mod 部署目录。"
+      }
+    ],
+    "source": "images/final/02-游戏配置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "source_sha256": "8a6f2484331aa2ff22b587d0ef3c0065e4f089cb2c023c49e92dc05bbc532e60",
+    "image_sha256": "1674a4a745b5b1b978ce13e09618c04c0f9ef212cc53a447b0f8d6b5148b00d7",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "类别总览 · 找到分类与常用入口",
+    "marks": [
+      {
+        "box": [
+          1408,
+          284,
+          320,
+          400
+        ],
+        "label": "双击类别卡片进入，例如「外观」。进入类别后才能导入 Mod。"
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "面包屑显示当前层级；点击「全部」返回分类根目录。",
+        "box": [
+          382,
+          110,
+          72,
+          64
+        ]
+      },
+      {
+        "box": [
+          364,
+          188,
+          1616,
+          70
+        ],
+        "label": "按名称、作者、标签搜索，或用标签和类型条件缩小范围。"
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "从上方预设入口管理当前游戏的整套 Mod 搭配。",
+        "box": [
+          1546,
+          26,
+          320,
+          62
+        ]
+      }
+    ],
+    "source": "images/final/03-类别总览.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "source_sha256": "d7dd025571e196242a096b18e3000ddaa8cb4343f41334f7351488ccc4c5ce28",
+    "image_sha256": "6aa5095d7b0a1704bf66eb03ab916ec0c9b7633be9b430bd2bb7035f290826bd",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "查看 Mod · 信息、状态与操作",
+    "marks": [
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "在详情顶部核对 Mod 名称、启用状态及所用变体。"
+      },
+      {
+        "box": [
+          2092,
+          1010,
+          732,
+          58
+        ],
+        "label": "切换「信息」「按键」「变体」标签，查看对应内容。"
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "点击「编辑」修改名称、作者、标签和描述等信息。",
+        "box": [
+          2292,
+          1752,
+          124,
+          64
+        ]
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "已启用时按钮显示「禁用」；禁用后 Mod 仍保留在资源库。",
+        "box": [
+          2156,
+          1752,
+          124,
+          64
+        ]
+      }
+    ],
+    "source": "images/final/04-Mod信息.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "source_sha256": "429ca6f63c86ad4580d18067799e63d0a06fd9b4d71ebaf1a71d8726f706169b",
+    "image_sha256": "757cdf647f3f28fc73772530e8afa6ffd17c20893fa98ee37a88349e4ea59d51",
+    "source_size": [
+      1360,
+      1080
+    ],
+    "size": [
+      1456,
+      1632
+    ],
+    "title": "导入 Mod · 选择来源并确认",
+    "marks": [
+      {
+        "box": [
+          24,
+          86,
+          394,
+          68
+        ],
+        "label": "用「添加文件」或「添加文件夹」选择来源，也可一次加入多个。"
+      },
+      {
+        "box": [
+          872,
+          174,
+          460,
+          218
+        ],
+        "label": "逐项检查年龄分级和预览图；导入目标是打开窗口前所在的类别。"
+      },
+      {
+        "target": "确认导入",
+        "label": "确认后开始导入，在主窗口右下角任务中心查看进度。",
+        "box": [
+          1164,
+          988,
+          172,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/05-导入Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "source_sha256": "3dc7a240fa86677b2220e4f4fea20399ba9b6916448bba3007cf1dc7b9c22376",
+    "image_sha256": "834c7b2c01d1f518dde3927629a066abbbd914f70e90a3f0d1b4a2a0442ef1af",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "Mod 按键 · 录制或手动编辑",
+    "marks": [
+      {
+        "box": [
+          2336,
+          1010,
+          238,
+          58
+        ],
+        "label": "选中 Mod 后切换到「按键」标签。这里修改的是 Mod 的 INI 按键。"
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "点击当前键位录制新按键；旁边的编辑图标可手动输入。",
+        "box": [
+          2414,
+          1206,
+          148,
+          60
+        ]
+      },
+      {
+        "target": "打开文件",
+        "label": "需要检查上下文时，打开对应 INI 文件查看。",
+        "box": [
+          2614,
+          1102,
+          200,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/06-按键设置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "source_sha256": "9b379d54bfd6b5798cd6ef2cea3be6f36efd51c78f0dec3bc7f419b7b0f64864",
+    "image_sha256": "bb0740ec383b9b7d0663cbebe212cb404325261306323fcc0faf65764aa2c7e6",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "保存外观方案 · 为一个 Mod 管理多种变体",
+    "marks": [
+      {
+        "box": [
+          2580,
+          1010,
+          240,
+          58
+        ],
+        "label": "选中 Mod 后切换到「变体」标签。"
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "把当前可保存的外观状态另存为一个命名方案。",
+        "box": [
+          2092,
+          1082,
+          732,
+          84
+        ]
+      },
+      {
+        "box": [
+          2092,
+          1336,
+          732,
+          204
+        ],
+        "label": "在已保存的方案中选择外观；当前使用的方案会显示状态标记。"
+      }
+    ],
+    "source": "images/final/07-变体管理.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "source_sha256": "6a795c836e7d1037021306b088f07c225d801baeaca665412fa7531419f37fc0",
+    "image_sha256": "83c58047be34f999c2235de5fb04994eb6e9efe9bc671aa269f55daaf5e0c918",
+    "source_size": [
+      760,
+      864
+    ],
+    "size": [
+      1120,
+      1416
+    ],
+    "title": "组合预设 · 保存与切换搭配",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "从这里新建一套组合预设。",
+        "box": [
+          554,
+          26,
+          180,
+          60
+        ]
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "点击目标预设旁的「应用」，切换整套搭配。",
+        "box": [
+          542,
+          314,
+          168,
+          60
+        ]
+      },
+      {
+        "box": [
+          26,
+          738,
+          294,
+          60
+        ],
+        "label": "先选择预设，再按需要重命名或复制。"
+      }
+    ],
+    "source": "images/final/08-组合预设.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      180,
+      192
+    ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "source_sha256": "7cd50a2ce98faca4edc0f9ca6c35fe208a3cb884823a68b5d63e329296907229",
+    "image_sha256": "102d54a6b1c975a6f58b32fd84bfcdd5d02e876166b9ef42094940a7a30a172a",
+    "source_size": [
+      1520,
+      1072
+    ],
+    "size": [
+      1616,
+      1624
+    ],
+    "title": "编辑 Mod · 修改信息与标签",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "只想修改显示名时取消此项；勾选会同步重命名磁盘对象。",
+        "box": [
+          48,
+          344,
+          360,
+          40
+        ]
+      },
+      {
+        "box": [
+          996,
+          368,
+          476,
+          218
+        ],
+        "label": "在标签区添加或调整标签，注意共用标签的修改范围。"
+      },
+      {
+        "target": "保存修改",
+        "label": "点击「保存修改」提交本次编辑；Ctrl+Enter 也可保存。",
+        "box": [
+          1266,
+          976,
+          210,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/09-编辑Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "source_sha256": "ad1f703ce1b52a9c25491fa8c4409075b5d40bcd571ec7c612158173c7f45c7e",
+    "image_sha256": "c8f98b4ec05be99d01ec000693ea719cfa9fc66d6a8153a4d658d12cbb25c254",
+    "source_size": [
+      1520,
+      840
+    ],
+    "size": [
+      1616,
+      1304
+    ],
+    "title": "分类预设 · 导入和导出分类树",
+    "marks": [
+      {
+        "box": [
+          48,
+          360,
+          694,
+          280
+        ],
+        "label": "「导入分类预设」读取 .d3dxcp，随后核对目标游戏及分类差异。"
+      },
+      {
+        "box": [
+          772,
+          360,
+          698,
+          280
+        ],
+        "label": "「导出分类预设」分享分类结构与可选目录图片，不包含 Mod 本体。"
+      }
+    ],
+    "source": "images/final/10-分类预设.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "source_sha256": "3943a0b21a523a65363b1c90d6accc7d15a9425bb9a629b8ab9b0bf5e4074a7d",
+    "image_sha256": "422907ac14c654cfe3da40466406099084972416da77c1c097c7656cbd39eeb8",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "常规设置 · 删除方式与并发任务",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "进入「设置 → 常规」，在左侧选择具体设置分组。",
+        "box": [
+          406,
+          60,
+          140,
+          76
+        ]
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "在删除方式中选择直接删除或回收站；操作前确认所选范围。",
+        "box": [
+          1500,
+          330,
+          420,
+          72
+        ]
+      },
+      {
+        "target": "自动推荐",
+        "label": "并发数量不确定时使用「自动推荐」，再按实际磁盘表现调整。",
+        "box": [
+          1756,
+          528,
+          148,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/11-设置常规.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "source_sha256": "c61f98f73dfdf495753b8c174d6861a3b4faaf1fbd72a422d6cbf1dfea854958",
+    "image_sha256": "5c21589c525458dd085a1a88064654081732ee80131594f2cd51c28665bb1b6f",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "个性化 · 主题、语言与字体",
+    "marks": [
+      {
+        "box": [
+          832,
+          334,
+          838,
+          194
+        ],
+        "label": "在外观卡片中选择浅色、深色或跟随系统的主题。"
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "从语言列表切换界面语言。",
+        "box": [
+          1500,
+          830,
+          380,
+          72
+        ]
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "需要自定义翻译时打开语言包文件夹，修改后刷新列表。",
+        "box": [
+          1500,
+          960,
+          288,
+          68
+        ]
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "在字体列表选择界面字体，检查中文和符号的显示效果。",
+        "box": [
+          1500,
+          1144,
+          526,
+          72
+        ]
+      }
+    ],
+    "source": "images/final/12-设置个性化.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "source_sha256": "e4e2bb20404af7dfc93d65c66b4266efb3640538090c664e51034359ed4417b4",
+    "image_sha256": "e66b7fc2a9ab9f6a361e164514788a4cb1f22647980ad67de59d813ea4eb15ca",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "快捷键 · 修改管理器的操作绑定",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "进入「设置 → 快捷键 → 按键绑定」。",
+        "box": [
+          746,
+          60,
+          168,
+          76
+        ]
+      },
+      {
+        "box": [
+          2072,
+          410,
+          302,
+          52
+        ],
+        "label": "点击某项当前键位录制新绑定；发生冲突时按提示处理。"
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "「还原」只重置这一项快捷键；页面底部「恢复默认」经确认后重置所有程序偏好，保留游戏配置和已导入的 Mod。",
+        "box": [
+          2500,
+          410,
+          108,
+          52
+        ]
+      }
+    ],
+    "source": "images/final/13-快捷键.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "source_sha256": "855e3cdeac3dce2d3ec3d91624825c405f6847fae2d3cd853b15de40b5323b78",
+    "image_sha256": "63523c4b9179e67606f71548a74ee63d2ea434894194831c5b5d0fefe7ea31ea",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "导入设置 · 格式和转换规则",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "选择导入文件夹时使用的库内压缩格式。",
+        "box": [
+          1500,
+          346,
+          470,
+          72
+        ]
+      },
+      {
+        "box": [
+          816,
+          480,
+          820,
+          94
+        ],
+        "label": "检查「强制统一为导入格式」；开启时可能需要解压后重新压缩。"
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "导出的格式、分类目录和元数据选项在左侧「导出」分组。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final/14-导入与导出.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "source_sha256": "7869113c90b41b239687c71099c0fa13e3266748d5316a53dc75cf290eb7dc60",
+    "image_sha256": "46f0d5223f2f5fd0362a874a4ca2a97ac0ee328df04c53396c7fd6127ad03088",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "在线功能代理 · 配置两个入口",
+    "marks": [
+      {
+        "box": [
+          816,
+          328,
+          820,
+          94
+        ],
+        "label": "在「在线 Mod 代理」中打开「启用代理」。"
+      },
+      {
+        "target": "前往代理配置",
+        "label": "打开常规网络代理配置，填写实际代理并启用总开关。",
+        "box": [
+          1500,
+          464,
+          236,
+          68
+        ]
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "本地 Mod 的更新检查偏好在左侧「Mod 更新」分组。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      }
+    ],
+    "source": "images/final/15-在线设置.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "source_sha256": "1050b9aabc8a53543db9abe46fe1edb55d5f768300de799cd7e1c6eb614f0d8e",
+    "image_sha256": "21040d7fcfe9bfd130bf598efa5bcfc77cce993a3bf231f2775eeb96ba154663",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "程序更新 · 检查管理器的新版本",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "点击「检查程序更新」，查看管理器的新版本和更新说明。",
+        "box": [
+          1500,
+          332,
+          236,
+          68
+        ]
+      },
+      {
+        "box": [
+          816,
+          822,
+          820,
+          110
+        ],
+        "label": "确认更新前备份选项；它备份程序文件，不能代替个人 Mod 数据备份。"
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "按网络情况选择下载源；获取版本仍需发行渠道提供有效更新源。",
+        "box": [
+          1500,
+          1048,
+          470,
+          72
+        ]
+      }
+    ],
+    "source": "images/final/16-程序更新.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "17-工具箱.webp",
+    "source_sha256": "ee3096698137918ba0784ba50ea7544ee347ddba19e11ebac08f8b8d0cf34c75",
+    "image_sha256": "181cb57f3e5d3a29ccf17bade5e5d3ca82ea6037a286ed65574e71ad3d0b0858",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "工具箱 · 分类预设与维护入口",
+    "marks": [
+      {
+        "target": "导入分类预设",
+        "badge": "above",
+        "label": "导入现有分类树，导入前比较新增内容和冲突。",
+        "box": [
+          430,
+          316,
+          270,
+          72
+        ]
+      },
+      {
+        "target": "导出分类预设",
+        "badge": "above",
+        "label": "把当前游戏的完整分类树另存为 .d3dxcp。",
+        "box": [
+          718,
+          316,
+          270,
+          72
+        ]
+      },
+      {
+        "target": "重建索引",
+        "class": "QPushButton",
+        "label": "普通刷新仍不能解决列表异常时，再按提示重建索引。",
+        "box": [
+          2614,
+          630,
+          176,
+          72
+        ]
+      },
+      {
+        "target": "查看日志",
+        "class": "QPushButton",
+        "label": "排查或反馈问题时，从这里打开日志查看器。",
+        "box": [
+          2614,
+          768,
+          176,
+          72
+        ]
+      }
+    ],
+    "source": "images/final/17-工具箱.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "18-插件.webp",
+    "source_sha256": "064f4e896f6e63862627576c7aa6ece34c0ff1c991465004d4038b6ee8711a25",
+    "image_sha256": "124f3ea2e5cd89f4788009ad5b667bfc2457678fe50862943735ab22dd19a3a6",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2618
+    ],
+    "title": "插件 · 安装、启用与管理",
+    "marks": [
+      {
+        "target": "安装插件",
+        "label": "选择插件压缩包安装；手动放入插件目录后点击「重新扫描」。",
+        "box": [
+          2112,
+          32,
+          212,
+          68
+        ]
+      },
+      {
+        "box": [
+          380,
+          394,
+          564,
+          120
+        ],
+        "label": "在左侧列表选择插件，右侧会显示该插件的详情。"
+      },
+      {
+        "box": [
+          2630,
+          176,
+          176,
+          68
+        ],
+        "label": "检查来源和权限后，用右上角开关启用；首次启用会请求信任确认。"
+      },
+      {
+        "target": "权限与来源 · 7 项权限",
+        "label": "展开「权限与来源」核对能力；重载和卸载按钮位于说明下方。",
+        "box": [
+          1018,
+          654,
+          1778,
+          98
+        ]
+      }
+    ],
+    "source": "images/final/18-插件.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "19-关于.webp",
+    "source_sha256": "1e031a83cf2cf2aadf32eab786dff0f756fd8adda4beda77fb5aba2c46d5bc7f",
+    "image_sha256": "164fe8adb3e6bf4e48fdcea86981088fa37c991ab2d54523c3ad87120511e96e",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "关于 · 项目介绍与短片",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "点击左下角「关于」进入项目介绍。",
+        "box": [
+          0,
+          1632,
+          320,
+          74
+        ]
+      },
+      {
+        "box": [
+          1664,
+          1048,
+          308,
+          84
+        ],
+        "label": "「播放短片」打开页面内的项目故事播放器。"
+      }
+    ],
+    "source": "images/final/19-关于.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "source_sha256": "9a6953b75c35818a73b357af77547fb879e5190ba7924c55af073722341ee8b6",
+    "image_sha256": "12836458eddde3873f7dc3894ba4433412dfd355daa05ab2def83f4256974b09",
+    "source_size": [
+      1400,
+      1280
+    ],
+    "size": [
+      1496,
+      1832
+    ],
+    "title": "删除游戏 · 先核对范围",
+    "marks": [
+      {
+        "box": [
+          50,
+          268,
+          1300,
+          226
+        ],
+        "label": "先看资源数量、部署数量及大小，确认选中的是目标游戏。"
+      },
+      {
+        "box": [
+          50,
+          534,
+          1300,
+          426
+        ],
+        "label": "逐项阅读将删除的内容，重要资源提前备份或导出。"
+      },
+      {
+        "target": "永久删除",
+        "label": "「永久删除」不会放入回收站；不确定时点击「取消」。",
+        "box": [
+          1178,
+          1190,
+          172,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/20-删除游戏.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "source_sha256": "8019b8f142b5bf1021c68d3da04ef12bb21757674be28a7adb1f3a5d032a18b3",
+    "image_sha256": "4f85cedaa669ec023b0bba53d4da9aa52670af471e3fe66cccc2e7d7c176ed9b",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "画廊 · 从预览图找到 Mod",
+    "marks": [
+      {
+        "box": [
+          382,
+          182,
+          562,
+          690
+        ],
+        "label": "单击预览卡片定位到总览；双击可以切换该 Mod 的启用状态。"
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "在右上角选择分级预览的显示方式，不会因此删除或禁用 Mod。",
+        "box": [
+          2582,
+          24,
+          266,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/21-画廊.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "source_sha256": "bae15a8bc51d7830740f474f1aadd62a96ca3c4e69d3cc30c3a1e44a145e73d8",
+    "image_sha256": "400feccbfea9429d095c28324b0c70b63507d872c7c9cb9b03cff1b7e1f9c6f0",
+    "source_size": [
+      1200,
+      1226
+    ],
+    "size": [
+      1296,
+      1866
+    ],
+    "title": "批量添加类别 · 每行独立填写",
+    "marks": [
+      {
+        "box": [
+          294,
+          308,
+          466,
+          90
+        ],
+        "label": "每行分别填写类别名称和可选英文名。"
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "为这一项选择类别或角色/对象，互斥规则由节点类型决定。",
+        "box": [
+          780,
+          318,
+          264,
+          68
+        ]
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "点击这里追加下一行。",
+        "box": [
+          50,
+          986,
+          196,
+          76
+        ]
+      },
+      {
+        "target": "全部添加",
+        "label": "检查所有行后点击「全部添加」，创建在当前层级。",
+        "box": [
+          930,
+          1116,
+          220,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/22-批量添加.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "source_sha256": "3cec7b64f0d62ba6e79fea36381afcbde72336f28751b4e4ce38c01a21c6f9a3",
+    "image_sha256": "817e2dd6d2a1ec97d2b743b94340cd291670314d76c2e7d99e60a7e522308a5c",
+    "source_size": [
+      1680,
+      1120
+    ],
+    "size": [
+      1776,
+      1672
+    ],
+    "title": "查看日志 · 选会话再查问题",
+    "marks": [
+      {
+        "box": [
+          144,
+          22,
+          300,
+          68
+        ],
+        "label": "先选问题发生时的启动会话。"
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "需要错误前后文时保留「全部」；单级筛选只显示对应级别。",
+        "box": [
+          526,
+          22,
+          214,
+          68
+        ]
+      },
+      {
+        "target": "打开日志目录",
+        "label": "点击「打开日志目录」获取完整文件，或用右侧「复制」复制当前内容。",
+        "box": [
+          1262,
+          22,
+          264,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/23-日志.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "24-在线Mod.webp",
+    "source_sha256": "0e6bb527acc04117d75332ae01c71e06a410e3017bce69dc4d35b5cd8d0b588c",
+    "image_sha256": "00b5dd02220bc4d2f8b3333f0b84c15c12c544196a79603fb36277bf068de917",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "在线浏览 · 先找条目，再看文件",
+    "marks": [
+      {
+        "box": [
+          348,
+          10,
+          1724,
+          64
+        ],
+        "label": "输入关键词搜索；下方面包屑用于选择在线分类。"
+      },
+      {
+        "box": [
+          352,
+          182,
+          422,
+          536
+        ],
+        "label": "点击 Mod 卡片打开详情，查看说明和可下载文件。"
+      },
+      {
+        "target": "默认",
+        "class": "LeadingIconComboBox",
+        "label": "在排序菜单中选择最新、最近更新或热度等顺序。",
+        "box": [
+          2200,
+          8,
+          232,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/24-在线Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "source_sha256": "c536b920ade90dd6a115b9874b2bc9f0a35de3966996177ca31e412af7f7c20e",
+    "image_sha256": "94d8e77c1728988679c6dd6b50c9d0fb3f41d470dbb041543eda4ded7389340b",
+    "source_size": [
+      1520,
+      1480
+    ],
+    "size": [
+      1616,
+      2120
+    ],
+    "title": "导出分类树 · 名称、图片和输出位置",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "填写分享用的预设名称，并核对当前游戏。",
+        "box": [
+          50,
+          252,
+          662,
+          72
+        ]
+      },
+      {
+        "target": "包含目录图片",
+        "label": "按需要勾选目录图片；右侧树中核对完整导出范围。",
+        "box": [
+          50,
+          494,
+          662,
+          40
+        ]
+      },
+      {
+        "target": "选择…",
+        "label": "先选择输出位置，检查下方最终文件名。",
+        "box": [
+          578,
+          910,
+          134,
+          60
+        ]
+      },
+      {
+        "target": "开始导出",
+        "label": "所有必要信息填好后，点击「开始导出」。",
+        "box": [
+          1306,
+          1390,
+          164,
+          60
+        ]
+      }
+    ],
+    "source": "images/final/25-分类导出.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "source_sha256": "f78fa1f2a82e8cb1c4ed5b038fd8b9032c2022b80c5836c2e3f67631ec7a4e73",
+    "image_sha256": "bf7b5d6a85325ddcd859f11ab43ee2211f2c1d9aed88c2330daf0bd9190d04f4",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "设置搜索 · 直接定位选项",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "在设置搜索框输入关键词，例如「缓存」。",
+        "box": [
+          2158,
+          64,
+          516,
+          68
+        ]
+      },
+      {
+        "box": [
+          406,
+          222,
+          2398,
+          550
+        ],
+        "label": "点击结果跳转到对应分组；清空搜索词后恢复常规浏览。"
+      }
+    ],
+    "source": "images/final/26-设置搜索.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "source_sha256": "26434ad4f206ed46fcda582530e442b23c9bdf972e0601ed15ee05fb99d7e9d0",
+    "image_sha256": "35df3b9e1d22f1fbddf8f136891d6868c15a76927f72a9ffcbe84ff9b777d9ff",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "图片与缓存 · 分清内存和磁盘缓存",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "进入「设置 → 常规 → 图片与缓存」。",
+        "box": [
+          406,
+          458,
+          344,
+          80
+        ]
+      },
+      {
+        "target": "清理图片内存",
+        "label": "清理当前图片内存，后续查看时会重新读取。",
+        "box": [
+          2540,
+          650,
+          236,
+          68
+        ]
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "清理可再生的磁盘缓存，不用这个入口删除原始 Mod。",
+        "box": [
+          2540,
+          1276,
+          236,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/27-图片与缓存.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "source_sha256": "0b62b252337607712bdf258988439672e2d78c87ce87933f0075a5d55943f0a6",
+    "image_sha256": "4b4ab61099326e0256dfcf6e52069a06ed84c67cb92b0c45bbcc01ae4040b1bc",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "整窗背景 · 选择背景类型",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "进入「设置 → 个性化 → 整窗背景」。",
+        "box": [
+          406,
+          282,
+          344,
+          80
+        ]
+      },
+      {
+        "box": [
+          1506,
+          334,
+          444,
+          68
+        ],
+        "label": "选择关闭、图片、视频或 WE 场景，再填写该类型的素材或程序路径。"
+      }
+    ],
+    "source": "images/final/28-整窗背景.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "29-在线详情.webp",
+    "source_sha256": "b4fc854f1c6178942a3718cf0504dc24fd52650532308255e70e9391673e091b",
+    "image_sha256": "228b4aaf133390f695f6cb6aee76a04f8da41f638d3b9cac309fcbd6c68731e1",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "在线详情 · 阅读说明并选对下载文件",
+    "marks": [
+      {
+        "box": [
+          1936,
+          160,
+          302,
+          62
+        ],
+        "label": "先查看「概览」「描述」等标签中的作者说明。"
+      },
+      {
+        "box": [
+          1936,
+          1298,
+          796,
+          194
+        ],
+        "label": "核对文件名和大小；不同文件可能是不同版本或可选附件。"
+      },
+      {
+        "box": [
+          2770,
+          1316,
+          80,
+          70
+        ],
+        "label": "点击目标文件右侧的下载按钮，随后按提示选择安装目标。"
+      }
+    ],
+    "source": "images/final/29-在线详情.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "source_sha256": "5911adc983824a170dc8f25a9ca4db7b7d00422469e5be3542119d734170d63b",
+    "image_sha256": "242a66cf2dab9149bcad98701e30e3bc7c7d1863b2fdaa5b890b6b3a00237042",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "新建类别 ① · 打开创建入口",
+    "marks": [
+      {
+        "box": [
+          18,
+          110,
+          280,
+          78
+        ],
+        "label": "激活游戏后，进入左侧「类别总览」。"
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "空页面点击「+ 新建类别」。已有内容时，在空白处右键选择「新建类别」。",
+        "box": [
+          926,
+          1072,
+          240,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/30-新建类别入口.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "source_sha256": "4293b10346b0caefecf898b97ef38d2d7cc31ef2a148d15cf39396594202f0ca",
+    "image_sha256": "f17ca8ce29a9f4e99d0eae35831e6e41bdde184595730a5199cff8b7a8fedffd",
+    "source_size": [
+      1040,
+      1026
+    ],
+    "size": [
+      1136,
+      1638
+    ],
+    "title": "新建类别 ② · 填写并确认",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "填写类别名称，例如「外观」；英文名与图片可按需要补充。",
+        "box": [
+          370,
+          266,
+          620,
+          72
+        ]
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "选择节点类型：普通类别可同时启用多个 Mod，角色/对象用于互斥外观。",
+        "box": [
+          370,
+          534,
+          620,
+          68
+        ]
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "点击「确认」创建，再双击新出现的类别卡片进入。",
+        "box": [
+          810,
+          916,
+          180,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/31-新建类别.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      192
+    ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "source_sha256": "4551defc3389314e284236adde7ca1077273b9c60326951dde6ce353b87dcf53",
+    "image_sha256": "d094d388fda38915e9c0fa47416b61df0152afbb523f8dd5c71d8c9436d5fe39",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2414
+    ],
+    "title": "进入类别后 · 导入第一个 Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "面包屑应显示一个具体类别。图中以空的「待整理」类别演示。",
+        "box": [
+          490,
+          110,
+          96,
+          64
+        ]
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "点击「导入 Mod」，或把压缩包/文件夹拖入内容区；也可按 Ctrl+I。",
+        "box": [
+          1242,
+          1052,
+          226,
+          68
+        ]
+      }
+    ],
+    "source": "images/final/32-导入入口.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "source_sha256": "d5f26af101e92f76a986f32ef62ba4aa925bb30a0a5272b56dd0ab51e9693c04",
+    "image_sha256": "4783efdd468f067fc5a2f2cdf84d00820806b45569af7a524327e5562d355be4",
+    "source_size": [
+      2880,
+      1920
+    ],
+    "size": [
+      2976,
+      2516
+    ],
+    "title": "启用 Mod · 选中后点击启用",
+    "marks": [
+      {
+        "box": [
+          720,
+          284,
+          320,
+          400
+        ],
+        "label": "单击选中要启用的 Mod，右侧会显示它的详情。"
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "点击「启用」，等待部署结束；也可双击卡片或单选后按空格。",
+        "box": [
+          2156,
+          1752,
+          124,
+          64
+        ]
+      },
+      {
+        "box": [
+          2092,
+          906,
+          732,
+          98
+        ],
+        "label": "完成后，这里的状态变为「已启用」，下方按钮变为「禁用」。"
+      }
+    ],
+    "source": "images/final/33-启用Mod.webp",
+    "language": "zh-CN",
+    "device_pixel_ratio": 2.0,
+    "screen_origin": [
+      48,
+      194
+    ]
+  }
+]
