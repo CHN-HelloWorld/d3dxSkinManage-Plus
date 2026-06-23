@@ -1743,3 +1743,66 @@ class ModManager:
                 return False
         mod.forget_deployment()
         return True
+
+    def set_ini_sync_notify(self, cb) -> None:
+        """注册「部署→源 override 同步」通知回调 ``cb(mod_id: str)``（UI 刷按键面板用）。
+
+        在 **watchdog 后台线程**触发（游戏运行期把变量写回部署 ini → 同步落 override）。
+        回调实现须自行把工作 marshal 回主线程（见 main_window 的 Qt 信号桥）。
+        """
+        self._ini_sync_notify = cb
+        if self._ini_sync is not None:
+            self._ini_sync.on_synced = self._on_deployment_ini_synced
+
+    def _on_deployment_ini_synced(self, mod_id: str) -> None:
+        """在同步器回调线程通知受影响的 Mod，界面接收者负责将刷新切换到主线程。"""
+        if self._ini_sync_notify is None:
+            return
+        for mod_id in self._ini_sync_refs.get(mod_id, (mod_id,)):
+            self._ini_sync_notify(mod_id)
+
+    def _ensure_ini_sync(self):
+        """惰性创建 ini 双向同步器（首个 Mod 启用时才建，避免无部署时白起 Observer）。"""
+        if self._ini_sync is None:
+            from src.core.ini_sync import IniSyncManager
+
+            self._ini_sync = IniSyncManager()
+            self._ini_sync.on_synced = self._on_deployment_ini_synced
+        return self._ini_sync
+
+    def _register_ini_sync(
+        self,
+        mod_id,
+        body_path,
+        deploy_target,
+        mod_ids=(),
+        *,
+        prepared_pairs=None,
+    ) -> None:
+        """登记 ini 双向同步 (best-effort, 失败不阻断启用)。deploy_target 为 None/不存在则跳过。"""
+        if deploy_target is None:
+            return
+        try:
+            marker = read_deployment_identity(deploy_target)
+            if marker is None or marker["mod_id"] != mod_id:
+                raise IdentityConflict(tr("INI 同步的部署身份不符：{deploy_target}", deploy_target=deploy_target))
+            refs = tuple(dict.fromkeys(str(mid) for mid in mod_ids if mid))
+            self._ini_sync_refs[str(mod_id)] = refs or (str(mod_id),)
+            deploy_root = self._storage.get_deploy_dir()
+            self._ensure_ini_sync().register_mod(
+                str(mod_id),
+                str(body_path),
+                str(deploy_target),
+                source_watch_root=self._get_library_root(self.current_game_id),
+                # 监控部署根目录，避免停放、恢复或迁移重建子目录后监控句柄失效。
+                deploy_watch_root=deploy_root,
+                prepared_pairs=prepared_pairs,
+            )
+        except Exception as e:
+            logger.warning("登记 ini 同步失败 (%s): %s", mod_id, e)
+
+    def _register_existing_deployments(self) -> None:
+        """为当前游戏已有的启用部署恢复 INI 同步注册，跳过没有部署路径的条目。"""
+        for mod in self._index.get_enabled_mods(self.current_game_id):
+            if mod.deployed_path:
+                self._register_ini_sync(mod.mod_id, mod.path, mod.deployed_path, (mod.mod_id,))
