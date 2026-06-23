@@ -2039,3 +2039,101 @@ class ModManager:
         if removed:
             logger.info("已清理 %d 个孤儿预览缓存", removed)
         return ok
+
+    def _purge_missing_source_mod(self, mod: Mod, game_id: str, *, locations=None, defer_cache=False) -> bool:
+        """源容器被外部删除后的幂等清理事务。
+
+        任一步失败都保留 Mod 索引记录，使其成为跨重启的耐久重试凭据；只有部署、缓存、
+        全部预设引用均清理成功后才删记录并派发 ``mod_deleted``。
+        """
+        if not self._cleanup_missing_source_artifacts(mod, game_id, locations=locations, defer_cache=defer_cache):
+            return False
+        return self._finalize_missing_source_mod(mod, game_id)
+
+    def _cleanup_missing_source_artifacts(self, mod: Mod, game_id: str, *, locations=None, defer_cache=False) -> bool:
+        """在所有者线程清理物理文件，保留索引和预设选择。"""
+        # 残留标记不能证明目录仍属于待删除 Mod；移除部署前重新检查，
+        # 保留改名、替换、不可访问或归属其他对象的容器。
+        container = Path(mod.path).parent
+
+        def still_missing():
+            """清理前再次核对库可访问、源仍缺失及残余容器身份；无法确认时返回 False。"""
+            from src.core.mod_package import read_missing_container_marker
+
+            try:
+                if not strict_is_dir(self._index.paths.roots[game_id]) or check_path(mod.path).state != "missing":
+                    return False
+                container_state = check_path(str(container)).state
+                if container_state != "exists":
+                    return container_state == "missing"
+                marker = read_missing_container_marker(container)
+                return bool(
+                    marker
+                    and marker["mod_id"] == mod.mod_id
+                    and marker["body"] == Path(mod.path).name
+                    and marker["content_hash"] == mod.content_hash
+                )
+            except (OSError, ValueError):
+                return False
+
+        if not still_missing():
+            return False
+        if self._ini_sync is not None:
+            try:
+                self._ini_sync.unregister_mod(mod.mod_id)
+                self._ini_sync_refs.pop(mod.mod_id, None)
+            except Exception as e:
+                logger.warning("外删源容器后注销 ini 同步失败 (%s): %s", mod.mod_id, e)
+                return False
+
+        # 源已不存在，部署副本属于派生数据：不再尝试把 ini 回写到消失的 override。
+        try:
+            if not self._remove_known_deployments(mod, capture_changes=False, locations=locations):
+                logger.warning("外删源容器后部署清理待重试: %s", mod.display_name)
+                return False
+        except Exception as e:
+            logger.warning("外删源容器后部署清理异常 (%s): %s", mod.mod_id, e)
+            return False
+
+        if not still_missing():
+            return False
+        if not self._cleanup_mod_managed_artifacts(
+            mod, game_id, remove_invalid_container=True, defer_cache=defer_cache
+        ):
+            logger.warning("外删源容器后损坏空壳清理待重试: %s", mod.display_name)
+            return False
+
+        return True
+
+    def _finalize_missing_source_mod(self, mod: Mod, game_id: str, *, preset_candidate=None) -> bool:
+        """在所有者线程持久化预设，最后移除索引记录。"""
+        if check_path(mod.path).state != "missing":
+            return False
+
+        try:
+            if preset_candidate is None:
+                self._preset_manager.cascade_delete_mod(mod.mod_id, game_id)
+            else:
+                if preset_candidate.mod_id != mod.mod_id or preset_candidate.game_id != game_id:
+                    raise ValueError("Preset deletion candidate belongs to another Mod or game")
+                self._preset_manager.commit_cascade_delete(preset_candidate)
+        except Exception as e:
+            logger.warning("外删源容器后预设级联清理待重试 (%s): %s", mod.mod_id, e)
+            return False
+
+        if not self._index.delete_mod(mod.mod_id):
+            logger.warning("外删源容器后索引删除待重试: %s", mod.mod_id)
+            return False
+
+        # 源 Mod 已消失 → 变体偏好不再有合法恢复目标，同步清理
+        self.variants.on_mod_removed(mod.mod_id, game_id)
+
+        self._emit("mod_deleted", mod_id=mod.mod_id, game_id=game_id)
+        logger.info("检测到源 Mod 容器已删除，关联产物已清零: %s", mod.display_name)
+        return True
+
+    @property
+    def library_probe_stamp(self):
+        """覆盖同一连接上的数据库操作、回滚、文件读写和独立预设修改。"""
+        objects = (self, self._storage, self._preset_manager)
+        return (self.current_game_id, self._index.change_stamp, tuple(obj._library_epoch for obj in objects))
