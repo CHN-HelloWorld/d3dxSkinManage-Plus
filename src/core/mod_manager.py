@@ -2137,3 +2137,131 @@ class ModManager:
         """覆盖同一连接上的数据库操作、回滚、文件读写和独立预设修改。"""
         objects = (self, self._storage, self._preset_manager)
         return (self.current_game_id, self._index.change_stamp, tuple(obj._library_epoch for obj in objects))
+
+    def library_probe_busy(self) -> bool:
+        """判断库、存储、预设变更或数据库事务是否正在进行，以避免冻结不一致探测快照。"""
+        return (
+            any(obj._library_mutations for obj in (self, self._storage, self._preset_manager))
+            or self._index.in_transaction
+            or self._preset_manager.has_pending_apply(self.current_game_id)
+        )
+
+    def create_library_probe_request(self, token) -> ProbeRequest:
+        """同步耗尽分批快照生成器并返回冻结探测请求，生成期间的环境变化异常向上传递。"""
+        iterator = self.iter_library_probe_request(token)
+        while True:
+            try:
+                next(iterator)
+            except StopIteration as finished:
+                return finished.value
+
+    def iter_library_probe_request(self, token, *, batch_size=64):
+        """在所有者线程分批采集输入，返回探测请求。"""
+        batch_size = max(1, min(128, int(batch_size)))
+        gid = token.game_id
+        base = get_data_dir() / self._res_dir(gid)
+        deploy = self._storage.get_deploy_dir()
+
+        def version():
+            """采集库世代和路径解析器及根目录映射，作为分批快照的一致性标记。"""
+            paths = self._index.paths
+            return (self.library_probe_stamp, id(paths), tuple(paths.roots.items()), tuple(paths.preview_roots.items()))
+
+        stamp = version()
+
+        def check():
+            """核对分批采集期间库及路径映射未变化，变化时终止快照并抛出 RuntimeError。"""
+            if version() != stamp:
+                raise RuntimeError("Library changed during probe snapshot capture")
+
+        key = (self._index._db(), gid, stamp, str(base), str(deploy) if deploy is not None else None)
+        cached = getattr(self, "_library_probe_template", None)
+        if not self.library_probe_busy() and cached is not None and cached[0] == key:
+            return replace(cached[1], token=token, inventory=self._storage.deployment_inventory_snapshot())
+        self._library_probe_template = None
+        rows = yield from self._index.iter_library_rows(gid, batch_size=batch_size)
+        check()
+        root, _characters, locations = yield from self.iter_library_scan_layout(gid, batch_size=batch_size)
+        check()
+        roots = {}
+        if deploy is not None:
+            roots[path_key(str(deploy))] = str(deploy)
+        for number, row in enumerate(rows, 1):
+            if row.deployed_path:
+                parent = str(Path(row.deployed_path).parent)
+                roots[path_key(parent)] = parent
+            if number % batch_size == 0:
+                yield None
+                check()
+        records = []
+        cursor = self._index._db().execute(
+            "SELECT d.mod_id,d.actual_path,d.state,d.mod_id "
+            "FROM deployment_records d JOIN mods m ON m.mod_id=d.mod_id WHERE m.game_id=?",
+            (gid,),
+        )
+        try:
+            for number, row in enumerate(cursor, 1):
+                records.append(tuple(row))
+                if number % batch_size == 0:
+                    yield None
+                    check()
+        finally:
+            cursor.close()
+        check()
+        request = ProbeRequest(
+            token,
+            rows,
+            str(root),
+            tuple(roots.values()),
+            str(base / "preview_cache"),
+            tuple(locations),
+            self._storage.deployment_inventory_snapshot(),
+            tuple(records),
+        )
+        if not self.library_probe_busy():
+            self._library_probe_template = (key, request)
+        return request
+
+    def library_scan_layout(self, game_id: str):
+        """同步生成指定游戏的库根、分类及位置拓扑，供无需分片调度的扫描调用方使用。"""
+        iterator = self.iter_library_scan_layout(game_id)
+        while True:
+            try:
+                next(iterator)
+            except StopIteration as finished:
+                return finished.value
+
+    def iter_library_scan_layout(self, game_id: str, *, batch_size=64):
+        """分批采集目录结构，避免在一次界面调度内解析全部节点路径。"""
+        batch_size = max(1, min(128, int(batch_size)))
+        root = self._index.paths.roots[game_id]
+        stamp = (self.library_probe_stamp, id(self._index.paths), str(root))
+
+        def check():
+            """复核拓扑采集所依赖的库世代及根目录，变化时拒绝继续拼接快照。"""
+            if (self.library_probe_stamp, id(self._index.paths), str(self._index.paths.roots[game_id])) != stamp:
+                raise RuntimeError("Library changed during topology snapshot capture")
+
+        nodes, children = [], {}
+        cursor = self._index._db().execute(
+            "SELECT id,parent_id,directory_name,name_en FROM nodes WHERE game_id=? ORDER BY sort_order,name", (game_id,)
+        )
+        try:
+            for number, raw in enumerate(cursor, 1):
+                nid, parent, directory, name_en = tuple(raw)
+                nodes.append((nid, parent, directory, name_en))
+                children.setdefault(parent or "", []).append(directory)
+                if number % batch_size == 0:
+                    yield None
+                    check()
+        finally:
+            cursor.close()
+        locations = []
+        for number, (nid, *_rest) in enumerate(nodes, 1):
+            locations.append(ScanLocation(str(self._index.paths.node_path(nid)), nid, tuple(children.get(nid, ()))))
+            if number % batch_size == 0:
+                yield None
+                check()
+        check()
+        locations.append(ScanLocation(str(root), "", tuple(children.get("", ()))))
+        return str(root), tuple(nodes), tuple(locations)
