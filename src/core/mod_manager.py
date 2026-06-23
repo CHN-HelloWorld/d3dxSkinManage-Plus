@@ -1874,3 +1874,168 @@ class ModManager:
                     applied=len(outcome.applied),
                     removed_keys=outcome.removed_keys,
                 )
+
+    @library_mutation
+    def _after_preset_deployment_rollback(self, plan) -> None:
+        """恢复被停放后回滚的部署监控，并释放组合操作持有的变体资源保护。"""
+        mods = {
+            m.mod_id: m
+            for m in self._index.get_mods_by_ids([action.mod_id for action in plan.actions if action.action == "park"])
+        }
+        for action in plan.actions:
+            if action.action != "park":
+                continue
+            representatives = [mods[action.mod_id]] if action.mod_id in mods else []
+            if not representatives:
+                continue
+            mod = representatives[0]
+            self._register_ini_sync(
+                action.mod_id,
+                mod.path,
+                action.active_path,
+                tuple(item.mod_id for item in representatives),
+            )
+        self.variants.release_preset_operation(plan)
+
+    def stop_ini_sync(self) -> None:
+        """应用退出时停止 ini 双向同步 watchdog Observer。"""
+        sync = self._ini_sync
+        self._ini_sync = None
+        self._ini_sync_refs.clear()
+        try:
+            if sync is not None:
+                sync.stop()
+        except Exception as e:
+            logger.warning("停止 ini 同步失败: %s", e)
+
+    @staticmethod
+    def _remove_managed_path(path: Path) -> bool:
+        """删除软件管理的文件/目录并验证结果；兼容只读文件与断链。"""
+        path = Path(path)
+        if not os.path.lexists(str(path)):
+            return True
+
+        def _onerror(func, failed_path, _exc_info):
+            """清除删除失败路径的只读限制后重试原删除函数，重试失败继续抛出。"""
+            os.chmod(failed_path, stat.S_IWRITE)
+            func(failed_path)
+
+        try:
+            if path.is_symlink():
+                path.unlink()
+            elif path.is_dir():
+                shutil.rmtree(str(path), onerror=_onerror)
+            else:
+                path.unlink(missing_ok=True)
+        except OSError as e:
+            logger.warning("清理 Mod 管理文件失败 (%s): %s", path, e)
+            return False
+        return not os.path.lexists(str(path))
+
+    def _cleanup_mod_managed_artifacts(
+        self,
+        mod: Mod,
+        game_id: str,
+        *,
+        remove_invalid_container: bool,
+        defer_cache: bool = False,
+    ) -> bool:
+        """清除除部署/索引外的软件管理产物。
+
+        预览缓存有独立目录作为耐久重试凭据，暂时被占用时不能阻断
+        Mod 的逻辑删除；损坏的源容器仍属于库内容，删除失败时则保留索引重试。
+        """
+        data_root = get_data_dir() / self._res_dir(game_id)
+        cache_dir = data_root / "preview_cache" / mod.mod_id
+        if not defer_cache:
+            self._remove_managed_path(cache_dir)
+
+        # 仅删除“marker 仍在、本体已不存在且没有其他内容”的损坏空壳。
+        # marker 失配可能只是用户在资源管理器里改了 body 名称；此时不得把仍含
+        # 新名称本体的容器递归删除。
+        container_ok = True
+        if remove_invalid_container and mod.path:
+            body = Path(mod.path)
+            container: Path | None = None
+            if (body.parent / MOD_CONTAINER_MARKER).is_file():
+                container = body.parent
+            elif (body / MOD_CONTAINER_MARKER).is_file():
+                container = body
+            invalid_container = False
+            if container is not None:
+                try:
+                    invalid_container = resolve_body_path(container) is None
+                except InvalidManagedMetadataError:
+                    invalid_container = True
+            if container is not None and invalid_container:
+                try:
+                    unmanaged_entries = [
+                        entry
+                        for entry in fs.list_children(container)
+                        if entry.name not in (MOD_CONTAINER_MARKER, META_DIR)
+                    ]
+                except OSError as e:
+                    logger.warning("无法确认损坏 Mod 容器是否为空，已保留 (%s): %s", container, e)
+                    container_ok = False
+                else:
+                    if unmanaged_entries:
+                        logger.warning(
+                            "无效 Mod 容器仍含源内容，已保留而不自动删除: %s",
+                            container,
+                        )
+                    elif not self._remove_managed_path(container):
+                        container_ok = False
+
+        return container_ok
+
+    def _cleanup_orphaned_managed_artifacts(self, game_id: str, *, context: ReconcileContext | None = None) -> bool:
+        """重试删除已无索引所有者的预览缓存。"""
+        try:
+            rows = tuple(context.rows.values()) if context is not None else self._index.get_library_rows(game_id)
+        except Exception as e:
+            logger.warning("收集受管文件所有者失败，跳过孤儿清理: %s", e)
+            return False
+
+        data_root = get_data_dir() / self._res_dir(game_id)
+        cache_root = data_root / "preview_cache"
+        # 在途 id 与已入库 id 同等受保护：前者的受管文件已写入磁盘、只是还没 add_mod。
+        inflight = self.inflight_mod_ids()
+        protected_cache_names = {row.mod_id for row in rows} | inflight
+
+        # 保护仍被有效记录引用的预览目录，避免清理时删除正在使用的图片。
+        cache_key = os.path.normcase(os.path.abspath(str(cache_root)))
+        for row in rows:
+            for image in row.preview_images:
+                if not image:
+                    continue
+                image_key = os.path.normcase(os.path.abspath(image))
+                try:
+                    if os.path.commonpath([cache_key, image_key]) != cache_key:
+                        continue
+                    relative = os.path.relpath(image_key, cache_key)
+                except (OSError, ValueError):
+                    continue
+                parts = Path(relative).parts
+                if parts and parts[0] not in (".", ".."):
+                    protected_cache_names.add(parts[0])
+
+        ok = True
+        removed = 0
+        if not cache_root.is_dir():
+            return True
+        try:
+            children = list(cache_root.iterdir())
+        except OSError as e:
+            logger.warning("枚举预览缓存目录失败 (%s): %s", cache_root, e)
+            return False
+        for child in children:
+            if child.name in protected_cache_names:
+                continue
+            if self._remove_managed_path(child):
+                removed += 1
+            else:
+                ok = False
+
+        if removed:
+            logger.info("已清理 %d 个孤儿预览缓存", removed)
+        return ok
