@@ -1806,3 +1806,71 @@ class ModManager:
         for mod in self._index.get_enabled_mods(self.current_game_id):
             if mod.deployed_path:
                 self._register_ini_sync(mod.mod_id, mod.path, mod.deployed_path, (mod.mod_id,))
+
+    @library_mutation
+    def _before_preset_deployment_io(self, plan) -> None:
+        """冻结变体配置并同步将停放的部署，然后解除即将变更路径的 INI 监控。"""
+        # 差量部署前采集源预设的运行时变体；停放或部署会改变路径和隐式命名空间。
+        self.variants.on_preset_apply_before_io(plan)
+        if self._ini_sync is None:
+            return
+        for action in plan.actions:
+            if action.action not in ("park", "restore", "materialize_active"):
+                continue
+            if action.action == "park":
+                self._ini_sync.reconcile_mod(action.mod_id)
+            self._ini_sync.unregister_mod(action.mod_id)
+            self._ini_sync_refs.pop(action.mod_id, None)
+
+    def _on_deployments_invalidated(self, deployment_ids) -> None:
+        """解除失效部署的 INI 同步及引用映射，避免监控继续处理旧路径。"""
+        for mod_id in deployment_ids:
+            if self._ini_sync is not None:
+                self._ini_sync.unregister_mod(mod_id)
+            self._ini_sync_refs.pop(mod_id, None)
+
+    def _before_preset_deployment_commit(self, plan) -> None:
+        """差量部署完成、DB 提交前：一次性写回目标预设各 Mod 的变体值。"""
+        outcome = self.variants.on_preset_apply_before_commit(plan)
+        self._preset_variant_outcome = (plan.operation_id, outcome)
+
+    def _rollback_preset_variant_patch(self, plan) -> tuple[str, ...]:
+        """回滚/崩溃恢复时反向执行运行时补丁；返回未能还原的原因。"""
+        return self.variants.on_preset_apply_rollback(plan)
+
+    @library_mutation
+    def _after_preset_deployment_commit(self, plan) -> None:
+        """为新活动路径注册同步，完成关联变体事务，并按恢复结果发布加载器刷新提示。"""
+        # 仅活动部署需要源对象来注册 INI 同步。
+        ids = tuple(action.mod_id for action in plan.actions if action.action != "park")
+        mods = {mod.mod_id: mod for mod in self._index.get_mods_by_ids(ids)}
+        for action in plan.actions:
+            if action.action == "park":
+                continue
+            representatives = [mods[action.mod_id]] if action.mod_id in mods else []
+            if not representatives:
+                continue
+            mod = representatives[0]
+            self._register_ini_sync(
+                action.mod_id,
+                mod.path,
+                action.active_path,
+                tuple(item.mod_id for item in representatives),
+            )
+        # 数据库与当前预设指针提交后才完成收尾。
+        try:
+            self.variants.on_preset_apply_after_commit(plan)
+        except Exception as e:
+            logger.warning("预设切换后变体采集失败: %s", e)
+        result = getattr(self, "_preset_variant_outcome", None)
+        if result is not None and result[0] == plan.operation_id:
+            self._preset_variant_outcome = None
+            outcome = result[1]
+            if outcome.needs_reload_hint:
+                self._emit(
+                    "variant_restored",
+                    mod_id="",
+                    game_id=plan.game_id,
+                    applied=len(outcome.applied),
+                    removed_keys=outcome.removed_keys,
+                )
