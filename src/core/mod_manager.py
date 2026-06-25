@@ -3513,3 +3513,190 @@ class ModManager:
         for mod_id in tuple(self._rebuild_inflight_ids):
             self.unregister_inflight_mod_id(mod_id)
         self._rebuild_inflight_ids.clear()
+
+    def _hash_rebuild_descriptors(
+        self,
+        descriptors,
+        progress_cb=None,
+        unreadable=None,
+        *,
+        resource_dir: str | None = None,
+        cancel_cb=None,
+    ):
+        """在后台计算内容指纹、部署状态并查找预览，不访问数据库。
+
+        每完成一项，通过 progress_cb 报告计数。归档优先使用成员表指纹，
+        目录本体及缺少 CRC 的成员仍需读取内容，因此使用线程池执行。
+        预览缓存命中时无需重新打开归档。数据库读写由主线程的规划和提交步骤完成。
+
+        损坏、无法打开或规划后消失的 Mod 记入 unreadable 并跳过，
+        避免中断整次重建或写入无效指纹。
+        """
+        total = len(descriptors)
+        if total == 0:
+            return []
+        # 恢复/跨游戏重建由调用方传目标目录，不借尚未激活或属于另一游戏的当前状态。
+        # 直接执行当前游戏的哈希阶段时，仍可省略这个参数。
+        if resource_dir is None:
+            resource_dir = self._res_dir()
+        cache_index = build_preview_cache_index(get_data_dir() / resource_dir / "preview_cache")
+        # 工作线程仅处理文件和解压，不访问绑定所有者线程的 SQLite 连接。
+        # 压缩库的原生计算可释放 GIL，允许多个 Mod 并行处理；单个 Mod 直接串行执行。
+        workers = min(8, max(2, os.cpu_count() or 4), total)
+        results: list = [None] * total
+        failures: list = []  # (序号, path, 原因)
+        lock = threading.Lock()
+        done = 0
+
+        def _one(i: int, d: dict) -> None:
+            """在线程池计算单项指纹并核对源版本，锁内收集结果及递增进度，取消异常继续抛出。"""
+            nonlocal done
+            if cancel_cb is not None:
+                cancel_cb()
+            path = d["path"]
+            item = dict(d)
+            failure = ""
+            try:
+                if not fs.exists(path):
+                    failure = tr("源文件已不存在")
+                else:
+                    item["source_version"] = capture_source_version(path)
+                    item["content_hash"] = Mod.compute_sha1(path)
+                    if not item["content_hash"]:
+                        failure = tr("内容哈希为空")
+                    elif capture_source_version(path) != item["source_version"]:
+                        failure = tr("计算内容指纹时源文件发生变化")
+            except InterruptedError:
+                raise
+            except Exception as e:
+                failure = str(e) or e.__class__.__name__
+            if not failure:
+                if cancel_cb is not None:
+                    cancel_cb()
+                self._enrich_rebuild_item(item, d, lock, cache_index=cache_index, resource_dir=resource_dir)
+            with lock:
+                if failure:
+                    failures.append((i, path, failure))
+                else:
+                    results[i] = item
+                done += 1
+                # 进度回调须在锁内执行，保证 done 按完成顺序严格递增；
+                # 锁外通知可能导致进度顺序与计数更新顺序不一致。
+                if progress_cb is not None:
+                    try:
+                        progress_cb(done, total)
+                    except Exception:
+                        pass
+
+        try:
+            if workers <= 1:
+                for i, d in enumerate(descriptors):
+                    _one(i, d)
+            else:
+                with ThreadPoolExecutor(
+                    max_workers=workers,
+                    thread_name_prefix="rebuild-hash",
+                ) as pool:
+                    for fut in [pool.submit(_one, i, d) for i, d in enumerate(descriptors)]:
+                        fut.result()  # InterruptedError / 未预期异常照旧向上抛
+        except BaseException:
+            # 移除保护前等待线程池结束，避免取消或重建失败后工作线程重新创建未受保护的缓存。
+            self._release_rebuild_inflight_ids()
+            raise
+        # 失败按 descriptor 原序汇报：并行完成顺序不稳定，报告必须可复现
+        for _i, path, entry_error in sorted(failures):
+            logger.warning("重建跳过无法计算内容哈希的 Mod %s: %s", path, entry_error)
+            if unreadable is not None and path not in unreadable:
+                unreadable.append(path)
+        return [item for item in results if item is not None]
+
+    def _enrich_rebuild_item(
+        self,
+        item: dict,
+        d: dict,
+        lock,
+        *,
+        cache_index: PreviewCacheIndex | None = None,
+        resource_dir: str | None = None,
+    ) -> None:
+        """哈希成功后补齐一条 descriptor（id / 在途保护 / 启用态 / 预览 / sidecar）。
+
+        在哈希线程里执行，只碰文件系统。``register_inflight_mod_id`` 自带锁，
+        ``_rebuild_inflight_ids`` 是普通 set 故这里用调用方的锁保护。
+        """
+        path = item["path"]
+        item["new_id"] = item["mod_id"]
+        # 预览写入至索引提交之间登记在途身份，防止并行清理将其误判为孤立缓存。
+        with lock:
+            self._rebuild_inflight_ids.add(item["new_id"])
+        self.register_inflight_mod_id(item["new_id"])
+        try:
+            item["sidecar"] = read_sidecar(path)
+        except InvalidManagedMetadataError:
+            item["sidecar"] = None
+        item["mod_id"] = read_source_mod_id(path)
+        if d.get("mod_id") and item["mod_id"] != d["mod_id"]:
+            raise IdentityConflict(tr("重建期间源 Mod 身份发生变化：{path}", path=path))
+        item["preview_images"] = (
+            self._find_previews(
+                path,
+                mod_id=item["new_id"],
+                resource_dir=resource_dir,
+                content_hash=item["content_hash"],
+                source_version=item["source_version"],
+                cache_index=cache_index,
+            )
+            or []
+        )
+
+    def _apply_sidecar_info(self, mod: Mod, sidecar: dict) -> None:
+        """从本地元数据恢复重新构造的 Mod 信息。
+
+        以持久化文件内容填充字段，无效年龄分级使用默认值。
+        """
+        info = (sidecar or {}).get("info") or {}
+        if not info:
+            return
+        if info.get("author"):
+            mod.info.author = info["author"]
+        if info.get("description"):
+            mod.info.description = info["description"]
+        if info.get("version"):
+            mod.info.version = info["version"]
+        if info.get("url"):
+            mod.info.url = info["url"]
+        if info.get("tags"):
+            mod.info.tags = list(info["tags"])
+        ar = info.get("age_rating")
+        if ar:
+            try:
+                mod.info.age_rating = AgeRating(ar)
+            except ValueError:
+                logger.debug("sidecar age_rating 非法，忽略: %s", ar)
+        if isinstance(info.get("custom_data"), dict):
+            mod.info.custom_data = dict(info["custom_data"])
+
+    @staticmethod
+    def _order_previews(previews: list[str], sidecar: dict) -> list[str]:
+        """按 sidecar.local.preview_references 中的路径重排重新发现的预览图。
+
+        未登记的预览图排在末尾，保持发现时的相对顺序。
+        """
+        references = ((sidecar or {}).get("local") or {}).get("preview_references") or []
+        order = [ref["path"] for ref in references if isinstance(ref, dict) and ref.get("path")]
+        if not order or not previews:
+            return previews
+        normalized = [str(name).replace("\\", "/").strip("/").casefold() for name in order]
+
+        def _rank(path: str) -> int:
+            """按记录的相对路径或文件名确定预览优先级，未匹配项排在所有已知引用之后。"""
+            full = str(path).replace("\\", "/").casefold()
+            base = Path(path).name.casefold()
+            for i, key in enumerate(normalized):
+                if full == key or full.endswith("/" + key):
+                    return i
+                if "/" not in key and base == key:
+                    return i
+            return len(normalized)
+
+        return sorted(previews, key=_rank)
