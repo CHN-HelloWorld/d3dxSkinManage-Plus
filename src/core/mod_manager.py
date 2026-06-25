@@ -2951,3 +2951,145 @@ class ModManager:
                 prev_dir.rmdir()
         logger.info("预览图已保存: %s -> %s", src.name, mod.display_name)
         return True
+
+    # 容器内 ini 按键编辑（override 层，本体零改动）
+
+    def parse_mod_key_bindings(self, mod: Mod) -> list[KeyBinding]:
+        """从全部有效 INI 解析按键绑定，覆盖文件优先于本体。
+
+        绑定中的 ini_path 和 rel 均为本体相对路径，供分组显示及定位覆盖文件。
+        文件按目录深度和同层名称保持稳定顺序。选择卡片只读取内容，不初始化或修改覆盖文件。
+        """
+        from src.core.ini_keys import parse_ini_text
+
+        if not mod or not mod.path:
+            return []
+        # 选择卡片仅执行读取，不重建缺失的覆盖文件。
+        pairs = iter_effective_inis(fs.normal_path(mod.path))  # [(rel, text)]
+
+        def _depth_then_name(item):
+            """先按 INI 相对路径深度再按忽略大小写的路径排序，使根级声明先参与按键解析。"""
+            rel = item[0]
+            parts = rel.split("/")
+            return (len(parts),) + tuple(p.lower() for p in parts)
+
+        result: list[KeyBinding] = []
+        for rel, text in sorted(pairs, key=_depth_then_name):
+            for b in parse_ini_text(text, rel):
+                b.rel = rel  # 路由 override 用（parse_ini_text 已把 ini_path 设为 rel）
+                result.append(b)
+        return result
+
+    @protect_mod_operation()
+    @library_mutation
+    @guarded_edit
+    def edit_mod_key(
+        self,
+        mod_id: str,
+        rel: str,
+        line_no: int,
+        field: str,
+        new_token: str,
+    ) -> bool:
+        """修改指定 INI 行的 key 或 back 值，并保存到容器覆盖目录。
+
+        已启用 Mod 同步更新部署副本；目标无效、非容器或写入失败时返回 False。
+        """
+        from src.core.ini_keys import IniWriteError, rewrite_key_in_text
+        from src.core.mod_package import (
+            override_path_for,
+            resolve_effective_ini_text,
+            write_override,
+        )
+
+        mod = self._index.get_mod(mod_id)
+        if not mod or not mod.path:
+            return False
+        if self.check_mod_operation(mod_id, metadata=True, deployment=True) is None:
+            return False
+        override = override_path_for(mod.path, rel)
+        if override is None:
+            # 非容器路径不支持覆盖文件编辑。
+            logger.warning("edit_mod_key: 非容器本体，无 override 能力: %s", mod.path)
+            return False
+        override = Path(override)
+        previous_override = override.read_bytes() if override.exists() else None
+        if override.exists():
+            with access_file(override, write=True):
+                pass
+        if mod.is_enabled:
+            if not mod.deployed_path:
+                raise OperationPreflightError(mod_id, mod.path, tr("启用记录没有对应部署文件"))
+            with access_file(Path(mod.deployed_path) / rel, write=True):
+                pass
+        base_text = resolve_effective_ini_text(mod.path, rel)
+        if base_text is None:
+            logger.warning("edit_mod_key: 读不到有效 ini: %s / %s", mod.path, rel)
+            return False
+        try:
+            new_text = rewrite_key_in_text(base_text, line_no, field, new_token)  # type: ignore[arg-type]
+        except IniWriteError as e:
+            logger.warning("edit_mod_key: 行改写失败: %s", e)
+            return False
+        if not write_override(mod.path, rel, new_text):
+            return False
+        # 启用态：即时把新 override 同步到部署副本对应 ini（源→部署方向），无需重启用即生效。
+        if mod.is_enabled:
+            try:
+                self._sync_override_to_deploy(mod, rel, new_text)
+            except Exception as e:
+                if previous_override is None:
+                    override.unlink(missing_ok=True)
+                else:
+                    override.write_bytes(previous_override)
+                self.report_operation_failure(failure(mod_id, mod.deployed_path, e))
+                return False
+        logger.info("已改键并写 override: %s [%s] line=%d field=%s", mod.display_name, rel, line_no, field)
+        return True
+
+    def _sync_override_to_deploy(self, mod: Mod, rel: str, text: str) -> None:
+        """核对已记录部署身份，将 override 写入该部署的对应 ini；失败向调用者抛出。"""
+        confirm_deployment(mod.mod_id, mod.deployed_path)
+        deploy_dir = Path(mod.deployed_path)
+        target = deploy_dir / rel
+        if not target.exists():
+            raise FileNotFoundError(str(target))
+
+        # ① 已与 override 同一份物理数据 → 无需任何写入
+        op = override_path_for(mod.path, rel)
+        if op is not None and self._is_same_physical_file(target, Path(op)):
+            return
+
+        # ② 独立副本（当前唯一形态）→ 就地写
+        try:
+            tmp = target.with_name(target.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.write(text)
+            os.replace(str(tmp), str(target))
+        except OSError as e:
+            logger.warning("写部署副本 ini 失败: %s", e)
+            raise
+
+    @staticmethod
+    def _is_same_physical_file(a: Path, b: Path) -> bool:
+        """两个路径是否指向同一份物理数据（hardlink 同 inode / symlink 跟随后同一文件）。"""
+        try:
+            return os.path.samefile(str(a), str(b))
+        except OSError:
+            return False
+
+    def effective_ini_disk_path(self, mod: Mod, rel: str) -> str | None:
+        """「打开文件」用的可点开磁盘路径：override 优先（已物化在容器内），
+        否则文件夹本体内的真实 ini；归档本体且无 override → None（包内无磁盘文件可开）。
+        """
+        if not mod or not mod.path:
+            return None
+        op = override_path_for(mod.path, rel)
+        if op is not None and fs.is_file(op):
+            return str(op)
+        body = Path(fs.normal_path(mod.path))
+        if fs.is_dir(body):
+            f = body / rel
+            if fs.is_file(f):
+                return str(f)
+        return None
