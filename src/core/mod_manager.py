@@ -4340,3 +4340,144 @@ class ModManager:
             for candidate in cache_index.get(content_hash, ()):
                 if candidate != exact and cache_content_hash(candidate) == content_hash:
                     yield candidate
+
+    def _cached_archive_previews(
+        self,
+        mod_id: str,
+        resource_dir: str | None,
+        ext_set: set,
+        *,
+        content_hash: str = "",
+        cache_index: PreviewCacheIndex | None = None,
+        excluded: set[str] | None = None,
+    ) -> list[str]:
+        """按已验证的内容指纹解析缓存，不依赖 Mod 身份。"""
+        if not mod_id or not content_hash:
+            return []
+        try:
+            root = get_data_dir() / (resource_dir or self._res_dir()) / "preview_cache"
+            own = root / mod_id
+            for cache_dir in self._iter_preview_cache_candidates(root, mod_id, content_hash, cache_index=cache_index):
+                # 归档预览可能保留多层成员路径，需递归枚举缓存目录。
+                found = read_cached_previews(cache_dir, ext_set)
+                if excluded:
+                    found = [
+                        image
+                        for image in found
+                        if os.path.normcase(image.relative_to(cache_dir).as_posix()) not in excluded
+                    ]
+                if not found:
+                    continue
+                if cache_dir == own:
+                    return [str(p) for p in found]
+                adopted = self._adopt_cached_previews(found, cache_dir, own, content_hash=content_hash)
+                if adopted:
+                    return adopted
+            return []
+        except OSError:
+            return []
+
+    @staticmethod
+    def _adopt_cached_previews(
+        found: list[Path],
+        source_dir: Path,
+        own_dir: Path,
+        *,
+        content_hash: str = "",
+    ) -> list[str]:
+        """把同内容的缓存图复制到本 id 的目录下，返回新路径（失败返回空 → 照常开包）。"""
+        try:
+            with preview_cache_staging(own_dir) as stage:
+                copied = []
+                for src in found:
+                    dest = stage / src.relative_to(source_dir)
+                    fs.ensure_dir(dest.parent)
+                    shutil.copy2(fs.native_path(src), fs.native_path(dest))
+                    copied.append(dest)
+                return [str(path) for path in publish_preview_cache(stage, own_dir, copied, content_hash=content_hash)]
+        except (OSError, ValueError, shutil.Error):
+            return []
+
+    def has_deploy_dir(self) -> bool:
+        """返回当前游戏是否已配置部署目录。
+
+        未配置目录时拒绝启用 Mod，界面据此提前提示。
+        不涉及文件操作的预设切换仍可执行；需要部署时由 prepare_preset_apply 校验。
+        """
+        return self._storage.get_deploy_dir() is not None
+
+    def describe_game_data(self, game_id: str, resource_dir: str, *, cancelled=None, progress=None) -> dict:
+        """列出「删除该游戏」会一并抹掉的东西（供确认对话框把后果讲清楚）。
+
+        只统计、不改任何状态。返回 {mods, characters, presets, deployed, library_dir,
+        library_size}。
+        """
+        from src.core.game_data_summary import describe_game_data
+
+        return describe_game_data(
+            self._index._db_path,
+            game_id,
+            get_data_dir() / resource_dir if resource_dir else None,
+            len(self._preset_manager.get_all_presets(game_id)),
+            cancelled=cancelled,
+            progress=progress,
+        )
+
+    @library_mutation
+    def purge_game_data(
+        self,
+        game_id: str,
+        resource_dir: str,
+        *,
+        remove_deployed: bool = True,
+    ) -> dict:
+        """删除指定游戏的受管数据，返回清理统计和失败路径。
+
+        移除已登记的部署副本、该游戏的索引记录及预设，再删除游戏资源目录。
+        remove_deployed=False 可保留部署副本；未登记的外部部署不在清理范围。
+        共享缓存和下载目录保留，游戏配置条目由 GameService 管理。
+        """
+        stats: dict = {"deployed_removed": 0, "rows": {}, "presets": 0, "library_removed": False, "errors": []}
+        if game_id and game_id == self.current_game_id:
+            self.stop_ini_sync()
+        if remove_deployed:
+            try:
+                mods = self._index.get_all_mods(game_id)
+            except Exception:
+                mods = []
+            targets: list[Path] = []
+            for mod in mods:
+                if mod.deployed_path:
+                    targets.append(Path(mod.deployed_path))
+            try:
+                for record in self._index.get_deployments(game_id):
+                    if record.actual_path:
+                        targets.append(Path(record.actual_path))
+            except Exception:
+                pass
+            seen: set[str] = set()
+            for target in targets:
+                key = os.path.normcase(os.path.abspath(str(target)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                if not os.path.lexists(str(target)):
+                    continue
+                if self._storage._remove_deploy(target):
+                    stats["deployed_removed"] += 1
+                else:
+                    stats["errors"].append(str(target))
+        stats["rows"] = self._index.purge_game(game_id)
+        try:
+            stats["presets"] = self._preset_manager.purge_game(game_id)
+        except Exception as e:
+            logger.warning("删除游戏预设失败 (%s): %s", game_id, e)
+        if resource_dir:
+            root = get_data_dir() / resource_dir
+            if root.exists():
+                if self._remove_managed_path(root):
+                    stats["library_removed"] = True
+                else:
+                    stats["errors"].append(str(root))
+        logger.info("已删除游戏数据 %s: %s", game_id, stats)
+        return stats
