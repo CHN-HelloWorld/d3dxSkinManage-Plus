@@ -3093,3 +3093,103 @@ class ModManager:
             if fs.is_file(f):
                 return str(f)
         return None
+
+    @library_mutation
+    def disable_all_mods(self, node_id: str | None = None) -> int:
+        """同步禁用当前游戏的 Mod，复用 UI/插件任务相同的批量事务。
+
+        失败项保持启用及预设引用；成功项同步部署记录、ini、变体和事件。
+        交互调用应使用宿主任务服务，将作业单的文件 IO 放到后台执行。
+        """
+        if not self.current_game_id:
+            return 0
+        mods = self._index.get_all_mods(self.current_game_id)
+        entries = self.prepare_disable_batch(
+            [mod.mod_id for mod in mods if mod.is_enabled and (node_id is None or mod.node_id == node_id)]
+        )
+        results = [self.disable_batch_step(entry) for entry in entries]
+        return len(self.commit_disable_batch(results))
+
+    def search_mods(self, query: str, game_id: str | None = None) -> list[Mod]:
+        """搜索 Mod"""
+        return self._index.search_mods(query, game_id)
+
+    # 可再生索引：分类解析 + 发现
+
+    def _match_character_chain(self, names_chain: list[str], game_id: str | None = None, *, chars=None) -> str:
+        """按从根到叶的名称链匹配分类树，返回叶节点编号；失配时返回空字符串。"""
+        if not names_chain:
+            return ""
+        gid = game_id or self.current_game_id
+        if chars is None:
+            chars = self.get_characters(gid)
+        by_parent: dict[str, list] = {}
+        for c in chars:
+            by_parent.setdefault(c.parent_id or "", []).append(c)
+        cur_parent = ""
+        leaf_id = ""
+        for seg in names_chain:
+            match = next(
+                (c for c in by_parent.get(cur_parent, []) if (c.name or c.name_en or c.id) == seg),
+                None,
+            )
+            if match is None:
+                return ""
+            leaf_id = match.id
+            cur_parent = match.id
+        return leaf_id
+
+    def _resolve_character_id_for_path(self, mod_path: str | Path, game_id: str | None = None, *, chars=None) -> str:
+        """根据 Mod 物理位置确定所属分类。
+
+        优先通过目录名称链匹配分类树，失败时读取父目录的分类标记；
+        无法确定归属时返回空字符串。
+        """
+        gid = game_id or self.current_game_id
+        root = self._get_library_root(gid)
+        p = Path(mod_path)
+        # 容器内本体以容器为分类锚点，排除本体名和容器名；独立源以自身路径为锚点。
+        anchor = p.parent if (p.parent / MOD_CONTAINER_MARKER).is_file() else p
+        try:
+            rel = anchor.resolve().relative_to(root.resolve())
+        except (ValueError, OSError):
+            return ""
+        segments = list(rel.parts[:-1])  # 去掉锚点自身那一段，剩下分类链
+        if not segments:
+            return ""
+        if chars is None:
+            chars = self.get_characters(gid)
+
+        leaf = self._match_character_chain(segments, gid, chars=chars)
+        if leaf:
+            return leaf
+
+        # 回退处理：锚点父目录的合法当前 marker（外部改名等导致名链失配时仍可恢复）
+        try:
+            data = self._read_category_marker(anchor.parent)
+        except InvalidManagedMetadataError as e:
+            logger.warning("忽略无效类别 marker %s: %s", anchor.parent, e)
+            return ""
+        if data is not None:
+            cid = data["id"]
+            if cid and any(c.id == cid for c in chars):
+                return cid
+        return ""
+
+    def _character_breadcrumb(self, node_id: str, game_id: str | None = None, *, chars=None) -> list[str]:
+        """角色 id → 从根到该节点的名称链（写入 sidecar.local.classification，跨机稳定）。"""
+        if not node_id:
+            return []
+        gid = game_id or self.current_game_id
+        if chars is None:
+            chars = self.get_characters(gid)
+        by_id = {c.id: c for c in chars}
+        chain: list[str] = []
+        cur = by_id.get(node_id)
+        guard = 0
+        while cur is not None and guard < 100:
+            chain.append(cur.name or cur.name_en or cur.id)
+            cur = by_id.get(cur.parent_id or "")
+            guard += 1
+        chain.reverse()
+        return chain
