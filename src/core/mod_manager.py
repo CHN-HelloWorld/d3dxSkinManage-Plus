@@ -2265,3 +2265,352 @@ class ModManager:
         check()
         locations.append(ScanLocation(str(root), "", tuple(children.get("", ()))))
         return str(root), tuple(nodes), tuple(locations)
+
+    def apply_library_probe_result(self, result):
+        """逐项返回原子变更，令牌与批次校验由界面负责。
+
+        未变化记录无需构造对象或检查文件。缺失观察仅筛选候选，每次修改仍须重新确认资源和身份。
+        """
+        from src.core.deployment_reconcile import reconcile_deployment_records
+
+        if result.error or result.cancelled or result.token.game_id != self.current_game_id:
+            return
+        request = result.request
+        gid = result.token.game_id
+        rows = {row.mod_id: row for row in request.rows}
+        missing = [row for row, check in zip(request.rows, result.checks) if check.state == "missing"]
+        locations = {location.mod_id: location for location in result.inventory.locations}
+        candidates = {candidate.mod_id: candidate for candidate in result.relocated}
+        occupied = set()
+        if candidates:
+            occupied.update(
+                path_key(row.path) for row, check in zip(request.rows, result.checks) if check.state != "missing"
+            )
+            # 提交时重新确认目标归属，避免认领已被新记录占用的路径。
+            occupied.update(path_key(row.path) for row in self._index.get_library_rows(gid))
+        self._storage.adopt_deployment_inventory(result.inventory)
+        self._pending_source_cleanup = False
+
+        def current(row):
+            """重新读取探测条目并核对路径及游戏身份，过期或已删除时返回 None。"""
+            mod = self._index.get_mod(row.mod_id)
+            if (
+                mod is None
+                or mod.path != row.path
+                or mod.mod_id != row.mod_id
+                or self._index.get_mod_game_id(row.mod_id) != gid
+            ):
+                return None
+            return mod
+
+        for row in missing:
+            candidate = candidates.get(row.mod_id)
+            if candidate is None or path_key(candidate.body) in occupied:
+                continue
+            mod = current(row)
+            if mod is None:
+                continue
+            if self._claim_container_move(
+                mod, Path(candidate.body), candidate.node_id, game_id=gid, locations=locations
+            ):
+                rows[row.mod_id] = LibraryRow.from_mod(mod)
+                occupied.add(path_key(mod.path))
+                yield ProbeApplyStep("claim", row.mod_id, True)
+
+        # 扫描后的外部目录改名会使删除授权失效。
+        # 缓存目录签名并在自身删除后更新，不在此处重新枚举标记。
+        expected_signature = result.inventory.signature
+        for row in missing:
+            if rows[row.mod_id] != row or row.mod_id in candidates:
+                continue
+            mod = current(row)
+            if mod is None or check_path(mod.path).state != "missing":
+                continue
+            if source_directory_signature(item[0] for item in result.source_signature) != result.source_signature:
+                self._pending_source_cleanup = True
+                return
+            if deployment_signature(request.deploy_roots) != expected_signature:
+                self._pending_source_cleanup = True
+                return
+            if self._purge_missing_source_mod(mod, gid, locations=locations, defer_cache=True):
+                rows.pop(row.mod_id, None)
+                locations.pop(row.mod_id, None)
+                expected_signature = deployment_signature(request.deploy_roots)
+                yield ProbeApplyStep("purge", row.mod_id, True, 1)
+            else:
+                self._pending_source_cleanup = True
+                yield ProbeApplyStep("purge", row.mod_id)
+
+        # 复用已采集的不可变记录，避免未变化的探测在界面线程反复切片和分配元组。
+        records = {record[0]: record for record in request.records}
+        if request.deploy_roots:
+            for row in tuple(rows.values()):
+                location = locations.get(row.mod_id)
+                new_path = str(location.path) if location else ""
+                enabled = bool(location and location.active)
+                state = "active" if enabled else "disabled" if location else "absent"
+                previous_record = records.get(row.mod_id)
+                if (
+                    row.deployed_path == new_path
+                    and row.enabled == enabled
+                    and previous_record is not None
+                    and previous_record[1] == new_path
+                    and previous_record[2] == state
+                    and previous_record[3] == row.mod_id
+                ):
+                    continue
+                mod = current(row)
+                if mod is None:
+                    continue
+                if location:
+                    self._storage._check_deployment_identity(location.path, row.mod_id)
+                elif row.deployed_path and check_path(row.deployed_path).state != "missing":
+                    continue
+                elif deployment_signature(request.deploy_roots) != expected_signature:
+                    return
+                record = self._index.get_deployment(row.mod_id)
+                changes = reconcile_deployment_records(
+                    self._index,
+                    self._storage,
+                    gid,
+                    rows=(row,),
+                    locations=locations,
+                    records={row.mod_id: record} if record else {},
+                )
+                for changed in changes.changed:
+                    rows[row.mod_id] = LibraryRow.from_mod(changed)
+                    if self._ini_sync is not None:
+                        self._ini_sync.unregister_mod(changed.mod_id)
+                        self._ini_sync_refs.pop(changed.mod_id, None)
+                    if changed.is_enabled:
+                        self._register_ini_sync(changed.mod_id, changed.path, changed.deployed_path, (changed.mod_id,))
+                    self._emit(
+                        "mod_enabled" if changed.is_enabled else "mod_disabled", mod_id=changed.mod_id, game_id=gid
+                    )
+                yield ProbeApplyStep("deployment", row.mod_id, bool(changes.changed))
+
+        if result.cache_candidates:
+            # 枚举已在工作线程完成，此处仅查询轻量的归属和引用信息。
+            protected = protected_cache_names(self._index.get_library_rows(gid), request.cache_root)
+            root = path_key(request.cache_root)
+            for candidate in result.cache_candidates:
+                child = Path(candidate.path)
+                if path_key(str(child.parent)) != root:
+                    continue
+                ancestors = {
+                    path_key(entry.path): entry for entry in candidate.entries if entry.directory and not entry.reparse
+                }
+                for entry in candidate.entries:
+                    entry_key = path_key(entry.path)
+                    if os.path.commonpath((path_key(candidate.path), entry_key)) != path_key(candidate.path):
+                        continue
+                    # 删除文件期间持有在途任务锁，准备操作须先注册再写入。
+                    # 文件间可让出执行，此处不递归扫描。
+                    with self._inflight_lock:
+                        inflight = {os.path.normcase(value) for value in self._inflight_mod_ids}
+                        if os.path.normcase(child.name) in protected | inflight:
+                            break
+                        if not remove_cache_entry(entry, ancestors):
+                            self._pending_source_cleanup = True
+                    yield ProbeApplyStep("cache", child.name)
+
+    def has_pending_source_cleanup(self) -> bool:
+        """是否存在因文件占用等原因尚未完成的外部删除清理。"""
+        return bool(self._pending_source_cleanup)
+
+    @protect_mod_operation()
+    @library_mutation
+    def delete_mod(self, mod_id: str, *, delete_method: str = "permanent") -> bool:
+        """删除 Mod，并按请求永久删除源文件或将其移入回收站。"""
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return False
+        from src.core.operation_preflight import confirm_delete_target
+
+        try:
+            confirm_delete_target(mod)
+        except OperationPreflightError as error:
+            logger.warning("%s", error)
+            return False
+        if delete_method not in ("permanent", "recycle_bin"):
+            raise ValueError(tr("未知 Mod 删除方式: {delete_method}", delete_method=delete_method))
+        # Windows Shell 回收站不可靠地支持长路径。必须在注销同步和取消部署之前预检，
+        # 否则用户拒绝“改为直接删除”时会留下索引仍启用、实际部署已移除的半完成状态。
+        if delete_method == "recycle_bin":
+            self._storage.ensure_source_recycle_compatible(mod.path)
+        # 删除前注销 ini 同步 (源将被删, 无需拉回)
+        if self._ini_sync is not None:
+            self._ini_sync.unregister_mod(mod.mod_id)
+            self._ini_sync_refs.pop(mod.mod_id, None)
+        if not self._remove_known_deployments(mod, capture_changes=False):
+            logger.warning("Mod 部署删除失败，保留索引以便重试: %s", mod.display_name)
+            return False
+        try:
+            confirm_delete_target(mod)
+        except OperationPreflightError as error:
+            logger.warning("%s", error)
+            return False
+        if not self._storage.delete_source(mod.path, delete_method=delete_method):
+            logger.warning("Mod 部署/源文件删除失败，保留索引以便重试: %s", mod.display_name)
+            return False
+        self._cleanup_mod_managed_artifacts(mod, self.current_game_id, remove_invalid_container=False)
+
+        try:
+            self._preset_manager.cascade_delete_mod(mod_id, self.current_game_id)
+        except Exception as e:
+            logger.warning("preset cascade_delete_mod 失败，保留索引以便重试: %s", e)
+            return False
+        if not self._index.delete_mod(mod_id):
+            return False
+
+        # 源 Mod 已删 → 清其变体偏好（最近状态 + 全部预设绑定）
+        self.variants.on_mod_removed(mod.mod_id, self.current_game_id)
+
+        logger.info("Mod 已删除: %s", mod.display_name)
+        self._emit("mod_deleted", mod_id=mod_id, game_id=self.current_game_id)
+        return True
+
+    def get_tag_service(self):
+        """使用当前游戏和索引，草稿保留自身的游戏身份。"""
+        from src.core.tag_service import TagService
+
+        def begin_check(mod_id):
+            """为标签编辑取得源访问凭据和已验证元数据原件，交给草稿保存以供提交时复核。"""
+            receipt = self.require_mod_operation(mod_id, metadata=True, full=False)
+            return receipt, confirm_metadata(receipt)
+
+        return TagService(self._index, begin_check=begin_check)
+
+    @library_mutation
+    def commit_tag_edit(self, draft, fields: dict):
+        """批量准备独立文件工作，数据库、校验和发布仍由所有者处理。"""
+        from contextlib import ExitStack
+        from functools import partial
+
+        from src.core.tag_file_batch import (
+            TagFileTarget,
+            check_tag_files,
+            restore_tag_files,
+            write_tag_files,
+        )
+
+        index = self._index
+        connection = index._db()
+        game_id = draft.game_id
+        library_root = str(index.paths.roots.get(game_id, ""))
+        full = getattr(self, "_operation_trusted", False) != (game_id, library_root)
+        runner = getattr(self, "operation_check_runner", None)
+        snapshots, written, node_snapshot = {}, [], {}
+
+        def run(work):
+            """通过注入执行器运行文件检查或写入，未配置执行器时在调用线程直接执行。"""
+            return runner(work) if runner is not None else work()
+
+        def read_node_rows(node_ids):
+            """分批读取节点路径所需字段并按 ID 返回，限制每次查询参数数量。"""
+            rows = {}
+            ids = tuple(node_ids)
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                for row in connection.execute(
+                    "SELECT id,game_id,parent_id,directory_name FROM nodes WHERE id IN ("
+                    + ",".join("?" for _ in chunk)
+                    + ")",
+                    chunk,
+                ):
+                    rows[row[0]] = tuple(row)
+            return rows
+
+        def capture_nodes(mod_ids):
+            """冻结标签涉及条目的节点及全部祖先记录，节点缺失或跨游戏时中止提交。"""
+            pending, captured = set(), {}
+            ids = tuple(mod_ids)
+            for offset in range(0, len(ids), 500):
+                chunk = ids[offset : offset + 500]
+                pending.update(
+                    row[0]
+                    for row in connection.execute(
+                        "SELECT DISTINCT node_id FROM mods WHERE game_id=? AND mod_id IN ("
+                        + ",".join("?" for _ in chunk)
+                        + ")",
+                        (game_id, *chunk),
+                    )
+                    if row[0]
+                )
+            while pending:
+                rows = read_node_rows(pending)
+                if rows.keys() != pending or any(row[1] != game_id for row in rows.values()):
+                    raise OperationPreflightError(draft.mod_id, "", tr("确认期间 Mod 或游戏已变化"))
+                captured.update(rows)
+                pending = {row[2] for row in rows.values() if row[2]} - captured.keys()
+            return captured
+
+        def validate_environment():
+            """复核索引连接、当前游戏、库根及祖先快照，防止确认期间移动资源后写入旧目标。"""
+            if (
+                self._index is not index
+                or self.current_game_id != game_id
+                or index._db() is not connection
+                or index.game_id != game_id
+                or str(index.paths.roots.get(game_id, "")) != library_root
+            ):
+                raise OperationPreflightError(draft.mod_id, "", tr("确认期间 Mod 或游戏已变化"))
+            # 标签服务校验完整 Mod 记录与顺序关系，祖先记录覆盖它们继承的路径。
+            if read_node_rows(node_snapshot) != node_snapshot:
+                raise OperationPreflightError(draft.mod_id, "", tr("确认期间 Mod 或游戏已变化"))
+
+        def before_write(ids):
+            """在解析路径前冻结祖先，再固定并校验所有目标元数据，返回数据库写入前复核结果。"""
+            nonlocal node_snapshot
+            # 构造对象解析路径前先采集祖先信息。
+            node_snapshot = capture_nodes(ids)
+            mods = {mod.mod_id: mod for mod in index.get_mods_by_ids(ids)}
+            missing = set(ids) - mods.keys()
+            if missing:
+                raise OperationPreflightError(sorted(missing)[0], "", tr("Mod 记录已不存在"))
+            for mod in mods.values():
+                if mod.game_id != game_id:
+                    raise OperationPreflightError(mod.mod_id, mod.path, tr("确认期间 Mod 或游戏已变化"))
+            targets = tuple(TagFileTarget.from_mod(mods[mid]) for mid in sorted(ids))
+            opened = getattr(draft, "file_receipt", None)
+            previous = {draft.mod_id: opened} if opened is not None else {}
+            snapshots.update(run(partial(check_tag_files, targets, full=full, previous=previous, pins=pins)))
+            validate_environment()
+
+        def write_sidecars(result):
+            """按标签提交结果写入需要更新的旁车文件并保留预览引用，写后再次复核环境身份。"""
+            mods = [mod for mod in result.mods if mod.mod_id in result.sidecar_mod_ids]
+            references = {}
+            for offset in range(0, len(mods), 500):
+                ids = [mod.mod_id for mod in mods[offset : offset + 500]]
+                rows = index._db().execute(
+                    "SELECT mod_id,preview_images_json FROM mods WHERE mod_id IN (" + ",".join("?" for _ in ids) + ")",
+                    ids,
+                )
+                references.update((row[0], row[1]) for row in rows)
+            if mods:
+                targets = {mod.mod_id: TagFileTarget.from_mod(mod) for mod in result.mods if mod.mod_id in snapshots}
+                writes = [(snapshots[mod.mod_id], targets[mod.mod_id], references[mod.mod_id]) for mod in mods]
+                run(partial(write_tag_files, tuple(writes), written))
+                validate_environment()
+
+        with ExitStack() as pins:
+            try:
+                result = self.get_tag_service().commit_edit(
+                    draft, fields, before_write=before_write, write_sidecars=write_sidecars
+                )
+            except Exception as error:
+                if written:
+                    restored = run(partial(restore_tag_files, tuple(written)))
+                    if draft.mod_id in restored:
+                        # 原子回滚会替换元数据文件，重试凭据须跟随恢复后的内容；
+                        # 恢复失败时保留过期凭据并继续阻止写入。
+                        draft.file_receipt = restored[draft.mod_id]
+                if isinstance(error, OperationPreflightError):
+                    self.report_operation_failure(error)
+                raise
+        for mod_id in sorted(result.sidecar_mod_ids):
+            self._emit("mod_metadata_changed", mod_id=mod_id, game_id=draft.game_id)
+        if draft.is_dirty:
+            self._emit("tags_changed", affected_ids=sorted(result.affected_mod_ids), game_id=draft.game_id)
+        return result
