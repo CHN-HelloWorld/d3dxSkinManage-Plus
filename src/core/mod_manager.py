@@ -2614,3 +2614,340 @@ class ModManager:
         if draft.is_dirty:
             self._emit("tags_changed", affected_ids=sorted(result.affected_mod_ids), game_id=draft.game_id)
         return result
+
+    @protect_mod_operation()
+    @library_mutation
+    @guarded_edit
+    def update_mod(self, mod: Mod) -> bool:
+        """同步更新 Mod 元数据文件和索引。
+
+        编辑、排序和更新操作共用此入口，两种存储须同时成功，索引失败时恢复元数据原文。
+        """
+        receipt = self.check_mod_operation(mod.mod_id, metadata=True)
+        if receipt is None:
+            return False
+        if str(Path(mod.path)) != receipt.path:
+            self.report_operation_failure(OperationPreflightError(mod.mod_id, mod.path, tr("编辑目标位置已变化")))
+            return False
+        return self._commit_mod_metadata(mod)
+
+    def _commit_mod_metadata(self, mod):
+        """调用方验证事务来源后持久化元数据。"""
+        sidecar = Path(mod.path).parent / META_DIR / MANIFEST_NAME
+        try:
+            previous = sidecar.read_bytes() if sidecar.exists() else None
+        except OSError as error:
+            logger.error("读取原元数据失败 mod=%s path=%s reason=%s", mod.mod_id, sidecar, error)
+            return False
+        if not self._write_mod_sidecar(mod):
+            return False
+        ok = self._index.update_mod(mod)
+        if not ok:
+            try:
+                if previous is None:
+                    sidecar.unlink(missing_ok=True)
+                else:
+                    temporary = sidecar.with_name(".info-restore-" + uuid.uuid4().hex + ".tmp")
+                    temporary.write_bytes(previous)
+                    os.replace(temporary, sidecar)
+            except OSError as error:
+                logger.error("恢复元数据失败 mod=%s path=%s reason=%s", mod.mod_id, sidecar, error)
+        if ok:
+            self._emit(
+                "mod_metadata_changed",
+                mod_id=mod.mod_id,
+                game_id=self._index.get_mod_game_id(mod.mod_id) or self.current_game_id,
+            )
+        return ok
+
+    @protect_mod_operation(failure_value=None)
+    @library_mutation
+    def rename_mod(self, mod_id: str, new_display_name: str, sync_folder: bool = True) -> Mod | None:
+        """修改显示名，并按需同步物理目录名称。
+
+        显示名可重复；物理名称冲突时追加数字后缀。成功返回更新后的 Mod，失败返回 None。
+        """
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return None
+
+        if self.check_mod_operation(mod_id, metadata=True, deployment=True) is None:
+            return None
+        new_display_name = (new_display_name or "").strip()
+        if not new_display_name:
+            return None
+
+        # 仅修改显示名
+        if not sync_folder:
+            mod.name = new_display_name
+            return mod if self.update_mod(mod) else None
+
+        # 同步物理目录
+        old_path = Path(mod.path)
+        if not old_path.exists():
+            # 物理路径不存在，只能更新显示名，不能改物理目录
+            logger.warning("Mod 物理路径不存在，仅更新显示名: %s", mod.path)
+            mod.name = new_display_name
+            return mod if self.update_mod(mod) else None
+
+        if fs.is_file(old_path.parent / MOD_CONTAINER_MARKER):
+            return self._rename_managed_mod(mod, new_display_name)
+
+        return None  # 未受管的源文件须先导入再编辑。
+
+    def _rename_managed_mod(self, mod: Mod, new_display_name: str) -> Mod | None:
+        """同步重命名容器、本体、标记、元数据及索引路径。"""
+        from src.core.mod_package import restore_container_marker
+
+        try:
+            expected_identity = validate_mod_id(mod.mod_id)
+            if read_source_mod_id(mod.path) != expected_identity:
+                raise IdentityConflict(tr("源 Mod 身份与索引不一致"))
+        except (IdentityConflict, OSError) as error:
+            logger.warning("改名前源 Mod 身份校验失败，已取消改名: %s", error)
+            return None
+
+        original_mod = copy.deepcopy(mod)
+        old_body = Path(mod.path)
+        old_container = old_body.parent
+        parent = old_container.parent
+        is_arc = fs.is_file(old_body) and is_resident_archive(old_body)
+        suffix = old_body.suffix if is_arc else ""
+        base = _sanitize_folder_name(
+            new_display_name,
+            fallback=mod.folder_name or "Mod",
+        )
+        target_container = parent / base
+        counter = 1
+        while target_container.exists() and target_container != old_container:
+            target_container = parent / f"{base}_{counter}"
+            counter += 1
+        if target_container == old_container:
+            mod.name = new_display_name
+            return mod if self.update_mod(mod) else None
+        target_body = target_container / f"{target_container.name}{suffix}"
+
+        marker_path = old_container / MOD_CONTAINER_MARKER
+        sidecar_path = old_container / META_DIR / MANIFEST_NAME
+        try:
+            marker_bytes = marker_path.read_bytes()
+            snapshot = json.loads(marker_bytes)
+            if not isinstance(snapshot, dict):
+                raise IdentityConflict(tr("读取改名快照时源 Mod 标记损坏"))
+            snapshot_identity = validate_mod_id(snapshot.get("mod_id"))
+            if snapshot_identity != expected_identity:
+                raise IdentityConflict(tr("读取改名快照时源 Mod 身份发生变化"))
+            sidecar_bytes = sidecar_path.read_bytes()
+        except (OSError, ValueError) as error:
+            logger.error("读取容器元数据快照失败，已取消改名: %s", error)
+            return None
+
+        was_enabled = mod.is_enabled
+        if was_enabled:
+            try:
+                if not self._remove_known_deployments(mod, capture_changes=True):
+                    logger.warning("改名前撤部署失败，已取消改名: %s", mod.display_name)
+                    return None
+            except Exception as e:
+                logger.warning("改名前撤部署异常，已取消改名: %s", e)
+                return None
+
+        moved_old_body = target_container / old_body.name
+        db_updated = False
+
+        def _rollback() -> None:
+            """尽力恢复容器、标记、旁车及内存记录；恢复启用部署前重新核对源身份，失败记录日志。"""
+            try:
+                if target_container.exists():
+                    current_body = target_body if target_body.exists() else moved_old_body
+                    restored_body = target_container / old_body.name
+                    if current_body.exists() and current_body != restored_body:
+                        current_body.rename(restored_body)
+                    # 即使标记因身份被重新分配而不能恢复，也恢复原有索引路径。
+                    restored_container = target_container
+                    if not old_container.exists():
+                        target_container.rename(old_container)
+                        restored_container = old_container
+                    restore_container_marker(restored_container, marker_bytes)
+                    restored_sidecar = restored_container / META_DIR / MANIFEST_NAME
+                    restored_sidecar.parent.mkdir(parents=True, exist_ok=True)
+                    restored_sidecar.write_bytes(sidecar_bytes)
+                elif old_container.exists():
+                    restore_container_marker(old_container, marker_bytes)
+                    restored_sidecar = old_container / META_DIR / MANIFEST_NAME
+                    restored_sidecar.parent.mkdir(parents=True, exist_ok=True)
+                    restored_sidecar.write_bytes(sidecar_bytes)
+            except (OSError, IdentityConflict) as rollback_error:
+                logger.error("当前容器改名回滚失败: %s", rollback_error)
+
+            mod.__dict__.clear()
+            mod.__dict__.update(copy.deepcopy(original_mod.__dict__))
+            if db_updated:
+                self._index.update_mod(original_mod)
+            if was_enabled:
+                try:
+                    if read_source_mod_id(original_mod.path) != expected_identity:
+                        raise IdentityConflict(tr("回滚后的源 Mod 身份已变更，拒绝恢复部署"))
+                    restored = self._storage.deploy_mod(
+                        original_mod.path,
+                        deploy_name=original_mod.folder_name,
+                    )
+                    if restored is not None:
+                        self._remember_deployment(mod, restored)
+                except Exception as deploy_error:
+                    logger.warning("改名回滚后恢复部署失败: %s", deploy_error)
+
+        try:
+            old_container.rename(target_container)
+            if moved_old_body != target_body:
+                moved_old_body.rename(target_body)
+            if not write_container_marker(
+                target_container,
+                target_body.name,
+                mod.content_hash,
+                mod_id=expected_identity,
+                imported_at=mod.imported_at,
+            ):
+                raise OSError(tr("写入改名后的容器 marker 失败"))
+        except Exception as e:
+            logger.error("当前容器改名失败，正在回滚: %s", e)
+            _rollback()
+            return None
+
+        old_body_prefix = str(old_body)
+        old_container_prefix = str(old_container)
+        new_body_prefix = str(target_body)
+        new_container_prefix = str(target_container)
+        updated_previews: list[str] = []
+        for preview in mod.preview_images:
+            if preview.startswith(old_body_prefix):
+                updated_previews.append(
+                    preview.replace(old_body_prefix, new_body_prefix, 1),
+                )
+            elif preview.startswith(old_container_prefix):
+                updated_previews.append(
+                    preview.replace(old_container_prefix, new_container_prefix, 1),
+                )
+            else:
+                updated_previews.append(preview)
+        mod.preview_images = updated_previews
+        mod.name = new_display_name
+        mod.folder_name = target_container.name
+        mod.path = str(target_body)
+
+        if not self._write_mod_sidecar(mod):
+            logger.error("改名后的 sidecar 写入失败，正在回滚: %s", target_container)
+            _rollback()
+            return None
+        if not self._index.update_mod(mod):
+            logger.error("改名后的索引写入失败，正在回滚: %s", target_container)
+            _rollback()
+            return None
+        db_updated = True
+
+        try:
+            if read_source_mod_id(mod.path) != expected_identity:
+                raise IdentityConflict(tr("改名后的源 Mod 身份已变更，拒绝重新部署"))
+        except (IdentityConflict, OSError) as error:
+            logger.error("改名身份校验失败，正在回滚: %s", error)
+            _rollback()
+            return None
+
+        if was_enabled:
+            try:
+                deployed = self._storage.deploy_mod(
+                    mod.path,
+                    deploy_name=mod.folder_name,
+                )
+                if deployed is None:
+                    mod.disable()
+                    logger.warning("改名后重新部署失败，已置为禁用: %s", mod.path)
+                else:
+                    self._remember_deployment(mod, deployed)
+            except Exception as e:
+                mod.disable()
+                logger.warning("改名后重新部署异常: %s", e)
+
+        if was_enabled:
+            self._persist_mod_deployment_state(mod)
+        logger.info(
+            "Mod 当前容器已重命名: %s -> %s (folder=%s)",
+            mod.mod_id[:8],
+            new_display_name,
+            mod.folder_name,
+        )
+        self._emit(
+            "mod_metadata_changed",
+            mod_id=mod.mod_id,
+            game_id=self._index.get_mod_game_id(mod.mod_id) or self.current_game_id,
+        )
+        return mod
+
+    @library_mutation
+    @guarded_edit
+    def save_preview(self, mod_id: str, image_path: str) -> bool:
+        """将用户补充预览保存到容器元数据目录。
+
+        补充图随容器复制，本体及内容哈希保持不变。数据库保存相对引用，
+        读取时解析为运行路径；非容器源须先通过导入规范化。
+        """
+        from src.core.operation_preflight import file_version
+
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return False
+        if self.check_mod_operation(mod_id, metadata=True, deployment=True) is None:
+            return False
+
+        src = Path(image_path)
+        if not src.exists():
+            self.report_operation_failure(failure(mod_id, src, FileNotFoundError(str(src))))
+            return False
+
+        # 预览图存入容器级 .d3dxmeta/previews/，随容器移动并保持可移植性。
+        prev_dir = resolve_previews_dir(mod.path) if mod.path else None
+        if prev_dir is None:
+            logger.error("保存预览图失败：Mod 未处于当前格式容器中: %s", mod.path)
+            return False
+        file_version(prev_dir.parent)
+        created_dir = not prev_dir.exists()
+        if not created_dir:
+            file_version(prev_dir)
+        prev_dir.mkdir(exist_ok=True)
+        dest = prev_dir / src.name
+        k = 1
+        while dest.exists() and str(dest) not in mod.preview_images:
+            dest = prev_dir / f"{src.stem}_{k}{src.suffix}"
+            k += 1
+        previous = None
+        if dest.exists():
+            file_version(dest)
+            with access_file(dest, write=True):
+                pass
+            previous = dest.read_bytes()
+        temporary = dest.with_name(".preview-" + uuid.uuid4().hex + ".tmp")
+        published = False
+        committed = False
+        try:
+            shutil.copy2(str(src), str(temporary))
+            os.replace(temporary, dest)
+            published = True
+            if str(dest) not in mod.preview_images:
+                mod.preview_images.append(str(dest))
+            # 同时提交 sidecar 的 local.preview_references 和索引。
+            if not self.update_mod(mod):
+                self.report_operation_failure(OperationPreflightError(mod_id, dest, tr("预览信息保存失败")))
+                return False
+            committed = True
+        finally:
+            if published and not committed:
+                if previous is None:
+                    dest.unlink(missing_ok=True)
+                else:
+                    temporary.write_bytes(previous)
+                    os.replace(temporary, dest)
+            temporary.unlink(missing_ok=True)
+            if created_dir and not committed and not any(prev_dir.iterdir()):
+                prev_dir.rmdir()
+        logger.info("预览图已保存: %s -> %s", src.name, mod.display_name)
+        return True
