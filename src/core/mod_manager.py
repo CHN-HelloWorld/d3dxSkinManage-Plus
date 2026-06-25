@@ -4481,3 +4481,162 @@ class ModManager:
                     stats["errors"].append(str(root))
         logger.info("已删除游戏数据 %s: %s", game_id, stats)
         return stats
+
+    @library_mutation
+    def clear_deploy_dir_contents(self, game_id: str, deploy_dir: str | Path) -> tuple[int, str]:
+        """清空指定游戏的部署目录，并将对应 Mod 标记为禁用。
+
+        返回禁用数量和错误信息。删除失败时不更新数据库，调用方应停止保存配置。
+        目录联接和符号链接只移除链接本身，不进入源目录。
+        """
+        root = Path(deploy_dir)
+        if game_id and game_id == self.current_game_id:
+            # 删除路径前停止对应同步器，避免继续处理已失效目录的文件事件。
+            self.stop_ini_sync()
+        try:
+            children = list(root.iterdir()) if root.is_dir() else []
+        except OSError as e:
+            return 0, tr("无法读取目录内容：{e}", e=e)
+        failures: list[str] = []
+        for child in children:
+            if not self._storage._remove_deploy(child):
+                failures.append(child.name)
+        if failures:
+            return 0, tr("以下内容未能删除（可能正被占用）：") + "、".join(failures[:5])
+
+        disabled = 0
+        try:
+            mods = self._index.get_all_mods(game_id)
+        except Exception as e:
+            logger.warning("清空部署目录后读取 Mod 列表失败: %s", e)
+            mods = []
+        for mod in mods:
+            if not mod.is_enabled:
+                continue
+            mod.disable()
+            mod.forget_deployment()
+            self._persist_mod_deployment_state(mod)
+            disabled += 1
+        try:
+            current = self._preset_manager.get_current(game_id)
+            current.character_mods.clear()
+            self._preset_manager._save()
+        except Exception as e:
+            logger.warning("清空部署目录后同步当前预设失败: %s", e)
+        logger.info("已清空部署目录 %s；%d 个 Mod 置为禁用", root, disabled)
+        return disabled, ""
+
+    @library_mutation
+    def rebase_deployments(
+        self,
+        game_id: str,
+        old_dir: str | Path,
+        new_dir: str | Path,
+        *,
+        entry_names: set[str] | None = None,
+    ) -> int:
+        """部署根目录迁移后更新索引中的实际部署路径，返回更新数量。
+
+        先更新记录再重新登记 INI 同步，避免对账将原路径缺失误判为外部删除。
+        部分搬迁回滚时可限定直接子项名称，保留目标目录原有部署记录。
+        """
+        old_root = os.path.normcase(os.path.abspath(str(old_dir)))
+        new_root = str(Path(new_dir))
+        if not old_root or not new_root:
+            return 0
+        # 同步对仍指向旧路径，先停掉；set_deploy_dir 稍后会按新目录整体重建。
+        if game_id == self.current_game_id and self._ini_sync is not None:
+            self.stop_ini_sync()
+        selected_names = {os.path.normcase(name) for name in entry_names} if entry_names is not None else None
+        updates = []
+        for record in self._index.get_deployments(game_id):
+            if not record.actual_path:
+                continue
+            cur = os.path.normcase(os.path.abspath(record.actual_path))
+            if cur != old_root and not cur.startswith(old_root + os.sep):
+                continue
+            rel = os.path.relpath(record.actual_path, str(old_dir))
+            if selected_names is not None and (
+                rel == "." or os.path.normcase(Path(rel).parts[0]) not in selected_names
+            ):
+                continue
+            target = str(Path(new_root) / rel) if rel != "." else new_root
+            updates.append((target, record.mod_id))
+        # 部署投影管理这些路径；根目录移动不修改资源元数据、预览、预设身份或部署状态。
+        if updates:
+            with self._index.transaction() as conn:
+                conn.executemany("UPDATE deployment_records SET actual_path=? WHERE mod_id=?", updates)
+        moved = len(updates)
+        if moved:
+            logger.info("部署路径已随目录迁移改写: %d 条记录 → %s", moved, new_root)
+        return moved
+
+    @library_mutation
+    def set_deploy_dir(self, deploy_dir: str, *, defer_activation: bool = False) -> None:
+        """设置用户显式配置的 Mod 部署目录，不根据加载器目录推导。
+
+        空值清除部署位置并禁止启用；已启用 Mod 仍可禁用，不涉及文件的预设操作仍可执行。
+        """
+        old_dir = self._storage.get_deploy_dir()
+        old_key = os.path.normcase(os.path.abspath(str(old_dir))) if old_dir is not None else ""
+        new_key = os.path.normcase(os.path.abspath(str(deploy_dir))) if deploy_dir else ""
+        changed = old_key != new_key
+
+        # 目录变化后旧同步对仍指向旧路径，必须停止并在新目录重建；否则迁移完成后
+        # watchdog 继续监听旧目录，部署侧修改不会再回写 override。
+        if (changed or defer_activation) and self._ini_sync is not None:
+            self.stop_ini_sync()
+        self._storage.set_migoto_mods_dir(deploy_dir or "")
+        if deploy_dir:
+            recovery_errors = self._preset_manager.recover_incomplete_applies(self.current_game_id)
+            for error in recovery_errors:
+                logger.error("预设部署恢复需要人工处理: %s", error)
+
+        # 事务恢复回调可能重新建立同步注册；延后激活会替换整套注册，
+        # 先释放本次恢复创建的临时同步器。
+        if defer_activation and self._ini_sync is not None:
+            self.stop_ini_sync()
+
+        if changed and deploy_dir and not defer_activation:
+            try:
+                self.reconcile_deployment_locations(self.current_game_id, force=True)
+                self._register_existing_deployments()
+            except (OSError, IdentityConflict) as error:
+                logger.warning("部署目录身份尚不可确认，保留原记录：%s", error)
+
+    def publish_deployment_activation(self, request, result) -> bool:
+        """在数据库所有者线程接收纯文件系统激活结果。
+
+        游戏、根目录或操作状态变化会使清单过期；返回 True 前，私有 INI 监控仍由工作线程负责。
+        """
+        current_root = self._storage.get_deploy_dir()
+        if (
+            request.game_id != self.current_game_id
+            or path_key(request.root) != path_key(str(current_root or ""))
+            or request.stamp != self.library_probe_stamp
+            or self.library_probe_busy()
+        ):
+            return False
+        self._commit_deployment_activation(request, result)
+        return True
+
+    @library_mutation
+    def _commit_deployment_activation(self, request, result) -> None:
+        """将后台部署探测结果对账到索引，接管同步器和清单，并发布实际变化的启停事件。"""
+        from src.core.deployment_reconcile import reconcile_deployment_records
+
+        changes = reconcile_deployment_records(
+            self._index,
+            self._storage,
+            request.game_id,
+            rows=request.rows,
+            locations=result.locations,
+        )
+        self._ini_sync = result.sync
+        self._ini_sync_refs = dict(result.refs)
+        if self._ini_sync is not None:
+            self._ini_sync.on_synced = self._on_deployment_ini_synced
+        self._storage.adopt_deployment_inventory(result.inventory)
+        result.changed_ids = tuple(mod.mod_id for mod in changes.changed)
+        for mod in changes.changed:
+            self._emit("mod_enabled" if mod.is_enabled else "mod_disabled", mod_id=mod.mod_id, game_id=request.game_id)
