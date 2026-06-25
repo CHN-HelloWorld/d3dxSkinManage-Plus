@@ -3768,3 +3768,236 @@ class ModManager:
             except Exception as e:
                 logger.warning("重建游戏 %s 失败: %s", g.id, e)
         return reports
+
+    def recover_corrupt_index(self) -> dict:
+        """隔离损坏的索引及辅助文件，再从各游戏的资源库重建分类和索引。
+
+        返回隔离路径与各游戏重建结果。
+        """
+        db_path = get_data_dir() / "mod_index.db"
+        try:
+            self._index.close()
+        except Exception:
+            pass
+
+        quarantined = ""
+        if db_path.exists():
+            ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+            dst = db_path.with_name(f"mod_index.db.corrupt-{ts}")
+            try:
+                db_path.replace(dst)
+                for ext in ("-wal", "-shm"):
+                    side = db_path.with_name(db_path.name + ext)
+                    if side.exists():
+                        side.replace(dst.with_name(dst.name + ext))
+                quarantined = str(dst)
+                logger.warning("已隔离疑似损坏的索引 DB → %s", dst)
+            except OSError as e:
+                logger.error("隔离损坏 DB 失败: %s", e)
+
+        # 重建空库并改接引用（PresetManager 共享同一 ModIndex 实例）
+        self._index = ModIndex(self.current_game_id)
+        self._preset_manager._mod_index = self._index
+
+        reports = self.rebuild_all_games()
+        return {"quarantined": quarantined, "reports": reports}
+
+    def plan_scan_intakes(
+        self,
+        *,
+        invalid_metadata: list[str] | None = None,
+        changed_paths: set[Path] | None = None,
+    ):
+        """为外部发现的路径规划不持有数据库连接的导入请求。
+
+        invalid_metadata 收集无法解析标记的容器，供调用方提示处理。
+        changed_paths 限定监控事件涉及的分支，避免单个目录事件触发全库扫描。
+        扫描文件名不代表用户改名，正式名称由纳管时读取的分享元数据确定。
+        """
+        from src.core.mod_intake import IntakeTargetMissingError, ModIntakeService
+
+        gid = self.current_game_id
+        if not gid:
+            return []
+
+        def normalized(path) -> str:
+            """规范化扫描路径为绝对比较键，避免同一路径以大小写或相对形式重复纳管。"""
+            return os.path.normcase(os.path.abspath(str(path)))
+
+        existing_paths = {normalized(mod.path) for mod in self._index.get_all_mods(gid) if mod.path}
+        service = ModIntakeService(self)
+        requests = []
+        for descriptor in self._discover_library_mods(
+            gid,
+            invalid_metadata=invalid_metadata,
+            changed_paths=changed_paths,
+        ):
+            source = Path(descriptor["path"])
+            if normalized(source) in existing_paths:
+                continue
+            managed = self._is_body_in_container(source)
+            try:
+                request = service.plan_request(
+                    source_path=source,
+                    game_id=gid,
+                    node_id=descriptor.get("node_id", ""),
+                    move_source=not managed,
+                    context="rediscovery" if managed else "external",
+                )
+            except IntakeTargetMissingError as exc:
+                logger.warning("跳过目标已失效的纳管项 (%s): %s", source, exc)
+                continue
+            requests.append(request)
+        return requests
+
+    @library_mutation
+    def reconcile_library(
+        self,
+        game_id: str | None = None,
+        *,
+        trigger: str,
+        changed_paths: set[Path] | None = None,
+        plan_intakes: bool = True,
+    ) -> ReconcileReport:
+        """统一处理启动、游戏切换、目录事件、手动刷新和定时轮询的库对账。
+
+        先检查进行中的事务及索引可用性，再按持久身份认领被移动或改名的容器，
+        清理仍缺失的源记录，核对实际部署，最后规划新增内容并返回 ReconcileReport。
+        认领和清理须早于发现新增，避免已改名容器被当成重复输入。
+
+        启动、游戏切换和手动刷新扫描当前游戏；目录事件限定为 changed_paths；
+        轮询仅检查已登记路径。plan_intakes 为 False 时保留路径对账，暂不规划新增。
+        """
+        gid = game_id or self.current_game_id
+        report = ReconcileReport(game_id=gid, trigger=trigger)
+        if not gid:
+            report.skipped = "no-active-game"
+            return report
+
+        # 未完成事务或不可用资源库暂不参与本轮对账。
+        if self.index_schema_error:
+            report.skipped = "index-schema"
+            logger.debug("索引结构不可用，跳过本轮对账: %s", trigger)
+            return report
+        try:
+            if self._preset_manager.has_pending_apply(gid):
+                report.skipped = "preset-apply"
+                logger.debug("预设切换事务期间跳过库对账: %s (%s)", gid, trigger)
+                return report
+        except Exception as e:
+            # 对账会撤销预设意图，读不到事务状态就必须 fail closed，等下一轮。
+            logger.warning("检查预设切换事务失败，已跳过库对账: %s", e)
+            report.skipped = "preset-apply-unknown"
+            return report
+
+        # 2. 源失效（DB 准确路径）：先精确认领，认领不到的再按删除处理
+        try:
+            context = ReconcileContext(self._index.get_library_rows(gid))
+        except Exception as error:
+            logger.warning("读取库快照失败，跳过本轮对账: %s", error)
+            report.skipped = "snapshot-error"
+            return report
+        report.claimed = self.claim_relocated_containers(gid, context=context)
+        report.removed_sources = self.reconcile_missing_sources(gid, context=context)
+
+        # 3. 部署目录改名或副本失效（持久身份）
+        try:
+            report.disabled_deployments = self.reconcile_missing_deployments(gid, context=context)
+        except Exception as e:
+            logger.warning("部署副本对账失败: %s", e)
+
+        report.pending_cleanup = self.has_pending_source_cleanup()
+
+        # 4. 浅扫新增（只出计划，重 IO 归调用方的 worker）
+        if plan_intakes and self.trigger_discovers(trigger, changed_paths):
+            if gid != self.current_game_id:
+                # plan_request 冻结的是「当前激活游戏」的配置，跨游戏规划没有意义。
+                logger.debug("非激活游戏不规划纳管: %s (%s)", gid, trigger)
+            else:
+                try:
+                    report.intake_requests = self.plan_scan_intakes(
+                        invalid_metadata=report.invalid_containers,
+                        changed_paths=changed_paths,
+                    )
+                except Exception as e:
+                    logger.warning("规划新增 Mod 纳管失败: %s", e)
+        return report
+
+    @staticmethod
+    def trigger_discovers(
+        trigger: str,
+        changed_paths: set[Path] | None,
+    ) -> bool:
+        """判断当前触发条件是否需要浅层扫描以发现新增内容。
+
+        调用方据此决定纳管期间是否登记补充扫描。轮询和无变化路径的文件监控事件
+        不发现新增内容，不应登记补充扫描或显示待处理提示。
+        """
+        if trigger == "poll":
+            return False
+        if trigger == "watcher":
+            return bool(changed_paths)
+        return True
+
+    @library_mutation
+    def claim_relocated_containers(self, game_id: str | None = None, *, context: ReconcileContext | None = None) -> int:
+        """按持久化 Mod 身份认领被移动或重命名的容器，返回成功认领数量。
+
+        更新位置时保留 Mod 编号、部署关联和预设引用。独立目录和归档没有可认领身份，
+        由纳管流程处理。目录事件可能只提供旧路径，因此存在失效记录时扫描整个资源库，
+        不将候选范围限制为事件路径。
+        """
+        gid = game_id or self.current_game_id
+        try:
+            if context is None:
+                context = ReconcileContext(self._index.get_library_rows(gid))
+        except Exception as e:
+            logger.warning("claim_relocated_containers 获取 mods 失败: %s", e)
+            return 0
+
+        def _norm(path) -> str:
+            """生成与平台大小写规则一致的绝对路径键，用于匹配移动后的容器位置。"""
+            return os.path.normcase(os.path.abspath(str(path)))
+
+        rows = tuple(context.rows.values())
+        missing = [row for row in rows if row.path and context.check(row.path).state == "missing"]
+        if not missing:
+            return 0
+
+        # 候选本体不能被其他有效记录占用，避免两条记录引用同一资源。
+        occupied = {_norm(row.path) for row in rows if row.path and context.check(row.path).state != "missing"}
+        candidates: dict[str, tuple[Path, str]] = {}
+        invalid_metadata: list[str] = []
+        descriptors = self._discover_library_mods(gid, invalid_metadata=invalid_metadata)
+        if invalid_metadata:
+            # 不可读或损坏的标记可能掩盖已移动的身份；继续处理可确认的认领，其余记录不能判定缺失。
+            context.relocation_complete = False
+        for descriptor in descriptors:
+            body = Path(descriptor["path"])
+            if _norm(body) in occupied or not self._is_body_in_container(body):
+                continue
+            identity = read_source_mod_id(body)
+            if identity in candidates:
+                raise IdentityConflict(tr("源 Mod mod_id 身份重复：{body}", body=body))
+            candidates[identity] = (body, descriptor.get("node_id", ""))
+
+        claimed = 0
+        for row in missing:
+            found = candidates.get(row.mod_id)
+            if found is None:
+                continue
+            body, node_id = found
+            if _norm(body) in occupied:
+                continue
+            mod = self._index.get_mod(row.mod_id)
+            if mod is None or mod.path != row.path or mod.mod_id != row.mod_id:
+                continue
+            if not self._claim_container_move(mod, body, node_id, game_id=gid):
+                continue
+            context.update(mod)
+            occupied.add(_norm(body))
+            candidates.pop(mod.mod_id, None)
+            claimed += 1
+        if claimed:
+            logger.info("按 mod_id 认领已移动的容器: %d 个", claimed)
+        return claimed
