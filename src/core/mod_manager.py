@@ -4001,3 +4001,342 @@ class ModManager:
         if claimed:
             logger.info("按 mod_id 认领已移动的容器: %d 个", claimed)
         return claimed
+
+    def _claim_container_move(
+        self,
+        mod: Mod,
+        body: Path,
+        node_id: str,
+        *,
+        game_id: str | None = None,
+        locations=None,
+    ) -> bool:
+        """把一条记录改指新本体：路径、预览图前缀、分类跟着走，派生态随后自愈。"""
+        if (
+            check_path(mod.path).state != "missing"
+            or check_path(str(body)).state != "exists"
+            or read_source_mod_id(body) != mod.mod_id
+        ):
+            return False
+        # 审计可能通过后代容器发现节点移动，只恢复带标记的祖先，再定位实际父节点。
+        from src.core.library_events import LibraryEventService, LocalChanges
+
+        service = LibraryEventService(self._index.paths)
+        gid = game_id or mod.game_id
+        root = self._index.paths.roots[gid]
+        ancestors = []
+        parent = body.parent.parent
+        while parent != root and parent != parent.parent:
+            ancestors.append(parent)
+            parent = parent.parent
+        if parent != root:
+            return False
+        try:
+            for ancestor in reversed(ancestors):
+                marker = service._marker(ancestor)
+                if marker and marker[0] == "node":
+                    result = LocalChanges()
+                    service._apply(ancestor, marker, result)
+                    if result.review_paths or result.conflicts:
+                        return False
+            node_id = service._parent(body.parent, gid) or ""
+        except (OSError, ValueError, KeyError):
+            return False
+        old_body = Path(mod.path)
+        old_container = old_body.parent
+        new_container = body.parent
+        # 恢复读取可识别已改名的本体；发布索引路径前保存已验证的名称，
+        # 避免后续容器事件仍将本体判断为缺失。
+        marker = read_container_marker(new_container)
+        if marker is None or marker.get("mod_id") != mod.mod_id or marker.get("body") != body.name:
+            return False
+        if not write_container_marker(
+            new_container, body.name, marker["content_hash"], mod_id=mod.mod_id, imported_at=mod.imported_at
+        ):
+            return False
+        prefixes = (
+            (str(old_body), str(body)),
+            (str(old_container), str(new_container)),
+        )
+        updated_previews: list[str] = []
+        for preview in mod.preview_images:
+            for old_prefix, new_prefix in prefixes:
+                if preview.startswith(old_prefix):
+                    updated_previews.append(preview.replace(old_prefix, new_prefix, 1))
+                    break
+            else:
+                updated_previews.append(preview)
+
+        old_path = mod.path
+        old_folder_name = mod.folder_name
+        old_previews = mod.preview_images
+        old_character_id = mod.node_id
+        mod.preview_images = updated_previews
+        mod.path = str(body)
+        mod.folder_name = new_container.name
+        # 按容器当前物理位置更新分类，资源库根下的内容归为未分类。
+        # 保留用户保存的目录名称，部署关联继续使用持久身份。
+        reclassified = node_id != old_character_id
+        if reclassified:
+            mod.node_id = node_id
+        previous_game = self._index.game_id
+        self._index.game_id = game_id or self.current_game_id
+        try:
+            updated = self._index.update_mod(mod)
+        finally:
+            self._index.game_id = previous_game
+        if not updated:
+            mod.path = old_path
+            mod.folder_name = old_folder_name
+            mod.preview_images = old_previews
+            mod.node_id = old_character_id
+            logger.warning("认领已移动容器的索引写入失败: %s", body)
+            return False
+        live_events = getattr(self, "_local_source_events", None)
+        if live_events is not None and live_events.paths is self._index.paths:
+            live_events.accept_source_claim(mod.mod_id, old_container, new_container)
+        if reclassified:
+            self._preset_manager.cascade_move_mod(mod.mod_id, old_character_id or "", node_id or "", mod.game_id)
+        if game_id is None or game_id == self.current_game_id:
+            self._heal_derived_state_after_claim(mod, locations=locations)
+        logger.info(
+            "已按 mod_id 认领移动后的容器: %s (%s -> %s)",
+            mod.mod_id[:8],
+            old_path,
+            mod.path,
+        )
+        return True
+
+    def _heal_derived_state_after_claim(self, mod: Mod, *, locations=None) -> None:
+        """源容器移动后，按身份找到实际部署并重新登记 INI 同步。"""
+        if self._ini_sync is not None:
+            try:
+                self._ini_sync.unregister_mod(mod.mod_id)
+                self._ini_sync_refs.pop(mod.mod_id, None)
+            except Exception as e:
+                logger.warning("认领后注销旧 ini 同步失败 (%s): %s", mod.mod_id, e)
+        try:
+            location = (
+                self._storage.scan_deployments(
+                    (mod.deployed_path,) if mod.deployed_path else (),
+                    force=True,
+                )
+                if locations is None
+                else locations
+            ).get(mod.mod_id)
+        except (OSError, IdentityConflict) as error:
+            logger.warning("认领后查找部署身份失败 (%s): %s", mod.mod_id, error)
+            return
+        if location is not None and location.active:
+            self._storage._check_deployment_identity(location.path, mod.mod_id)
+            self._register_ini_sync(mod.mod_id, mod.path, location.path, mod_ids=(mod.mod_id,))
+
+    @library_mutation
+    def reconcile_missing_sources(self, game_id: str | None = None, *, context: ReconcileContext | None = None) -> int:
+        """按已登记的源路径清理无法认领的缺失资源，返回清理完成的记录数。
+
+        统一对账先按持久身份认领改名或移动的容器；本方法仅处理仍缺失的记录。
+        以幂等事务清理部署、预设引用和附属数据。物理清理失败时保留索引，
+        供后续重试，避免遗留不可管理的部署。
+        """
+        gid = game_id or self.current_game_id
+        try:
+            if self._preset_manager.has_pending_apply(gid):
+                logger.debug("预设切换事务期间跳过源库对账: %s", gid)
+                return 0
+        except Exception as e:
+            logger.warning("检查预设切换事务失败，已跳过源库对账: %s", e)
+            return 0
+        self._pending_source_cleanup = False
+        try:
+            if context is None:
+                context = ReconcileContext(self._index.get_library_rows(gid))
+        except Exception as e:
+            logger.warning("reconcile_missing_sources 获取 mods 失败: %s", e)
+            return 0
+
+        removed = 0
+        for row in tuple(context.rows.values()):
+            check = context.check(row.path)
+            if check.state == "exists":
+                continue
+            if check.state == "error":
+                logger.warning("源路径检查失败，保留记录 (%s): %s", row.path, check.error)
+                continue
+            if not context.relocation_complete:
+                self._pending_source_cleanup = True
+                continue
+            try:
+                mod = self._index.get_mod(row.mod_id)
+                if mod is None or mod.path != row.path or mod.mod_id != row.mod_id:
+                    continue
+                container = self._index.paths.container_path(mod.mod_id)
+                if check_path(str(container)).state == "exists":
+                    try:
+                        marker = read_container_marker(container)
+                    except (OSError, InvalidManagedMetadataError):
+                        marker = None
+                    if marker and marker.get("mod_id") == mod.mod_id:
+                        recovered = container / marker["body"]
+                        if check_path(str(recovered)).state == "exists":
+                            write_container_marker(
+                                container,
+                                marker["body"],
+                                marker["content_hash"],
+                                mod_id=mod.mod_id,
+                                imported_at=mod.imported_at,
+                            )
+                            if self._claim_container_move(mod, recovered, mod.node_id, game_id=gid):
+                                context.update(mod)
+                            continue
+                if self._purge_missing_source_mod(mod, gid):
+                    removed += 1
+                    context.rows.pop(row.mod_id, None)
+                else:
+                    self._pending_source_cleanup = True
+            except Exception as e:
+                logger.warning("清理孤儿 Mod 记录失败: %s - %s", row.mod_id, e)
+                self._pending_source_cleanup = True
+
+        if removed:
+            logger.info("源库对账完成: 清理 %d 个孤儿记录", removed)
+        if self._pending_source_cleanup:
+            logger.warning("仍有外部删除的 Mod 未清零，将自动重试")
+        if not self._cleanup_orphaned_managed_artifacts(gid, context=context):
+            self._pending_source_cleanup = True
+            logger.warning("仍有孤儿预览缓存/更新备份待清理，将自动重试")
+        return removed
+
+    def _find_previews(
+        self,
+        folder_path: str,
+        mod_id: str = "",
+        resource_dir: str | None = None,
+        *,
+        content_hash: str | None = None,
+        source_version: tuple | None = None,
+        cache_index: PreviewCacheIndex | None = None,
+    ) -> list[str]:
+        """收集本体原始预览和容器补充预览。
+
+        本体扫描排除元数据目录；归档图片使用预览缓存，手动添加或分享包带入的图片
+        从容器 .d3dxmeta/previews 读取。合并两类结果，不重复复制本体图片。
+        """
+        path = Path(folder_path)
+        results: list[str] = []
+
+        # ① 本体自带原始预览图
+        if fs.is_file(path) and is_resident_archive(path):
+            # 压缩档（zip/7z/rar）：从包内查找并提取到中心 cache（list_contents/extract_files 三格式通用）。
+            ext_set = {e.lower() for e in IMAGE_EXTENSIONS} - {".dds"}
+            try:
+                sidecar = read_sidecar(path) or {}
+            except InvalidManagedMetadataError:
+                sidecar = {}
+            excluded = {
+                os.path.normcase(name) for name in (sidecar.get("local") or {}).get("excluded_archive_previews", [])
+            }
+            cache_id = mod_id or path.stem
+            cache_dir = get_data_dir() / (resource_dir or self._res_dir()) / "preview_cache" / cache_id
+            # 重建和导入提供当前内容指纹及资源观察。
+            observed = capture_source_version(path)
+            if source_version is not None and observed != source_version:
+                return []
+            if content_hash is None or source_version is None:
+                actual_hash = Mod.compute_sha1(str(path))
+                if content_hash is not None and actual_hash != content_hash:
+                    return []
+                content_hash = actual_hash
+            source_version = observed
+            if capture_source_version(path) != source_version:
+                return []
+            contents = None
+            if excluded:
+                contents = self._archive.list_contents(path)
+                # 导入转换可能去掉归档的单层包装目录，必须按完整相对路径匹配，不能只比较文件名。
+                relative_names = Mod._strip_single_top(contents)
+                exact_names = {os.path.normcase(name.replace("\\", "/")) for name in contents}
+                stripped_exclusions = excluded - exact_names
+                excluded.update(
+                    os.path.normcase(name.replace("\\", "/"))
+                    for name, relative in relative_names.items()
+                    if os.path.normcase(relative) in stripped_exclusions
+                )
+            cached = self._cached_archive_previews(
+                mod_id, resource_dir, ext_set, content_hash=content_hash, cache_index=cache_index, excluded=excluded
+            )
+            if cached:
+                if capture_source_version(path) == source_version:
+                    results.extend(cached)
+            else:
+                if contents is None:
+                    contents = self._archive.list_contents(path)
+                image_files = [
+                    n
+                    for n in contents
+                    if os.path.splitext(n)[1].lower() in ext_set
+                    and ".d3dxmeta" not in n.replace("\\", "/").split("/")
+                    and os.path.normcase(n.replace("\\", "/")) not in excluded
+                ][:5]
+                if image_files:
+                    try:
+                        with preview_cache_staging(cache_dir) as stage:
+                            extracted = self._archive.extract_files(path, image_files, stage)
+                            present = [Path(p) for p in extracted if fs.is_file(p)]
+                            if len(present) == len(image_files) and capture_source_version(path) == source_version:
+                                published = publish_preview_cache(stage, cache_dir, present, content_hash=content_hash)
+                                results.extend(str(p) for p in published)
+                    except InterruptedError:
+                        raise
+                    except OSError as error:
+                        logger.warning("预览缓存写入失败 (%s): %s", path, error)
+        elif fs.is_dir(path):
+            # 扫描文件夹本体，排除 DDS 贴图及 .d3dxmeta 子树中的元数据图片。
+            try:
+                ext_set = {ext.lower() for ext in IMAGE_EXTENSIONS}
+                imgs = [str(p) for p in fs.iter_files(path) if p.suffix.lower() in ext_set]
+                results.extend(
+                    img for img in imgs if not img.lower().endswith(".dds") and ".d3dxmeta" not in Path(img).parts
+                )
+            except Exception:
+                pass
+
+        # 读取容器级 .d3dxmeta/previews/ 中独立于本体保存的补充预览图。
+        prev_dir = resolve_previews_dir(path)
+        if prev_dir is not None and prev_dir.is_dir():
+            try:
+                results.extend(
+                    str(p)
+                    for p in sorted(prev_dir.iterdir())
+                    if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and not p.name.lower().endswith(".dds")
+                )
+            except OSError:
+                pass
+
+        # 去重保序（本体图在前、手动/外来图在后），上限 5 张
+        seen: set[str] = set()
+        deduped: list[str] = []
+        for img in results:
+            key = os.path.normcase(os.path.abspath(img))
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(img)
+        return deduped[:5]
+
+    @staticmethod
+    def _iter_preview_cache_candidates(
+        root: Path,
+        mod_id: str,
+        content_hash: str,
+        *,
+        cache_index: PreviewCacheIndex | None = None,
+    ):
+        """仅已发布的内容指纹可授权复用缓存。"""
+        exact = root / mod_id
+        if mod_id and cache_content_hash(exact) == content_hash:
+            yield exact
+        if cache_index is not None:
+            for candidate in cache_index.get(content_hash, ()):
+                if candidate != exact and cache_content_hash(candidate) == content_hash:
+                    yield candidate
