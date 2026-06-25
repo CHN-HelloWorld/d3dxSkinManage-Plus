@@ -4640,3 +4640,342 @@ class ModManager:
         result.changed_ids = tuple(mod.mod_id for mod in changes.changed)
         for mod in changes.changed:
             self._emit("mod_enabled" if mod.is_enabled else "mod_disabled", mod_id=mod.mod_id, game_id=request.game_id)
+
+    # 移动操作 (剪切/粘贴)
+
+    @protect_node_operation
+    @library_mutation
+    def move_character(self, char_id: str, new_parent_id: str, game_id: str | None = None) -> bool:
+        """预检后移动分类目录并更新父节点，失败回滚目录和记录；提交后修复后代部署引用。"""
+        if not self.check_node_operation(char_id):
+            return False
+        if new_parent_id and not self.check_node_operation(new_parent_id, children=False):
+            return False
+        gid = game_id or self.current_game_id
+        current = self.get_character(char_id, gid)
+        if current is None or char_id == new_parent_id:
+            return False
+        conn = self._index._db()
+        moved = False
+        old_path = self._get_character_library(char_id, gid, create=False)
+        new_path = old_path
+        try:
+            parent = self._get_character_library(new_parent_id, gid, create=False)
+            new_path = parent / current.directory_name
+            if old_path == new_path:
+                return True
+            if fs.exists(new_path):
+                raise FileExistsError(new_path)
+            # 写入前由触发器检查游戏归属和祖先循环。
+            conn.execute("UPDATE nodes SET parent_id=? WHERE id=?", (new_parent_id or None, char_id))
+            os.rename(fs.native_path(old_path), fs.native_path(new_path))
+            moved = True
+            conn.commit()
+        except Exception as error:
+            conn.rollback()
+            if moved:
+                try:
+                    os.rename(fs.native_path(new_path), fs.native_path(old_path))
+                except OSError:
+                    logger.exception("恢复类别移动失败")
+            logger.error("移动类别失败: %s", error)
+            return False
+        return self._repair_deployment_links_for_subtree(char_id)
+
+    @protect_mod_operation()
+    @library_mutation
+    def move_mod(self, mod_id: str, new_character_id: str) -> bool:
+        """移动 Mod 到另一个类别"""
+        mod = self._index.get_mod(mod_id)
+        if not mod:
+            return False
+        if self.check_mod_operation(mod_id, metadata=True, deployment=True) is None:
+            return False
+        if mod.node_id == new_character_id:
+            return True  # 同级目录不做操作
+        if new_character_id and not self.check_node_operation(new_character_id, children=False):
+            return False
+
+        old_character_id = mod.node_id
+        original_mod = copy.deepcopy(mod)
+
+        try:
+            old_path = Path(mod.path)
+            new_parent = self._get_character_library(new_character_id, create=False)
+            with access_file(new_parent, write=True, directory=True):
+                pass
+            managed_container = old_path.parent if fs.is_file(old_path.parent / MOD_CONTAINER_MARKER) else None
+            if managed_container is not None:
+                new_container = new_parent / managed_container.name
+                new_path = new_container / old_path.name
+            else:
+                new_container = None
+                new_path = new_parent / old_path.name
+
+            # 当前容器移动以 sidecar + DB 均成功为提交点；任一失败恢复整容器和旧记录。
+            if managed_container is not None:
+                sidecar_path = managed_container / META_DIR / MANIFEST_NAME
+                try:
+                    sidecar_bytes = sidecar_path.read_bytes()
+                except OSError as e:
+                    logger.error("读取移动前 sidecar 快照失败: %s", e)
+                    return False
+                db_updated = False
+
+                def _rollback_managed_move() -> None:
+                    """尽力移回纳管容器及旁车原件，再还原内存与已更新的索引记录，文件恢复失败记录日志。"""
+                    try:
+                        if new_container is not None and new_container.exists():
+                            if not managed_container.exists():
+                                shutil.move(str(new_container), str(managed_container))
+                        restored_sidecar = managed_container / META_DIR / MANIFEST_NAME
+                        restored_sidecar.parent.mkdir(parents=True, exist_ok=True)
+                        restored_sidecar.write_bytes(sidecar_bytes)
+                    except OSError as rollback_error:
+                        logger.error("Mod 容器移动回滚失败: %s", rollback_error)
+                    mod.__dict__.clear()
+                    mod.__dict__.update(copy.deepcopy(original_mod.__dict__))
+                    if db_updated:
+                        self._index.update_mod(original_mod)
+
+                if not old_path.exists() or new_container.exists():
+                    return False
+                shutil.move(str(managed_container), str(new_container))
+
+                old_prefix = str(managed_container)
+                new_prefix = str(new_container)
+                mod.preview_images = [
+                    path.replace(old_prefix, new_prefix, 1) if path.startswith(old_prefix) else path
+                    for path in mod.preview_images
+                ]
+                mod.node_id = new_character_id
+                mod.path = str(new_path)
+
+                if not self._write_mod_sidecar(mod):
+                    logger.error("移动后的 sidecar 写入失败，正在回滚: %s", new_container)
+                    _rollback_managed_move()
+                    return False
+                if not self._index.update_mod(mod):
+                    logger.error("移动后的索引写入失败，正在回滚: %s", new_container)
+                    _rollback_managed_move()
+                    return False
+                db_updated = True
+
+                try:
+                    self._preset_manager.cascade_move_mod(
+                        mod_id,
+                        old_character_id,
+                        new_character_id,
+                        self.current_game_id,
+                    )
+                except Exception as e:
+                    logger.warning("preset cascade_move_mod 失败: %s", e)
+                    _rollback_managed_move()
+                    return False
+
+                if mod.is_enabled and mod.deployed_path:
+                    self._register_ini_sync(mod_id, mod.path, mod.deployed_path, (mod_id,))
+
+                logger.info("Mod 已移动: %s -> %s", mod.display_name, new_character_id[:8])
+                return True
+
+            return False  # 仅移动受管容器。
+        except Exception as e:
+            logger.error("移动 Mod 失败: %s", e)
+            return False
+
+    @library_mutation
+    def _repair_deployment_links_for_subtree(self, char_id: str) -> bool:
+        """仅刷新当前子树的活动部署与 INI 关联，无需重写后代的资源和图片路径。"""
+        from src.core.mod_package import list_overrides, override_path_for
+        from src.models.deployment import DeploymentRecord, DeploymentState
+
+        conn = self._index._db()
+        rows = conn.execute(
+            "WITH RECURSIVE subtree(id) AS (SELECT id FROM nodes WHERE id=? "
+            "UNION ALL SELECT n.id FROM nodes n JOIN subtree s ON n.parent_id=s.id) "
+            "SELECT m.mod_id,d.actual_path FROM subtree s JOIN mods m ON m.node_id=s.id "
+            "JOIN deployment_records d ON d.mod_id=m.mod_id WHERE d.state='active'",
+            (char_id,),
+        ).fetchall()
+        success = True
+        for row in rows:
+            identity, target = row["mod_id"], Path(row["actual_path"])
+            try:
+                self._storage._check_deployment_identity(target, identity)
+                body = self._index.paths.body_path(identity)
+                if self._ini_sync is not None:
+                    self._ini_sync.unregister_mod(identity)
+                    self._ini_sync_refs.pop(identity, None)
+                for relative in list_overrides(str(body)):
+                    source = override_path_for(str(body), relative)
+                    if source is None:
+                        raise OSError(tr("INI override 位置缺失"))
+                    destination = target / relative
+                    mode = self._storage.link_ini(Path(source), destination)
+                    if mode == "copy" and destination.read_bytes() != Path(source).read_bytes():
+                        raise OSError(tr("INI copy 修复未完成"))
+                self._register_ini_sync(identity, str(body), target, mod_ids=(identity,))
+            except Exception as error:
+                success = False
+                self._index.upsert_deployment(DeploymentRecord(identity, DeploymentState.ERROR, str(target)))
+                logger.error("节点移动后部署关联修复失败 (%s): %s", identity, error)
+        return success
+
+    @library_mutation
+    def migrate_game_resource_dir(self, game_id: str, old_rd: str, new_rd: str) -> str:
+        """迁移资源根及受管 INI 链接，成功后返回新名称，普通失败完整回滚并返回旧名称。
+
+        调用方须先暂停相关监听，保存游戏配置后再重建。活动与停放部署共用迁移规则，
+        独立副本和硬链接不改写；回滚本身失败时抛出携带实际资源位置的专用异常。
+        """
+        import sqlite3
+
+        from src.core.library_schema import valid_relative
+        from src.core.mod_package import resolve_ini_overrides_dir
+
+        if not valid_relative(old_rd, True) or not valid_relative(new_rd, True):
+            return old_rd
+        if old_rd == new_rd:
+            return old_rd
+        old_path, new_path = get_data_dir() / old_rd, get_data_dir() / new_rd
+        if os.path.lexists(fs.native_path(new_path)):
+            return old_rd
+        current_root = self._index.paths.roots.get(game_id)
+        if current_root is not None and path_key(str(current_root)) != path_key(str(old_path / "mods")):
+            return old_rd
+
+        def relocated(path: Path) -> Path:
+            """仅重定位旧资源根内的规范路径，保留外部部署和外部链接目标。"""
+            normalized = Path(os.path.abspath(fs.normal_path(path)))
+            try:
+                return new_path / normalized.relative_to(old_path)
+            except ValueError:
+                return normalized
+
+        def link_version(path: Path) -> tuple[int, int, str]:
+            """核验目标仍为同一符号链接，拒绝覆盖运行期间被编辑器替换的独立副本。"""
+            info = os.lstat(fs.native_path(path))
+            if not stat.S_ISLNK(info.st_mode):
+                raise OSError(tr("目标文件已被修改，请刷新后重试"))
+            return info.st_dev, info.st_ino, os.readlink(fs.native_path(path))
+
+        def walk_failed(error: OSError) -> None:
+            """将覆盖目录的访问错误交给迁移回滚，避免把不可访问误判为没有 INI。"""
+            raise error
+
+        links: list[tuple[Path, Path, Path, tuple[int, int, str]]] = []
+        backups: list[tuple[Path, Path]] = []
+        moved = completed = False
+        connection = None
+        try:
+            updates = []
+            records = sorted(self._index.get_deployments(game_id), key=lambda record: record.actual_path)
+            for record in records:
+                if not record.actual_path:
+                    continue
+                target = Path(fs.normal_path(record.actual_path))
+                body = self._index.paths.body_path(record.mod_id)
+                if read_source_mod_id(body) != record.mod_id:
+                    raise IdentityConflict(tr("源文件身份或位置已变化"))
+                self._storage._check_deployment_identity(target, record.mod_id)
+                rebound = relocated(target)
+                if rebound != target:
+                    updates.append((str(rebound), record.mod_id))
+                overrides = resolve_ini_overrides_dir(body)
+                if overrides is None:
+                    continue
+                try:
+                    os.stat(fs.native_path(overrides))
+                except FileNotFoundError:
+                    continue
+                # 覆盖层只包含 INI，无需遍历部署目录中的贴图等大体积资源。
+                for directory, _, files in os.walk(fs.native_path(overrides), onerror=walk_failed):
+                    for name in files:
+                        if Path(name).suffix.casefold() != ".ini":
+                            continue
+                        relative = (Path(fs.normal_path(directory)) / name).relative_to(overrides)
+                        destination = target / relative
+                        try:
+                            info = os.lstat(fs.native_path(destination))
+                        except FileNotFoundError:
+                            continue
+                        if not stat.S_ISLNK(info.st_mode):
+                            continue
+                        version = link_version(destination)
+                        original = Path(fs.normal_path(version[2]))
+                        absolute = Path(os.path.abspath(destination.parent / original))
+                        new_target = relocated(absolute)
+                        if new_target == absolute:
+                            continue
+                        if not destination.parent.resolve().is_relative_to(target.resolve()):
+                            raise IdentityConflict(tr("同步路径必须位于 Mod 内"))
+                        token = uuid.uuid4().hex
+                        temporary = destination.with_name(f".{name}.resource-{token}.tmp")
+                        backup = destination.with_name(f".{name}.resource-{token}.bak")
+                        if os.path.lexists(fs.native_path(backup)):
+                            raise FileExistsError(str(backup))
+                        os.symlink(fs.native_path(new_target), fs.native_path(temporary))
+                        links.append((destination, temporary, backup, version))
+
+            connection = self._index._db()
+            with self._index.transaction():
+                if os.path.lexists(fs.native_path(old_path)):
+                    os.rename(fs.native_path(old_path), fs.native_path(new_path))
+                    moved = True
+                for destination, temporary, backup, version in links:
+                    destination, temporary, backup = (relocated(path) for path in (destination, temporary, backup))
+                    if link_version(destination) != version:
+                        raise OSError(tr("目标文件已被修改，请刷新后重试"))
+                    # 保存原始链接本身，回滚不依赖再次取得创建符号链接的权限。
+                    os.replace(fs.native_path(destination), fs.native_path(backup))
+                    backups.append((destination, backup))
+                    os.replace(fs.native_path(temporary), fs.native_path(destination))
+                if updates:
+                    connection.executemany("UPDATE deployment_records SET actual_path=? WHERE mod_id=?", updates)
+            self._index.paths.roots[game_id] = new_path / "mods"
+            self._index.paths.preview_roots[game_id] = new_path / "preview_cache"
+            completed = True
+            return new_rd
+        except (OSError, ValueError, KeyError, sqlite3.Error) as error:
+            logger.error("游戏资源目录移动失败: %s", error)
+            rollback_errors = []
+            if connection is not None and connection.in_transaction:
+                try:
+                    connection.rollback()
+                except sqlite3.Error as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            for destination, backup in reversed(backups):
+                try:
+                    os.replace(fs.native_path(backup), fs.native_path(destination))
+                except OSError as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            if moved:
+                try:
+                    if os.path.lexists(fs.native_path(old_path)):
+                        raise FileExistsError(str(old_path))
+                    os.rename(fs.native_path(new_path), fs.native_path(old_path))
+                    moved = False
+                except OSError as rollback_error:
+                    rollback_errors.append(str(rollback_error))
+            if rollback_errors:
+                actual_name, actual_path = (new_rd, new_path) if moved else (old_rd, old_path)
+                self._index.paths.roots[game_id] = actual_path / "mods"
+                self._index.paths.preview_roots[game_id] = actual_path / "preview_cache"
+                raise ResourceDirectoryMigrationError(actual_name, actual_path, rollback_errors) from error
+            return old_rd
+        finally:
+            for _, temporary, backup, _ in links:
+                for path in (temporary, backup) if completed else (temporary,):
+                    path = relocated(path) if moved else path
+                    try:
+                        os.unlink(fs.native_path(path))
+                    except FileNotFoundError:
+                        pass
+                    except OSError as cleanup_error:
+                        logger.warning("资源目录迁移临时链接清理失败 (%s): %s", path, cleanup_error)
+
+    @classmethod
+    def instance(cls) -> ModManager:
+        """取得共享 Mod 管理器，并在首次访问时完成初始化。"""
+        return cls()
