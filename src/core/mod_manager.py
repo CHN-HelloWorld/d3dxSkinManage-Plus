@@ -3700,3 +3700,71 @@ class ModManager:
             return len(normalized)
 
         return sorted(previews, key=_rank)
+
+    @property
+    def index_healthy(self) -> bool:
+        """检查当前索引文件能否被解析，供启动自检使用。
+
+        可解析的空库仍可能缺少数据，须结合 index_needs_recovery 判断是否需要恢复。
+        """
+        try:
+            return self._index.health_check()
+        except Exception:
+            return False
+
+    @property
+    def index_schema_error(self) -> str:
+        """返回索引结构不兼容的原因；空字符串表示结构有效。"""
+        return getattr(self._index, "schema_error", "")
+
+    def _disk_has_library_content(self, game_id: str | None = None) -> bool:
+        """该游戏的文件库根目录是否含「已有数据」（类别目录 / Mod 文件夹 / zip）。
+
+        用于区分「库被清空/丢失」（磁盘有数据但 DB 空）与「全新安装」（都空）。
+        """
+        gid = game_id or self.current_game_id
+        try:
+            root = self._get_library_root(gid)
+            for entry in fs.list_children(root):
+                if entry.name.startswith("."):
+                    continue
+                if fs.is_dir(entry) or (fs.is_file(entry) and is_resident_archive(entry)):
+                    return True
+        except OSError:
+            return False
+        return False
+
+    def index_needs_recovery(self) -> str:
+        """判断启动时的索引状态。
+
+        incompatible 表示结构不可用，corrupt 表示文件无法解析，两者均须确认后隔离重建；
+        stale 表示索引为空但磁盘仍有资源，需要重建；空字符串表示正常。
+        先检查结构，以免被关闭的业务读取被误判为空库。
+        """
+        if self.index_schema_error:
+            return "incompatible"
+        if not self.index_healthy:
+            return "corrupt"
+        try:
+            for g in self._game_service.games:
+                gid = g.id
+                if not self._disk_has_library_content(gid):
+                    continue
+                empty_chars = len(self.get_characters(gid)) == 0
+                empty_mods = len(self.get_mods(game_id=gid)) == 0
+                if empty_chars and empty_mods:
+                    return "stale"
+        except Exception as e:
+            logger.warning("index_needs_recovery 检查失败: %s", e)
+        return ""
+
+    def rebuild_all_games(self, progress_cb=None) -> dict:
+        """对每个已知游戏从文件库重建索引（不隔离 DB；用于 stale 修复与恢复复用）。"""
+        reports: dict[str, RebuildReport] = {}
+        for g in self._game_service.games:
+            try:
+                self.rebuild_character_tree_from_markers(g.id)
+                reports[g.id] = self.rebuild_index_from_filesystem(g.id, progress_cb=progress_cb)
+            except Exception as e:
+                logger.warning("重建游戏 %s 失败: %s", g.id, e)
+        return reports
