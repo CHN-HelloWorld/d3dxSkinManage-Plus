@@ -3193,3 +3193,323 @@ class ModManager:
             guard += 1
         chain.reverse()
         return chain
+
+    def _write_mod_sidecar(self, mod: Mod, *, chars=None, repair_invalid=False) -> bool:
+        """持久化完整恢复元数据，并将失败报告给当前操作。"""
+        if not mod or not mod.path:
+            return False
+        try:
+            try:
+                existing = read_sidecar(mod.path)
+            except InvalidManagedMetadataError:
+                if not repair_invalid:
+                    raise
+                existing = {}
+            extra = unknown_manifest_keys(existing) if existing else {}
+            container = Path(mod.path).parent
+            local = dict((existing or {}).get("local") or {})
+            local.pop("preview_order", None)
+            local.pop("classification", None)
+            local.pop("status_hint", None)
+            local["preview_references"] = [self._index._image_reference(p, container, mod) for p in mod.preview_images]
+            manifest = build_local_manifest(local_meta_from_mod(mod), local, extra=extra)
+            return write_sidecar(mod.path, manifest)
+        except Exception as error:
+            logger.error(
+                "保存 Mod 元数据失败 game=%s mod=%s path=%s reason=%s", mod.game_id, mod.mod_id, mod.path, error
+            )
+            return False
+
+    def _is_body_in_container(self, body_path: str | Path) -> bool:
+        """该本体是否已在容器内（父目录含 .d3dxmod 正向 marker）。"""
+        try:
+            return fs.is_file(Path(body_path).parent / MOD_CONTAINER_MARKER)
+        except OSError:
+            return False
+
+    def _discover_library_mods(
+        self,
+        game_id: str | None = None,
+        *,
+        invalid_metadata: list[str] | None = None,
+        changed_paths: set[Path] | None = None,
+        cancel_cb=None,
+        known_paths: frozenset[str] | None = None,
+        source_inventory=None,
+        audit_owns_known_checks: bool = False,
+    ) -> list[dict]:
+        """按类别发现库内 Mod，返回包含 folder_name、path、node_id 的记录列表。
+
+        遍历类别目录的直接子项，跳过类别标记或已知子类别名称对应的目录。
+        再扫描不属于已知类别的直接成员，将其归为未分类。
+        changed_paths 指定变化范围时，只枚举与变化路径处于同一分支的目录及候选。
+        启动、游戏切换或手动全量刷新时不传该参数。
+        """
+        gid = game_id or self.current_game_id
+        chars = self.get_characters(gid)
+
+        child_names: dict[str, set] = {}
+        for c in chars:
+            if cancel_cb is not None:
+                cancel_cb()
+            child_names.setdefault(c.parent_id or "", set()).add(c.name or c.name_en or c.id)
+
+        def _norm(p) -> str:
+            """将发现路径转换为平台规范化绝对路径，供已知源及扫描范围比较。"""
+            return os.path.normcase(os.path.abspath(str(p)))
+
+        known = set()
+        for path in known_paths or ():
+            if cancel_cb is not None:
+                cancel_cb()
+            known.add(_norm(path))
+        cached_markers = {}
+        if source_inventory is not None and source_inventory.root == _norm(self._get_library_root(gid)):
+            for entry in source_inventory.entries:
+                if cancel_cb is not None:
+                    cancel_cb()
+                cached_markers[_norm(entry.container)] = entry
+
+        def _read_discovery_marker(container):
+            """复用满足审计或版本约束的已知普通本体标记；链接、缺失及类型变化走完整校验。"""
+            if not known:
+                return read_container_marker(container)
+            from src.core.mod_identity import DEPLOYMENT_IDENTITY_KIND
+            from src.core.mod_package import (
+                _CONTENT_HASH_RE,
+                CONTAINER_KIND,
+                _read_container_marker_data,
+                _validate_container_marker,
+            )
+
+            cached = cached_markers.get(_norm(container))
+            data = None
+            touched = bool(scope) and _in_scope(container)
+            if (
+                (audit_owns_known_checks or not touched)
+                and cached is not None
+                and cached.source is not None
+                and not cached.error
+                and cached.body_type in {"folder", "archive"}
+                and cached.content_hash
+                and _norm(cached.source.body) in known
+            ):
+                if audit_owns_known_checks:
+                    # 此处只准备清单；控制器须接受匹配的完整审计后才能发布。
+                    # 标记、本体及链接校验由该审计负责。
+                    return dict(
+                        kind=CONTAINER_KIND,
+                        body=Path(cached.source.body).name,
+                        body_type=cached.body_type,
+                        content_hash=cached.content_hash,
+                    )
+                from src.core.library_inventory import marker_version
+
+                try:
+                    unchanged = marker_version(container) == cached.version
+                except OSError as error:
+                    raise InvalidManagedMetadataError(str(error)) from error
+                if unchanged:
+                    data = dict(
+                        kind=CONTAINER_KIND,
+                        body=Path(cached.source.body).name,
+                        body_type=cached.body_type,
+                        content_hash=cached.content_hash,
+                    )
+            reused = data is not None
+            if not reused:
+                data = _read_container_marker_data(container)
+            if data is None or data.get("kind") == DEPLOYMENT_IDENTITY_KIND:
+                return None
+            name, content_hash = data.get("body"), data.get("content_hash")
+            if (
+                data.get("kind") == CONTAINER_KIND
+                and isinstance(name, str)
+                and name
+                and name not in {".", ".."}
+                and "/" not in name
+                and "\\" not in name
+                and not Path(name).is_absolute()
+                and not Path(name).drive
+                and isinstance(content_hash, str)
+                and _CONTENT_HASH_RE.fullmatch(content_hash) is not None
+            ):
+                body = container / name
+                if _norm(body) in known:
+                    try:
+                        body_stat = os.stat(fs.native_path(body), follow_symlinks=False)
+                    except OSError:
+                        # 使用统一校验器，保持本体缺失和不可读错误与完整扫描一致。
+                        pass
+                    else:
+                        reparse = getattr(body_stat, "st_file_attributes", 0) & getattr(
+                            stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400
+                        )
+                        ordinary = not reparse and not stat.S_ISLNK(body_stat.st_mode)
+                        body_type = data.get("body_type")
+                        matches = (body_type == "folder" and stat.S_ISDIR(body_stat.st_mode)) or (
+                            body_type == "archive" and stat.S_ISREG(body_stat.st_mode) and is_resident_archive(body)
+                        )
+                        if ordinary and matches:
+                            # 新读取的普通直接子项不能越出父目录，无需为已发现的本体重复解析真实路径。
+                            return data
+            # 缓存仅用于已知普通本体；链接、本体缺失或类型改变时重读完整标记。
+            return read_container_marker(container) if reused else _validate_container_marker(container, data)
+
+        scope = {_norm(p) for p in changed_paths} if changed_paths else set()
+
+        def _in_scope(path) -> bool:
+            """无 scope 时恒真；否则只认与变化路径同分支（互为祖先/后代或相等）的项。"""
+            if not scope:
+                return True
+            key = _norm(path)
+            return any(key == c or key.startswith(c + os.sep) or c.startswith(key + os.sep) for c in scope)
+
+        discovered: list[dict] = []
+        seen: set[str] = set(known)
+        scanned_roots: set[str] = set()
+
+        for c in chars:
+            try:
+                char_lib = self._get_character_library(c.id, gid, create=False)
+            except Exception:
+                continue
+            if not _in_scope(char_lib):
+                continue
+            if not strict_is_dir(char_lib):
+                continue
+            scanned_roots.add(_norm(char_lib))
+            skip = child_names.get(c.id, set())
+            with os.scandir(fs.native_path(char_lib)) as entries:
+                children = sorted(entries, key=lambda child: os.path.normcase(child.name))
+            for child in children:
+                if cancel_cb is not None:
+                    cancel_cb()
+                if child.name.startswith("."):
+                    continue
+                entry = Path(fs.normal_path(child.path))
+                if not _in_scope(entry):
+                    continue
+                if child.is_dir():
+                    # 容器目录（含 .d3dxmod 正向 marker）→ path 指向容器内本体、
+                    # folder_name = 容器名。正向 marker 优先于「非分类=Mod」排除法（INV-4）。
+                    try:
+                        marker = _read_discovery_marker(entry)
+                    except InvalidManagedMetadataError as e:
+                        # 结构只校验一次，缺失或损坏的描述交给导入层处理。
+                        logger.warning("跳过无效 Mod 容器 %s: %s", entry, e)
+                        if invalid_metadata is not None and str(entry) not in invalid_metadata:
+                            invalid_metadata.append(str(entry))
+                        continue
+                    except OSError:
+                        marker = None
+                    if marker is not None:
+                        body = entry / marker["body"]
+                        key = _norm(body)
+                        if key in seen:
+                            continue
+                        seen.add(key)
+                        discovered.append(
+                            {
+                                "folder_name": entry.name,
+                                "path": str(body),
+                                "node_id": c.id,
+                                "content_hash": marker["content_hash"],
+                            }
+                        )
+                        continue
+                    if fs.exists(entry / CATEGORY_MARKER_FILE) or entry.name in skip:
+                        continue  # 子分类节点，非 Mod
+                    key = _norm(entry)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    discovered.append(
+                        {
+                            "folder_name": entry.name,
+                            "path": str(entry),
+                            "node_id": c.id,
+                        }
+                    )
+                elif child.is_file() and is_resident_archive(entry):
+                    key = _norm(entry)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    discovered.append(
+                        {
+                            "folder_name": entry.stem,
+                            "path": str(entry),
+                            "node_id": c.id,
+                        }
+                    )
+
+        # 扫描资源库根下未被认领且不属于分类目录的直接子项。
+        library_root = self._get_library_root(gid)
+        unclassified = 0
+
+        def _fallback_scope(path):
+            """检查取消并排除已扫描分类根，仅让仍在目标范围内的路径参与补充发现。"""
+            if cancel_cb is not None:
+                cancel_cb()
+            # 直接成员清单已经覆盖这些分类根，包括无效容器和子分类。
+            return _norm(path) not in scanned_roots and _in_scope(path)
+
+        for d in self._storage.scan_library_directory(
+            str(library_root),
+            invalid_metadata=invalid_metadata,
+            scope_filter=_fallback_scope,
+            marker_reader=_read_discovery_marker,
+        ):
+            if cancel_cb is not None:
+                cancel_cb()
+            p = Path(d["path"])
+            if not _in_scope(p):
+                continue
+            key = _norm(p)
+            if key in seen:
+                continue
+            invalid_keys = {_norm(path) for path in (invalid_metadata or [])}
+            if key in invalid_keys or _norm(p.parent) in invalid_keys:
+                continue
+            if fs.is_dir(p) and fs.exists(p / CATEGORY_MARKER_FILE):
+                continue  # 分类节点，跳过
+            seen.add(key)
+            item = {
+                "folder_name": d["folder_name"],
+                "path": d["path"],
+                "node_id": "",
+            }
+            if d.get("content_hash"):
+                item["content_hash"] = d["content_hash"]
+            discovered.append(item)
+            unclassified += 1
+        if unclassified:
+            logger.info("发现 %d 个未归类 Mod（路径未匹配任何角色）", unclassified)
+        return discovered
+
+    def rebuild_index_from_filesystem(self, game_id=None, progress_cb=None) -> RebuildReport:
+        """同步调用方使用相同的受保护发布流程。"""
+        from src.core.rebuild_session import RebuildSession
+
+        session = RebuildSession(self, game_id or self.current_game_id)
+
+        def progress(phase, done, total):
+            """将重建阶段回调适配为调用方接受的完成数和总数，不转发阶段名称。"""
+            if progress_cb is not None:
+                progress_cb(done, total)
+
+        try:
+            session.prepare(progress)
+            while not session.stage_batch():
+                pass
+            session.validate(progress)
+            return session.commit()
+        finally:
+            session.close()
+
+    def _release_rebuild_inflight_ids(self) -> None:
+        """注销本轮重建登记的在途 id（落库后由索引接管保护）。"""
+        for mod_id in tuple(self._rebuild_inflight_ids):
+            self.unregister_inflight_mod_id(mod_id)
+        self._rebuild_inflight_ids.clear()
