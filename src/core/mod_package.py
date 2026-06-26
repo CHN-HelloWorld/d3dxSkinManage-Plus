@@ -1157,3 +1157,184 @@ def resolve_effective_ini_text(mod_path: str | Path, rel: str | Path) -> str | N
     if ov is not None:
         return ov
     return read_body_ini_text(mod_path, rel)
+
+
+def iter_effective_inis(mod_path: str | Path) -> list[tuple[str, str]]:
+    """列出本体与覆盖目录中的全部有效 INI，以相对路径和完整文本返回。
+
+    覆盖文件优先于同名本体文件，按键解析和部署共用此结果。
+    归档批量读取全部 INI，避免逐个成员打开归档所需的重复初始化开销。
+    """
+    p = Path(fs.normal_path(mod_path))
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+
+    # 先读取覆盖文件，保留用户编辑后的内容。
+    ov_texts: dict[str, str] = {}
+    for rel in list_overrides(mod_path):
+        if rel.lower().endswith(".ini"):
+            t = read_override(mod_path, rel)
+            if t is not None:
+                ov_texts[rel] = t
+
+    # 完整初始化的覆盖目录已包含全部 INI，可直接返回而无需打开归档。
+    if fs.is_file(p) and is_resident_archive(p) and overrides_seeded(p):
+        return list(ov_texts.items())
+
+    if fs.is_file(p) and is_resident_archive(p):
+        # 一次读取归档内全部 INI，同名覆盖文件保持优先。
+        try:
+            from src.services.archive import ArchiveService
+
+            raw = ArchiveService().read_all_inis(p)
+        except Exception:
+            raw = {}
+        top = _archive_top_prefix(p)
+        for member, data in raw.items():
+            nn = member.replace("\\", "/")
+            rel = nn
+            if top and (nn == top or nn.startswith(top + "/")):
+                rel = nn[len(top) + 1 :] if nn.startswith(top + "/") else ""
+            rel = _norm_rel(rel)
+            if not rel or rel in seen:
+                continue
+            seen.add(rel)
+            if rel in ov_texts:
+                out.append((rel, ov_texts[rel]))
+            else:
+                try:
+                    out.append((rel, data.decode("utf-8", errors="surrogateescape")))
+                except Exception:
+                    pass
+    else:
+        # 直接读取文件夹本体，同名覆盖文件保持优先。
+        for rel in body_ini_rels(mod_path):
+            if rel in seen:
+                continue
+            seen.add(rel)
+            if rel in ov_texts:
+                out.append((rel, ov_texts[rel]))
+            else:
+                t = read_body_ini_text(mod_path, rel)
+                if t is not None:
+                    out.append((rel, t))
+
+    # 补入仅存在于覆盖目录的 INI。
+    for rel, t in ov_texts.items():
+        if rel not in seen:
+            seen.add(rel)
+            out.append((rel, t))
+    return out
+
+
+def _ini_stat_token(info):
+    """提取 INI 文件类型、大小、时间和文件编号，生成读取一致性标记。"""
+    return (info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns, info.st_ino)
+
+
+def _optional_ini_stat(path):
+    """仅缺失条目可视为可选，访问或类型错误不能当作缺失。"""
+    try:
+        return os.stat(fs.native_path(path))
+    except FileNotFoundError:
+        return None
+
+
+def _strict_ini_tree(root, *, exclude_meta=False):
+    """遍历完整目录树，并保留访问和类型错误。"""
+    files = []
+
+    def visit(directory):
+        """递归枚举普通 INI 文件及版本，拒绝链接目录和非普通 INI 对象。"""
+        with os.scandir(fs.native_path(directory)) as entries:
+            children = sorted(entries, key=lambda entry: entry.name)
+        for entry in children:
+            if exclude_meta and entry.name == META_DIR:
+                continue
+            path = directory / entry.name
+            info = os.stat(fs.native_path(path))
+            if stat.S_ISDIR(info.st_mode):
+                if entry.is_symlink() or getattr(info, "st_file_attributes", 0) & 0x400:
+                    raise OSError(tr("无法完整枚举 INI 链接目录：{path}", path=path))
+                visit(path)
+            elif path.suffix.casefold() == ".ini":
+                if not stat.S_ISREG(info.st_mode):
+                    raise OSError(tr("INI 不是普通文件：{path}", path=path))
+                files.append((path.relative_to(root).as_posix(), _ini_stat_token(info)))
+
+    visit(root)
+    return tuple(files)
+
+
+@dataclass(frozen=True)
+class EffectiveIniInventory:
+    """可缓存的严格文件清单，仅完整读取成功才能证明内容有效。
+
+    已准备覆盖文件的归档直接使用覆盖目录；其他归档必须验证全部成员与内容后再生成声明。
+    """
+
+    path: Path
+    body_version: tuple
+    override_root: Path | None
+    seed_version: tuple | None
+    overrides: tuple
+    originals: tuple
+
+    def read(self) -> tuple[tuple[str, str], ...]:
+        """按覆盖层优先级读取全部有效 INI，结束时重新检查清单以拒绝读取期间变化。"""
+
+        def read_text(path):
+            """保留原始换行读取 UTF-8 INI，并以代理转义保留不可解码字节。"""
+            with open(fs.native_path(path), encoding="utf-8", errors="surrogateescape", newline="") as stream:
+                return stream.read()
+
+        # 已有覆盖文件必须可读，不能因原始文件存在而忽略错误。
+        texts = {rel: read_text(self.override_root / rel) for rel, _ in self.overrides}
+        if stat.S_ISDIR(self.body_version[0]):
+            for rel, _ in self.originals:
+                if rel not in texts:
+                    texts[rel] = read_text(self.path / rel)
+        elif self.seed_version is None:
+            for rel, text in _read_complete_archive_inis(self.path):
+                texts.setdefault(rel, text)
+        if inspect_effective_inis(self.path) != self:
+            raise OSError(tr("有效 INI 在读取期间发生变化，请重试：{path}", path=self.path))
+        return tuple(texts.items())
+
+
+def inspect_effective_inis(mod_path: str | Path) -> EffectiveIniInventory:
+    """构造有效 INI 的严格签名，保留全部文件错误。
+
+    业务操作使用完整清单与读取结果，不能仅凭可读取的部分内容继续执行。
+    """
+    path = Path(fs.normal_path(mod_path))
+    body = os.stat(fs.native_path(path))
+    folder = stat.S_ISDIR(body.st_mode)
+    if not folder and not (stat.S_ISREG(body.st_mode) and is_resident_archive(path)):
+        raise OSError(tr("无法读取 Mod INI 本体：{path}", path=path))
+
+    # 直接检查元数据路径，避免 is_file 或 is_dir 隐藏访问错误。
+    container = path if folder and _optional_ini_stat(path / MOD_CONTAINER_MARKER) else path.parent
+    marker_path = container / MOD_CONTAINER_MARKER
+    marker_stat = _optional_ini_stat(marker_path)
+    marker = read_container_marker(container) if marker_stat is not None else None
+    base = None
+    if marker is not None:
+        if container == path:
+            return inspect_effective_inis(container / marker["body"])
+        if os.path.normcase(str(container / marker["body"])) == os.path.normcase(str(path)):
+            base = container / META_DIR / INI_OVERRIDES_SUBDIR
+    overrides, seed = (), None
+    if base is not None:
+        base_stat = _optional_ini_stat(base)
+        if base_stat is not None:
+            if not stat.S_ISDIR(base_stat.st_mode):
+                raise OSError(tr("INI override 目录无效：{base}", base=base))
+            overrides = _strict_ini_tree(base)
+            seed_stat = _optional_ini_stat(base / INI_OVERRIDES_SEEDED_MARKER)
+            if seed_stat is not None:
+                if not stat.S_ISREG(seed_stat.st_mode):
+                    raise OSError(tr("INI 播种标记无效：{base}", base=base))
+                seed = _ini_stat_token(seed_stat)
+    originals = _strict_ini_tree(path, exclude_meta=True) if folder else ()
+    return EffectiveIniInventory(path, _ini_stat_token(body), base, seed, overrides, originals)
