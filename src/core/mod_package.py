@@ -489,3 +489,186 @@ def resolve_preview_paths(meta_dir: str | Path, manifest: dict) -> list[Path]:
     except OSError:
         pass
     return out
+
+
+def strip_envelope(*candidate_dirs: str | Path) -> None:
+    """移除输入副本中的 .d3dxmeta 和 .d3dxmod，使资源内容不包含容器元数据。
+
+    导入服务随后创建新的容器标记，避免结构信息重复进入归档本体。
+    """
+    for d in candidate_dirs:
+        if not d:
+            continue
+        meta_dir = Path(d) / META_DIR
+        if meta_dir.is_dir():
+            shutil.rmtree(str(meta_dir), ignore_errors=True)
+        marker = Path(d) / MOD_CONTAINER_MARKER
+        if marker.is_file():
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+
+
+def stage_envelope(candidate_dirs, stage_dir: str | Path) -> tuple[dict | None, list[Path]]:
+    """读取目录或已解压的分享数据并建立暂存副本，不修改源内容。"""
+    env = read_envelope(*candidate_dirs)
+    if not env:
+        return None, []
+    manifest = env["manifest"]
+    meta_dir = env["meta_dir"]
+    staged: list[Path] = []
+    stage = Path(stage_dir)
+    try:
+        stage.mkdir(parents=True, exist_ok=True)
+        for sp in resolve_preview_paths(meta_dir, manifest):
+            dst = _unique_in(stage, sp.name)
+            shutil.copy2(str(sp), str(dst))
+            staged.append(dst)
+    except OSError as e:
+        logger.warning("暂存分享预览图失败: %s", e)
+    return manifest, staged
+
+
+def take_envelope(candidate_dirs, stage_dir: str | Path) -> tuple[dict | None, list[Path]]:
+    """读取分享数据并暂存补充预览，然后移除源中的分享目录。
+
+    参数：
+        candidate_dirs: 按顺序检查的目录，通常为解压根与顶层 Mod 目录。
+        stage_dir: 当前 Mod 独占的预览暂存目录，避免并行导入争用同一路径。
+
+    返回清单或 None，以及暂存图片的绝对路径列表。移除源分享目录后暂存图仍可用，
+    调用方获得 Mod 编号后将其保存到永久预览目录。
+    """
+    manifest, staged = stage_envelope(candidate_dirs, stage_dir)
+    if manifest is None:
+        return None, []
+    strip_envelope(*candidate_dirs)
+    logger.info(
+        "检测到分享信封: name=%s, 预览图 %d 张",
+        manifest.get("name", ""),
+        len(staged),
+    )
+    return manifest, staged
+
+
+# 容器内本体与元数据同级存储，元数据不进入本体归档。
+
+
+def is_mod_container(dir_path: str | Path) -> bool:
+    """根据 .d3dxmod 标记判断目录是否为 Mod 容器。
+
+    显式标记界定发现流程的扫描边界，不根据目录名称推断容器身份。
+    """
+    try:
+        marker = _read_container_marker_data(Path(fs.normal_path(dir_path)))
+        from src.core.mod_identity import DEPLOYMENT_IDENTITY_KIND
+
+        return marker is not None and (not isinstance(marker, dict) or marker.get("kind") != DEPLOYMENT_IDENTITY_KIND)
+    except InvalidManagedMetadataError:
+        # 损坏的资源标记仍界定容器边界，由发现流程报告错误。
+        return True
+    except OSError:
+        return False
+
+
+def write_container_marker(
+    container: str | Path,
+    body_name: str,
+    content_hash: str,
+    *,
+    mod_id: str | None = None,
+    imported_at: str,
+) -> bool:
+    """写容器正向 marker ``.d3dxmod``（JSON：本体文件名/类型/content_hash/schema）。
+
+    ``body_name`` 是本体在容器内的文件/夹名（``<ModName>.7z`` 或
+    ``<ModName>``）。无效输入抛 :class:`InvalidManagedMetadataError`；磁盘写入失败
+    抛出异常，调用方必须回滚本轮产物。
+    """
+    c = Path(fs.normal_path(container))
+    from src.core.mod_identity import IdentityConflict, new_mod_id, validate_mod_id
+
+    if not valid_imported_at(imported_at):
+        raise InvalidManagedMetadataError("imported_at must be a valid ISO timestamp")
+    existing = _read_container_marker_data(c)
+    if existing is not None:
+        if not isinstance(existing, dict) or existing.get("kind") != CONTAINER_KIND:
+            raise InvalidManagedMetadataError(tr("不是源 Mod 容器标记：{c}", c=c))
+        # 原本体可能已改名，此处仅核对身份。
+        try:
+            identity = validate_mod_id(existing.get("mod_id"))
+        except IdentityConflict:
+            identity = new_mod_id() if mod_id is None else validate_mod_id(mod_id)
+        if mod_id is not None and mod_id != identity:
+            raise IdentityConflict(tr("不能改写源 Mod 的 mod_id 身份：{c}", c=c))
+    else:
+        identity = new_mod_id() if mod_id is None else validate_mod_id(mod_id)
+    marker = {
+        **(existing or {}),
+        "schema": CONTAINER_SCHEMA_VERSION,
+        "kind": CONTAINER_KIND,
+        "body": body_name,
+        "body_type": "archive" if is_resident_archive(body_name) else "folder",
+        "content_hash": content_hash,
+        "mod_id": identity,
+        "imported_at": (
+            existing["imported_at"] if existing and valid_imported_at(existing.get("imported_at")) else imported_at
+        ),
+    }
+    _validate_container_marker(c, marker, recover_body=False)
+    temporary = None
+    try:
+        fd, name = tempfile.mkstemp(prefix=".marker-", suffix=".tmp", dir=fs.native_path(c))
+        os.close(fd)
+        temporary = Path(name)
+        fs.write_text(
+            temporary,
+            json.dumps(marker, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        with open(fs.native_path(temporary), "r+b") as stream:
+            os.fsync(stream.fileno())
+        os.replace(fs.native_path(temporary), fs.native_path(c / MOD_CONTAINER_MARKER))
+        return True
+    finally:
+        if temporary is not None:
+            fs.unlink(temporary, missing_ok=True)
+
+
+def read_container_marker(container: str | Path) -> dict | None:
+    """读取并校验当前容器标记。
+
+    标记缺失或属于部署目录时返回 None；资源结构无效时抛出 InvalidManagedMetadataError。
+    """
+    c = Path(fs.normal_path(container))
+    data = _read_container_marker_data(c)
+    from src.core.mod_identity import DEPLOYMENT_IDENTITY_KIND
+
+    if data is None or (isinstance(data, dict) and data.get("kind") == DEPLOYMENT_IDENTITY_KIND):
+        return None
+    return _validate_container_marker(c, data)
+
+
+def read_missing_container_marker(container: str | Path) -> dict | None:
+    """为已识别但缺少本体的容器提供后台检查证据。
+
+    存在的内容、改名、链接、无效身份和访问错误不能授权删除，调用方仍须完成移动认领检查。
+    """
+    from src.core.mod_identity import validate_mod_id
+
+    c = Path(fs.normal_path(container))
+    info = os.lstat(fs.native_path(c))
+    if not stat.S_ISDIR(info.st_mode) or stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+        raise InvalidManagedMetadataError(tr("不是普通源容器目录：{c}", c=c))
+    data = _validate_container_marker(c, _read_container_marker_data(c), recover_body=False, allow_missing_body=True)
+    validate_mod_id(data.get("mod_id"))
+    try:
+        os.lstat(fs.native_path(c / data["body"]))
+    except (FileNotFoundError, NotADirectoryError):
+        pass
+    else:
+        return None
+    if any(child.name not in (MOD_CONTAINER_MARKER, META_DIR) for child in fs.list_children(c)):
+        raise InvalidManagedMetadataError(tr("缺失源容器仍含其他内容：{c}", c=c))
+    return data
