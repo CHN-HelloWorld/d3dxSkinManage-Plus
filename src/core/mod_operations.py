@@ -200,3 +200,281 @@ class ModOperationService(QObject):
             if isinstance(error, OperationPreflightError):
                 self._m.report_operation_failure(error)
             self._complete(request, failed=request.ids, error=str(error))
+
+    def _start(self, request):
+        """按操作类型验证目标并调度预设、删除、启用或禁用流程。"""
+        args, operation = request.args, request.operation
+        if self._cancel_before_mutation(request):
+            return
+        if operation.startswith(("preset_", "variant_")):
+            self._preset_variants.start(request)
+            return
+        if operation == "disable_all":
+            mods = self._m.get_mods(args.get("node_id"))
+            request.ids = tuple(m.mod_id for m in mods if m.is_enabled)
+            self.started.emit(operation, request.ids)
+            if self._cancel_before_mutation(request):
+                return
+            self._disable(request)
+            return
+        mod_id = args.get("mod_id", "")
+        mod = self._m.get_mod(mod_id)
+        if mod is None or self._m._index.get_mod_game_id(mod_id) != request.game_id:
+            raise ValueError(tr("Mod 不存在或不属于当前游戏"))
+        self.started.emit(operation, request.ids)
+        if self._cancel_before_mutation(request):
+            return
+        if operation == "delete_mod":
+            policy = str(Config().get("mods.delete_method", "permanent"))
+            ok = self._m.delete_mod(mod_id, delete_method=policy)
+            self._complete(
+                request,
+                succeeded=request.ids if ok else (),
+                failed=() if ok else request.ids,
+                error="" if ok else tr("删除失败"),
+            )
+            return
+        if operation not in ("toggle_mod", "set_enabled"):
+            raise ValueError(tr("未知操作: {operation}", operation=operation))
+        receipt = self._m.require_mod_operation(mod_id, metadata=True, deployment=True)
+        enabled = not mod.is_enabled if operation == "toggle_mod" else bool(args["enabled"])
+        if mod.is_enabled == enabled:
+            self._complete(request, succeeded=request.ids)
+        elif not enabled:
+            self._disable(request)
+        else:
+            if self._m._storage.get_deploy_dir() is None:
+                raise ValueError(tr("请先配置 Mod 部署目录"))
+            # 直接恢复停放副本，避免再次切换操作在重新对账后反转目标状态。
+            restored = self._m._restore_parked_deployment(mod)
+            if restored is not None:
+                changed = self._m.finalize_enable(mod_id, True, deploy_path=str(restored), source_receipt=receipt)
+                ok = changed is not None and changed.is_enabled
+                if not ok:
+                    self._m._storage._check_deployment_identity(restored, mod_id)
+                    import os
+
+                    os.replace(str(restored), mod.deployed_path)
+                self._complete(
+                    request,
+                    succeeded=request.ids if ok else (),
+                    failed=() if ok else request.ids,
+                    error="" if ok else tr("启用失败"),
+                )
+                return
+            # 仅向工作线程传递不可变的路径和身份信息。
+            storage = self._m._storage
+            source, identity = mod.path, mod.mod_id
+            name = mod.folder_name or Path(source).stem
+
+            def deploy(worker):
+                """在后台物化部署并重新核对源身份，源失效时移除本次新部署。"""
+                from src.core.operation_preflight import confirm_source
+
+                receipt = confirm_source(source, identity)
+                last_report = 0.0
+
+                def report(fraction):
+                    """以节流方式发送部署复制进度，并确保完成进度立即通知。"""
+                    nonlocal last_report
+                    now = time.monotonic()
+                    if fraction >= 1.0 or now - last_report >= 0.05:
+                        last_report = now
+                        worker.progress.emit(mod_id, float(fraction))
+
+                target = storage.materialize_deployment(
+                    source, identity, name, progress_cb=report, should_cancel=worker.isInterruptionRequested
+                )
+                try:
+                    receipt.recheck()
+                except OSError:
+                    if target is not None:
+                        storage._check_deployment_identity(target, identity)
+                        storage.remove_deploy_path(target)
+                    raise
+                worker.source_receipt = receipt
+                return target
+
+            request.kind = "enable"
+            self._start_worker(request, deploy)
+
+    def _disable(self, request):
+        """准备全部目标的禁用快照并核对成员集合，随后启动后台逐项禁用。"""
+        if not request.ids:
+            self._complete(request)
+            return
+        request.entries = self._m.prepare_disable_batch(request.ids)
+        if self._cancel_before_mutation(request):
+            return
+        if {e.mod_id for e in request.entries} != set(request.ids):
+            raise ValueError(tr("无法准备禁用操作，部署身份或 Mod 状态已变化"))
+        entries = tuple(request.entries)
+        step = self._m.disable_batch_step
+
+        def disable(worker):
+            """逐项执行禁用文件操作并收集成功或错误结果，响应中断并报告完成比例。"""
+            from src.core.mod_manager import DisableStepResult
+
+            results = []
+            for entry in entries:
+                if worker.isInterruptionRequested():
+                    break
+                try:
+                    results.append(step(entry))
+                except Exception as error:
+                    results.append(DisableStepResult(mod_id=entry.mod_id, error=str(error)))
+                worker.progress.emit(entry.mod_id, len(results) / len(entries))
+            return results
+
+        request.kind = "disable"
+        self._start_worker(request, disable)
+
+    def _cancel_before_mutation(self, request):
+        """同步宿主事件可能在文件操作开始前停用插件所有者。"""
+        if self._active is not request or request.task.done:
+            return True
+        if request.task._cancel_requested or self._stopping:
+            self._complete(request, cancelled=request.ids, error=tr("操作已取消"))
+            return True
+        return False
+
+    def _start_worker(self, request, run_io, *, must_finish=False, check_cancel=True):
+        """建立并连接文件工作线程，按策略处理启动前取消和必须完成的任务。"""
+        if check_cancel and self._cancel_before_mutation(request):
+            return
+        worker = _IOWorker(run_io, self)
+        worker.must_finish = must_finish
+        worker.cancelled_on_start = request.task._cancel_requested and not must_finish
+        request.worker = worker
+        worker.progress.connect(self.progress)
+        worker.owner_call.connect(self._handle_owner_call)
+        worker.finished.connect(lambda: self._settle(request, worker))
+        worker.start()
+
+    def _handle_owner_call(self, call):
+        """在所有者线程持久化预设补丁或步骤，保存异常并唤醒等待中的工作线程。"""
+        if call.done.is_set():
+            return
+        try:
+            pm = self._m.preset_manager
+            if call.operation == "preset_patch":
+                pm._get_index().update_journal_runtime_patch(*call.args)
+            elif call.operation == "preset_steps":
+                pm.record_preset_apply_steps(*call.args)
+            else:
+                raise ValueError("Unknown owner-thread operation")
+        except Exception as error:
+            call.error = error
+        finally:
+            call.done.set()
+
+    def _settle(self, request, worker=None):
+        """接收已结束工作线程的结果，在所有者线程完成状态提交和任务通知。
+
+        拒绝过期或重入结算，启用提交失败时尝试撤销新部署，最终安排线程对象释放。"""
+        if self._active is not request or request.state.get("settling"):
+            return
+        if worker is not None and request.worker is not worker:
+            return
+        worker = request.worker
+        if worker.isRunning():
+            return
+        if request.operation.startswith(("preset_", "variant_")):
+            request.state["settling"] = True
+            try:
+                self._preset_variants.settle(request, worker)
+            finally:
+                request.state["settling"] = False
+                worker.deleteLater()
+            return
+        try:
+            if request.kind == "enable":
+                from src.core.operation_preflight import OperationPreflightError
+
+                if isinstance(worker.exception, OperationPreflightError):
+                    self._m.report_operation_failure(worker.exception)
+                receipt = getattr(worker, "source_receipt", None)
+                if receipt is not None:
+                    receipt.recheck()
+                mod = self._m.finalize_enable(
+                    request.ids[0], bool(worker.result), deploy_path=str(worker.result or ""), source_receipt=receipt
+                )
+                if mod is not None and mod.is_enabled:
+                    self._complete(request, succeeded=request.ids)
+                elif request.task._cancel_requested:
+                    self._complete(request, cancelled=request.ids, error=tr("操作已取消"))
+                else:
+                    self._rollback_new_deployment(request)
+                    self._complete(request, failed=request.ids, error=worker.error or tr("部署失败"))
+            else:
+                results = worker.result or []
+                succeeded = self._m.commit_disable_batch(results)
+                attempted = {r.mod_id for r in results}
+                failed = [r.mod_id for r in results if r.mod_id not in succeeded]
+                remaining = [mid for mid in request.ids if mid not in attempted]
+                cancelled = remaining if request.task._cancel_requested else []
+                if not cancelled:
+                    failed.extend(remaining)
+                error = worker.error or "; ".join(r.error for r in results if r.error)
+                self._complete(request, succeeded=succeeded, failed=failed, cancelled=cancelled, error=error)
+        except Exception as error:
+            logger.exception("插件操作提交失败")
+            if request.kind == "enable":
+                self._rollback_new_deployment(request)
+            from src.core.operation_preflight import OperationPreflightError
+
+            if isinstance(error, OperationPreflightError):
+                self._m.report_operation_failure(error)
+            self._complete(request, failed=request.ids, error=str(error))
+        finally:
+            worker.deleteLater()
+
+    def _rollback_new_deployment(self, request):
+        """核对目标部署身份后移除本次新产物，清理失败时保留日志供审查。"""
+        target = request.worker.result
+        if not target:
+            return
+        try:
+            self._m._storage._check_deployment_identity(target, request.ids[0])
+            self._m._storage.remove_deploy_path(target)
+        except (OSError, ValueError) as error:
+            logger.error("撤销插件新部署失败，保留记录供后台审查: %s", error)
+
+    def shutdown(self, timeout_ms: int = 5000) -> bool:
+        """取消队列并等待活动任务完成必要结算；达到时限或发生结算重入时返回 False。"""
+        self._assert_thread()
+        self._stopping = True
+        for tasks in self._owned_tasks.values():
+            for task in tasks:
+                task._detach()
+        self._owned_tasks.clear()
+        for request in list(self._queue):
+            request.task._detach()
+            request.task.cancel()
+        while self._queue:
+            request = self._queue.popleft()
+            self._complete(request, cancelled=request.ids, error=tr("宿主正在退出"))
+        deadline = time.monotonic() + timeout_ms / 1000
+        while self._active is not None:
+            request = self._active
+            request.task._detach()
+            request.task.cancel()
+            if request.state.get("settling"):
+                # 同步发布回调仍处于当前结算栈中，应返回后再处理关闭请求。
+                self._stopping = False
+                return False
+            if request.worker is not None:
+                worker = request.worker
+                if worker.pending_call is not None:
+                    self._handle_owner_call(worker.pending_call)
+                remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                if not worker.wait(min(20, remaining)):
+                    # 关闭超时时窗口继续保留，当前请求保持锁定，结算后可接收新请求。
+                    if time.monotonic() >= deadline:
+                        self._stopping = False
+                        return False
+                    continue
+                self._settle(request, worker)
+            else:
+                self._complete(request, cancelled=request.ids, error=tr("宿主正在退出"))
+        return True
