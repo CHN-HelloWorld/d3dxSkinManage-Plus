@@ -1552,3 +1552,127 @@ def read_sidecar(mod_path: str | Path) -> dict | None:
             tr("无法解析容器级 sidecar: {mpath}: {e}", mpath=mpath, e=e),
         ) from e
     return _validate_manifest(manifest)
+
+
+def _archive_single_top(archive_path: Path) -> str | None:
+    """识别 7z 或 RAR 的唯一顶层目录。
+
+    分享数据写入该目录下，与 ZIP 使用相同布局。已有元数据成员不参与顶层判定。
+    """
+    try:
+        from src.services.archive import ArchiveService
+
+        names = {n for n in ArchiveService().list_contents(archive_path) if not _is_under_meta(n)}
+    except Exception:
+        return None
+    return _detect_single_top(names)
+
+
+def _rewrite_zip_meta(zip_path: Path, inject_text: str | None) -> bool:
+    """重写 ZIP，移除 .d3dxmeta 和 .d3dxmod 管理成员。
+
+    inject_text 非空时写入顶层目录下的 .d3dxmeta/info.json。
+    zipfile 不支持原地删除成员，因此先构建暂存归档，再原子替换目标。
+    """
+    tmp = zip_path.with_name(f"{zip_path.stem}_sidecar_tmp.zip")
+    try:
+        with zipfile.ZipFile(str(zip_path), "r") as zf_in:
+            keep = [
+                info
+                for info in zf_in.infolist()
+                if not _is_under_meta(info.filename)
+                and info.filename.replace("\\", "/").rsplit("/", 1)[-1] != MOD_CONTAINER_MARKER
+            ]
+            payload = {i.filename: zf_in.read(i.filename) for i in keep}
+            top = _detect_single_top({i.filename for i in keep if not i.filename.endswith("/")})
+        with zipfile.ZipFile(str(tmp), "w", zipfile.ZIP_DEFLATED) as zf_out:
+            for info in keep:
+                zf_out.writestr(info, payload[info.filename])
+            if inject_text is not None:
+                base = f"{top}/{META_DIR}" if top else META_DIR
+                zf_out.writestr(f"{base}/{MANIFEST_NAME}", inject_text)
+        # Windows 上新生成的归档可能被扫描程序、目录监视器或延迟释放的句柄短暂占用。
+        # 对 os.replace 的占用错误进行有限退避重试。
+        _replace_with_retry(tmp, zip_path)
+        return True
+    except (OSError, zipfile.BadZipFile) as e:
+        logger.warning("重写 zip sidecar 失败: %s", e)
+        if tmp.exists():
+            try:
+                tmp.unlink()
+            except OSError:
+                pass
+        return False
+
+
+def _replace_with_retry(src: Path, dst: Path, attempts: int = 6, base_delay: float = 0.05) -> None:
+    """os.replace 的 Windows 瞬时锁重试（指数退避）。全部失败则抛最后一次异常。"""
+    import time
+
+    last: OSError | None = None
+    for i in range(attempts):
+        try:
+            src.replace(dst)
+            return
+        except PermissionError as e:  # WinError 5/32：目标被短暂占用
+            last = e
+            time.sleep(base_delay * (2**i))
+    if last is not None:
+        raise last
+
+
+# 内部工具
+
+
+def _collect_previews(preview_paths: list[str] | None) -> list[Path]:
+    """过滤出真实存在的预览图源文件，去重保序。"""
+    seen: set[str] = set()
+    out: list[Path] = []
+    for p in preview_paths or []:
+        try:
+            path = Path(p)
+        except (TypeError, ValueError):
+            continue
+        key = str(path)
+        if key in seen or not path.is_file():
+            continue
+        seen.add(key)
+        out.append(path)
+    return out
+
+
+def _unique_in(folder: Path, name: str) -> Path:
+    """folder 内不冲突的文件名（冲突追加 ``_1``/``_2``…）。"""
+    dst = folder / name
+    if not dst.exists():
+        return dst
+    stem, suffix = Path(name).stem, Path(name).suffix
+    i = 1
+    while (folder / f"{stem}_{i}{suffix}").exists():
+        i += 1
+    return folder / f"{stem}_{i}{suffix}"
+
+
+def _unique_arc(existing: set[str], arc: str) -> str:
+    """ZIP 内不冲突的 arcname。"""
+    if arc not in existing:
+        return arc
+    p = Path(arc)
+    stem, suffix, parent = p.stem, p.suffix, p.parent.as_posix()
+    i = 1
+    while f"{parent}/{stem}_{i}{suffix}" in existing:
+        i += 1
+    return f"{parent}/{stem}_{i}{suffix}"
+
+
+def _detect_single_top(names: set[str]) -> str | None:
+    """若 ZIP 内所有条目同属一个顶层目录，返回该目录名；否则 None。"""
+    tops: set[str] = set()
+    for n in names:
+        normalized = n.replace("\\", "/")
+        if "/" not in normalized:
+            return None  # 根成员是普通文件时不可能包含分享数据目录。
+        first = normalized.split("/", 1)[0]
+        if first:
+            tops.add(first)
+    return tops.pop() if len(tops) == 1 else None
