@@ -870,3 +870,122 @@ def resolve_previews_dir(mod_path: str | Path) -> Path | None:
     """
     sidecar_dir = _resolve_sidecar_dir(mod_path)
     return sidecar_dir / PREVIEW_SUBDIR if sidecar_dir is not None else None
+
+
+def supplemental_preview_paths(
+    mod_path: str | Path,
+    preview_paths: list[str] | None,
+) -> list[Path]:
+    """筛出可写入分享信封的补充图，严格排除本体原始预览图。"""
+    preview_dir = resolve_previews_dir(mod_path)
+    if preview_dir is None:
+        return []
+    root_key = os.path.normcase(os.path.abspath(str(preview_dir)))
+    seen: set[str] = set()
+    result: list[Path] = []
+    for raw in preview_paths or []:
+        try:
+            path = Path(raw)
+            key = os.path.normcase(os.path.abspath(str(path)))
+            parent_key = os.path.normcase(os.path.abspath(str(path.parent)))
+        except (OSError, TypeError, ValueError):
+            continue
+        if parent_key != root_key or key in seen or not fs.is_file(path):
+            continue
+        seen.add(key)
+        result.append(path)
+    return result
+
+
+# 容器的 INI 覆盖文件独立于本体，随容器迁移。
+
+
+def resolve_ini_overrides_dir(mod_path: str | Path) -> Path | None:
+    """解析容器级 .d3dxmeta/ini_overrides 目录。
+
+    mod_path 不位于容器内时返回 None，由调用方决定如何处理独立源文件。
+    容器判定与 resolve_previews_dir 一致。
+    """
+    sidecar_dir = _resolve_sidecar_dir(mod_path)
+    if sidecar_dir is None:
+        return None
+    p = Path(fs.normal_path(mod_path))
+    in_container = (fs.is_dir(p) and fs.is_file(p / MOD_CONTAINER_MARKER)) or fs.is_file(
+        p.parent / MOD_CONTAINER_MARKER
+    )
+    if not in_container:
+        return None
+    return sidecar_dir / INI_OVERRIDES_SUBDIR
+
+
+def _norm_rel(rel: str | Path) -> str:
+    """规范化 ini 的「本体内相对路径」为 posix 风格、去首尾分隔，防目录穿越。"""
+    s = str(rel).replace("\\", "/").strip("/")
+    parts = [seg for seg in s.split("/") if seg not in ("", ".", "..")]
+    return "/".join(parts)
+
+
+def override_path_for(mod_path: str | Path, rel: str | Path) -> Path | None:
+    """某 ini（本体内相对路径 rel）对应的 override 文件绝对路径；非容器返回 None。"""
+    base = resolve_ini_overrides_dir(mod_path)
+    if base is None:
+        return None
+    norm = _norm_rel(rel)
+    if not norm:
+        return None
+    return base / norm
+
+
+def read_override(mod_path: str | Path, rel: str | Path) -> str | None:
+    """读某 ini 的 override 全文（存在则返回文本），无 override / 非容器返回 None。"""
+    op = override_path_for(mod_path, rel)
+    if op is None or not fs.is_file(op):
+        return None
+    try:
+        # surrogateescape 和空 newline 参数保留原始字节及换行格式。
+        with open(fs.native_path(op), encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            return fh.read()
+    except OSError as e:
+        logger.warning("读取 ini override 失败: %s", e)
+        return None
+
+
+def write_override(mod_path: str | Path, rel: str | Path, text: str) -> bool:
+    """将完整 INI 文本写入覆盖文件；非容器或写入失败时返回 False。
+
+    覆盖文件可能与部署文件共享硬链接，或被符号链接引用。此时就地截断写入，
+    保留文件身份，使部署侧读取到相同内容；普通文件使用暂存文件与原子替换。
+    对硬链接使用原子替换会创建新的文件身份并断开原有共享关系。
+    """
+    op = override_path_for(mod_path, rel)
+    if op is None:
+        logger.warning("write_override: 非容器本体，无 override 能力: %s", mod_path)
+        return False
+    try:
+        fs.ensure_dir(op.parent)
+        is_linked = False
+        try:
+            if op.is_symlink():
+                is_linked = True
+            elif fs.exists(op) and os.stat(fs.native_path(op)).st_nlink > 1:
+                is_linked = True
+        except OSError:
+            is_linked = False
+        if is_linked:
+            # 就地写入以保留硬链接身份，符号链接则写入其目标文件。
+            with open(fs.native_path(op), "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+                fh.write(text)
+            return True
+        tmp = op.with_name(op.name + ".tmp")
+        with open(fs.native_path(tmp), "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+            fh.write(text)
+        os.replace(fs.native_path(tmp), fs.native_path(op))
+        return True
+    except OSError as e:
+        logger.warning("写入 ini override 失败: %s", e)
+        try:
+            if "tmp" in dir() and fs.exists(tmp):
+                fs.unlink(tmp)
+        except OSError:
+            pass
+        return False
