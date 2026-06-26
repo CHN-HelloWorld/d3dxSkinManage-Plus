@@ -672,3 +672,201 @@ def read_missing_container_marker(container: str | Path) -> dict | None:
     if any(child.name not in (MOD_CONTAINER_MARKER, META_DIR) for child in fs.list_children(c)):
         raise InvalidManagedMetadataError(tr("缺失源容器仍含其他内容：{c}", c=c))
     return data
+
+
+def restore_container_marker(container: str | Path, snapshot: bytes) -> None:
+    """重命名回滚时原子恢复资源标记的原始内容。"""
+    from src.core.mod_identity import IdentityConflict, validate_mod_id
+
+    c = Path(fs.normal_path(container))
+    data = _validate_container_marker(c, json.loads(snapshot), recover_body=False)
+    identity = validate_mod_id(data.get("mod_id"))
+    existing = _read_container_marker_data(c)
+    if existing is not None and existing.get("mod_id") != identity:
+        raise IdentityConflict(tr("回滚时源 Mod 身份发生变化：{c}", c=c))
+    fd, temporary = tempfile.mkstemp(prefix=".marker-", suffix=".tmp", dir=fs.native_path(c))
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(snapshot)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, fs.native_path(c / MOD_CONTAINER_MARKER))
+    finally:
+        fs.unlink(temporary, missing_ok=True)
+
+
+def _read_container_marker_data(container: Path):
+    """读取容器标记 JSON 对象，文件缺失时返回 None，损坏或访问失败转为元数据错误。"""
+    p = container / MOD_CONTAINER_MARKER
+    try:
+        if os.name == "nt":
+            from src.core.watcher_windows import read_marker_text
+
+            text = read_marker_text(p)
+        else:
+            text = fs.read_text(p, encoding="utf-8")
+        data = json.loads(text)
+    except (FileNotFoundError, NotADirectoryError):
+        return None
+    except (OSError, ValueError) as e:
+        raise InvalidManagedMetadataError(tr("无法解析容器 marker: {p}: {e}", p=p, e=e)) from e
+    if not isinstance(data, dict):
+        raise InvalidManagedMetadataError(tr("容器 marker 根节点必须是 JSON 对象"))
+    return data
+
+
+def _identify_container_body(container: Path) -> str:
+    """仅在本地存在唯一候选时恢复缺失引用。"""
+    candidates = []
+    for child in container.iterdir():
+        if child.name.startswith("."):
+            continue
+        mode = os.stat(fs.native_path(child), follow_symlinks=False).st_mode
+        if stat.S_ISDIR(mode) or (stat.S_ISREG(mode) and is_resident_archive(child)):
+            candidates.append(child.name)
+    if len(candidates) != 1:
+        raise InvalidManagedMetadataError(f"Cannot identify a unique container body: {container} ({candidates})")
+    return candidates[0]
+
+
+def _validate_container_marker(
+    container: Path, data: Any, *, recover_body: bool = True, allow_missing_body: bool = False
+) -> dict:
+    """校验结构，仅从唯一的本地候选恢复缺失本体。
+
+    权限错误向上传播，身份和时间戳修复由拥有库上下文的调用方负责。
+    """
+    if not isinstance(data, dict):
+        raise InvalidManagedMetadataError(tr("容器 marker 根节点必须是 JSON 对象"))
+    if data.get("kind") != CONTAINER_KIND:
+        raise InvalidManagedMetadataError(tr("容器 marker kind 必须为 {CONTAINER_KIND}", CONTAINER_KIND=CONTAINER_KIND))
+    schema = data.get("schema")
+    if schema != CONTAINER_SCHEMA_VERSION:
+        logger.info(
+            "容器 marker schema=%r 与本程序的 %d 不同，按「缺失即默认」照常读取",
+            schema,
+            CONTAINER_SCHEMA_VERSION,
+        )
+
+    body_name = data.get("body")
+    if body_name in (None, "") and recover_body:
+        body_name = _identify_container_body(container)
+        data = dict(data, body=body_name, body_type=None)
+    if (
+        not isinstance(body_name, str)
+        or not body_name
+        or body_name in {".", ".."}
+        or "\x00" in body_name
+        or "/" in body_name
+        or "\\" in body_name
+        or Path(body_name).is_absolute()
+        or bool(Path(body_name).drive)
+    ):
+        raise InvalidManagedMetadataError(tr("容器 marker body 必须是单层 basename"))
+
+    content_hash = data.get("content_hash")
+    if not isinstance(content_hash, str) or _CONTENT_HASH_RE.fullmatch(content_hash) is None:
+        raise InvalidManagedMetadataError(tr("容器 marker content_hash 必须是 40 位小写十六进制"))
+
+    body = container / body_name
+    try:
+        body_stat = os.stat(fs.native_path(body), follow_symlinks=False)
+    except (FileNotFoundError, NotADirectoryError):
+        if allow_missing_body:
+            body_type = data.get("body_type")
+            if body_type not in {"folder", "archive"} or (body_type == "archive" and not is_resident_archive(body)):
+                raise InvalidManagedMetadataError(tr("缺失本体类型无效：{body}", body=body))
+            return data
+        if not recover_body:
+            raise InvalidManagedMetadataError(f"Container body does not exist: {body}")
+        recovered = _identify_container_body(container)
+        return _validate_container_marker(container, dict(data, body=recovered, body_type=None), recover_body=False)
+    ordinary = (
+        body_stat is not None
+        and not stat.S_ISLNK(body_stat.st_mode)
+        and not (getattr(body_stat, "st_file_attributes", 0) & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0x400))
+    )
+    if ordinary:
+        # 已确认的普通直接子项属于当前父目录，无需重复解析祖先链接。
+        is_directory = stat.S_ISDIR(body_stat.st_mode)
+        is_file = stat.S_ISREG(body_stat.st_mode)
+    else:
+        # 链接、重解析点和不确定的读取仍使用完整路径解析。
+        if not fs.exists(body):
+            raise InvalidManagedMetadataError(tr("容器 marker 指定的本体不存在: {body}", body=body))
+        resolved_container = os.path.normcase(
+            os.path.normpath(os.path.realpath(fs.native_path(container))),
+        )
+        resolved_body = os.path.normcase(
+            os.path.normpath(os.path.realpath(fs.native_path(body))),
+        )
+        if os.path.dirname(resolved_body) != resolved_container:
+            raise InvalidManagedMetadataError(tr("容器 marker 本体解析到容器之外: {body}", body=body))
+        is_directory, is_file = fs.is_dir(body), fs.is_file(body)
+
+    body_type = data.get("body_type")
+    if body_type not in {"folder", "archive"}:
+        inferred = ""
+        if is_directory:
+            inferred = "folder"
+        elif is_file and is_resident_archive(body):
+            inferred = "archive"
+        if not inferred:
+            raise InvalidManagedMetadataError(
+                tr(
+                    "容器 marker body_type={body_type!r} 陌生，且本体既不是目录也不是受支持归档: {body}",
+                    body_type=body_type,
+                    body=body,
+                ),
+            )
+        logger.info("容器 marker body_type=%r 陌生，按本体实际形态取 %s: %s", body_type, inferred, container)
+        data["body_type"] = body_type = inferred
+    if body_type == "folder" and not is_directory:
+        raise InvalidManagedMetadataError(tr("容器 marker 声明 folder，但本体不是目录: {body}", body=body))
+    if body_type == "archive" and (not is_file or not is_resident_archive(body)):
+        raise InvalidManagedMetadataError(tr("容器 marker 声明 archive，但本体不是受支持归档: {body}", body=body))
+    return data
+
+
+def resolve_body_path(container: str | Path) -> Path | None:
+    """解析容器内的本体路径（``容器/<ModName>.7z`` 或 ``容器/<ModName>/``）。
+
+    采用有效引用，缺失时只接受容器内唯一候选。marker 缺失返回 ``None``；
+    无法唯一确定或结构非法时传播 :class:`InvalidManagedMetadataError`。
+    """
+    c = Path(fs.normal_path(container))
+    if not fs.is_dir(c):
+        return None
+    marker = read_container_marker(c)
+    return c / marker["body"] if marker is not None else None
+
+
+def _resolve_sidecar_dir(mod_path: str | Path) -> Path | None:
+    """返回当前容器的元数据目录，无匹配时返回 None。
+
+    带标记路径必须符合完整容器契约；本体路径必须与父目录标记声明的名称一致。
+    """
+    p = Path(fs.normal_path(mod_path))
+    if fs.is_dir(p) and fs.is_file(p / MOD_CONTAINER_MARKER):
+        marker = read_container_marker(p)
+        return p / META_DIR if marker is not None else None
+    if fs.is_file(p.parent / MOD_CONTAINER_MARKER):
+        marker = read_container_marker(p.parent)
+        if marker is None:
+            return None
+        declared = p.parent / marker["body"]
+        declared_key = os.path.normcase(os.path.abspath(str(declared)))
+        path_key = os.path.normcase(os.path.abspath(str(p)))
+        if declared_key == path_key:
+            return p.parent / META_DIR
+    return None
+
+
+def resolve_previews_dir(mod_path: str | Path) -> Path | None:
+    """返回当前格式容器的补充预览图目录。
+
+    ``.d3dxmeta/previews`` 只保存用户手动添加或分享信封带来的图片；本体原图仍留在
+    文件夹本体内，或由归档本体按需生成 ``preview_cache``。非容器路径不受支持。
+    """
+    sidecar_dir = _resolve_sidecar_dir(mod_path)
+    return sidecar_dir / PREVIEW_SUBDIR if sidecar_dir is not None else None
