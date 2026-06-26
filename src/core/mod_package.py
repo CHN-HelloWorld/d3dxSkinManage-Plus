@@ -260,3 +260,232 @@ def _validate_manifest(data: Any) -> dict:
         for index, relative in enumerate(excluded):
             _validate_relative_member(relative, f"local.excluded_archive_previews[{index}]")
     return data
+
+
+def _sanitize_share_manifest(manifest: dict) -> dict:
+    """应用外部分享数据前移除本地、私有和未知字段。"""
+    info = manifest["info"]
+    cleaned_info: dict[str, Any] = {}
+    for key in ("author", "description", "version", "url"):
+        value = info.get(key)
+        if isinstance(value, str):
+            cleaned_info[key] = value
+    age_rating = info.get("age_rating")
+    if age_rating in {"G", "P", "R", "X"}:
+        cleaned_info["age_rating"] = age_rating
+    tags = info.get("tags")
+    if isinstance(tags, list):
+        cleaned_info["tags"] = [tag for tag in tags if isinstance(tag, str)]
+    custom_data = info.get("custom_data")
+    if isinstance(custom_data, dict):
+        gb = custom_data.get("gamebanana")
+        if isinstance(gb, dict) and gb.get("mod_id"):
+            shared_gb = {key: gb[key] for key in _SHARE_GB_KEYS if key in gb}
+            shared_gb["last_checked_iso"] = ""
+            cleaned_info["custom_data"] = {"gamebanana": shared_gb}
+    cleaned = {
+        "schema": SCHEMA_VERSION,
+        "kind": MANIFEST_KIND,
+        "name": manifest["name"],
+        "info": cleaned_info,
+        "previews": list(manifest["previews"]),
+    }
+    if "variants" in manifest:
+        cleaned["variants"] = validate_variant_references(manifest["variants"])
+    return cleaned
+
+
+# 写入（导出侧）
+
+
+def write_envelope_to_folder(
+    folder: str | Path,
+    meta: dict,
+    preview_paths: list[str] | None = None,
+    *,
+    variants=None,
+) -> bool:
+    """把信封写入已导出的 Mod 文件夹（``folder`` 为该 Mod 的顶层目录）。"""
+    folder = Path(folder)
+    if not folder.is_dir():
+        return False
+    try:
+        members = _variant_members(variants)
+        meta_dir = folder / META_DIR
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        names: list[str] = []
+        previews = _collect_previews(preview_paths)
+        if previews:
+            prev_dir = meta_dir / PREVIEW_SUBDIR
+            prev_dir.mkdir(parents=True, exist_ok=True)
+            for src in previews:
+                dst = _unique_in(prev_dir, src.name)
+                shutil.copy2(str(src), str(dst))
+                names.append(f"{PREVIEW_SUBDIR}/{dst.name}")
+        for relative, data in members.items():
+            fs.write_bytes(meta_dir / relative, data)
+        manifest = build_manifest(meta, names, list(members) if variants is not None else None)
+        _validate_manifest(manifest)
+        (meta_dir / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+        return True
+    except OSError as e:
+        logger.warning("写入分享信封失败 (folder): %s", e)
+        return False
+
+
+def append_envelope_to_zip(
+    zip_path: str | Path,
+    meta: dict,
+    preview_paths: list[str] | None = None,
+    *,
+    variants=None,
+) -> bool:
+    """把信封追加进已生成的 ZIP（写在压缩包根：``.d3dxmeta/...``）。"""
+    zip_path = Path(zip_path)
+    if not zip_path.is_file():
+        return False
+    try:
+        members = _variant_members(variants)
+        previews = _collect_previews(preview_paths)
+        names: list[str] = []
+        with zipfile.ZipFile(str(zip_path), "a", zipfile.ZIP_DEFLATED) as zf:
+            existing = set(zf.namelist())
+            # 将分享数据写入 ZIP 的唯一顶层目录，保持原有目录结构，
+            # 避免解压服务因出现多个顶层成员而额外增加目录层级，影响哈希和部署。
+            top = _detect_single_top(existing)
+            base = f"{top}/{META_DIR}" if top else META_DIR
+            for src in previews:
+                arc = _unique_arc(existing, f"{base}/{PREVIEW_SUBDIR}/{src.name}")
+                zf.write(str(src), arc)
+                existing.add(arc)
+                names.append(f"{PREVIEW_SUBDIR}/{Path(arc).name}")
+            for relative, data in members.items():
+                zf.writestr(f"{base}/{relative}", data)
+            manifest = build_manifest(meta, names, list(members) if variants is not None else None)
+            _validate_manifest(manifest)
+            zf.writestr(
+                f"{base}/{MANIFEST_NAME}",
+                json.dumps(manifest, ensure_ascii=False, indent=2),
+            )
+        return True
+    except (OSError, zipfile.BadZipFile) as e:
+        logger.warning("写入分享信封失败 (zip): %s", e)
+        return False
+
+
+def append_envelope_to_archive(
+    archive_path: str | Path,
+    meta: dict,
+    preview_paths: list[str] | None = None,
+    *,
+    variants=None,
+) -> bool:
+    """将元数据及补充预览追加到 7z 或 RAR 的单一顶层目录中。
+
+    目录布局与 ZIP 一致，读取方按最浅层的 .d3dxmeta/info.json 定位。
+    7z 使用 py7zr 追加模式写入独立数据块，RAR 使用 WinRAR 的追加命令。
+    预览图和清单分别写入；任一成员写入失败时返回 False，由调用方处理。
+    RAR 追加依赖系统中的 WinRAR。
+    """
+    archive = Path(archive_path)
+    if not archive.is_file():
+        return False
+    suffix = archive.suffix.lower()
+    if suffix not in (".7z", ".rar"):
+        return False
+    try:
+        members = _variant_members(variants)
+        from src.services.archive import ArchiveService
+
+        svc = ArchiveService()
+
+        def _inject(arcname: str, data: bytes) -> bool:
+            """按目标压缩格式调用成员注入接口，返回写入是否成功。"""
+            if suffix == ".7z":
+                return svc.inject_member_7z(archive, arcname, data)
+            return svc.inject_member_rar(archive, arcname, data)
+
+        top = _archive_single_top(archive) or ""
+        base = f"{top}/{META_DIR}" if top else META_DIR
+        existing = {n.replace("\\", "/") for n in svc.list_contents(archive)}
+        names: list[str] = []
+        for src in _collect_previews(preview_paths):
+            arc = _unique_arc(existing, f"{base}/{PREVIEW_SUBDIR}/{src.name}")
+            if not _inject(arc, src.read_bytes()):
+                logger.warning("追加分享预览图失败 (archive): %s", src.name)
+                return False
+            existing.add(arc)
+            names.append(f"{PREVIEW_SUBDIR}/{Path(arc).name}")
+        for relative, data in members.items():
+            if not _inject(f"{base}/{relative}", data):
+                logger.warning("追加分享变体失败 (archive): %s", relative)
+                return False
+        manifest = build_manifest(meta, names, list(members) if variants is not None else None)
+        _validate_manifest(manifest)
+        text = json.dumps(manifest, ensure_ascii=False, indent=2)
+        return _inject(f"{base}/{MANIFEST_NAME}", text.encode("utf-8"))
+    except (OSError, ValueError) as e:
+        logger.warning("写入分享信封失败 (archive): %s", e)
+        return False
+
+
+# 读取 / 清理（导入侧）
+
+
+def read_envelope(*candidate_dirs: str | Path) -> dict | None:
+    """在候选目录里探测 ``.d3dxmeta/info.json`` 并读出。
+
+    参数：
+        candidate_dirs: 依序探测的目录，通常为 ``(解压根, 顶层 mod 文件夹)``。
+
+    返回：
+        ``{"manifest": dict, "meta_dir": Path}``；未找到返回 ``None``。文件存在但
+        JSON 或字段结构无效时抛 :class:`InvalidManagedMetadataError`。
+    """
+    for d in candidate_dirs:
+        if not d:
+            continue
+        meta_dir = Path(d) / META_DIR
+        mpath = meta_dir / MANIFEST_NAME
+        if fs.is_file(mpath):
+            try:
+                manifest = json.loads(fs.read_text(mpath, encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise InvalidManagedMetadataError(
+                    tr("无法解析分享信封: {mpath}: {e}", mpath=mpath, e=e),
+                ) from e
+            validated = _validate_manifest(manifest)
+            return {
+                "manifest": _sanitize_share_manifest(validated),
+                "meta_dir": meta_dir,
+            }
+    return None
+
+
+def resolve_preview_paths(meta_dir: str | Path, manifest: dict) -> list[Path]:
+    """解析分享数据中的补充预览图。
+
+    分享包按清单读取；本地容器清单未记录预览文件时枚举 .d3dxmeta/previews，
+    使直接复制容器后重新导入仍能恢复手动补充图片。
+    """
+    meta_dir = Path(meta_dir)
+    out: list[Path] = []
+    listed = manifest.get("previews") or []
+    if listed:
+        for rel in listed:
+            if not isinstance(rel, str):
+                continue
+            p = meta_dir / rel
+            if fs.is_file(p):
+                out.append(p)
+        return out
+    preview_dir = meta_dir / PREVIEW_SUBDIR
+    try:
+        out.extend(
+            p
+            for p in sorted(preview_dir.iterdir())
+            if p.is_file() and p.suffix.lower() in IMAGE_EXTENSIONS and not p.name.lower().endswith(".dds")
+        )
+    except OSError:
+        pass
+    return out
