@@ -1338,3 +1338,217 @@ def inspect_effective_inis(mod_path: str | Path) -> EffectiveIniInventory:
                 seed = _ini_stat_token(seed_stat)
     originals = _strict_ini_tree(path, exclude_meta=True) if folder else ()
     return EffectiveIniInventory(path, _ini_stat_token(body), base, seed, overrides, originals)
+
+
+def _read_complete_archive_inis(path):
+    """校验压缩包成员路径、重复项及 INI 大小和校验码，完整读取后返回相对路径与文本。"""
+    from src.services.archive import ArchiveService
+
+    service = ArchiveService()
+    entries = service.list_entries(path)
+    if entries is None:
+        raise OSError(tr("无法确认归档 INI 成员完整性，请检查归档或重试：{path}", path=path))
+    expected = {}
+    names = set()
+    for name, size, crc in entries:
+        name = _validate_relative_member(name.replace("\\", "/"), tr("归档成员"))
+        if name.casefold() in names:
+            raise ValueError(tr("归档成员重复或大小写冲突：{name}", name=name))
+        names.add(name.casefold())
+        if name.casefold().endswith(".ini") and META_DIR not in name.split("/"):
+            expected[name] = (size, crc)
+    prefix = _detect_single_top({name for name, _, _ in entries if not _is_under_meta(name)})
+    raw = service.read_all_inis(path)
+    normalized = {name.replace("\\", "/"): data for name, data in raw.items()}
+    if len(normalized) != len(raw) or set(normalized) != set(expected):
+        raise OSError(tr("归档 INI 未完整读取，请重试：{path}", path=path))
+    texts = []
+    for name, (size, crc) in expected.items():
+        data = normalized[name]
+        if len(data) != size or zlib.crc32(data) != crc:
+            raise OSError(tr("归档 INI 内容不完整：{path} / {name}", path=path, name=name))
+        rel = name[len(prefix) + 1 :] if prefix else name
+        texts.append((rel, data.decode("utf-8", errors="surrogateescape")))
+    return tuple(texts)
+
+
+# 随容器保存的本地元数据。
+
+
+def _is_under_meta(name: str) -> bool:
+    """ZIP/相对成员名是否落在 .d3dxmeta 目录内（任一路径段命中）。"""
+    parts = name.replace("\\", "/").casefold().split("/")
+    return META_DIR in parts or MOD_CONTAINER_MARKER in parts
+
+
+_KNOWN_MANIFEST_KEYS = frozenset(
+    {
+        "schema",
+        "kind",
+        "name",
+        "info",
+        "previews",
+        "local",
+    }
+)
+_KNOWN_LOCAL_KEYS = frozenset({"classification", "preview_order", "status_hint", "mod_id"})
+
+
+def unknown_manifest_keys(manifest: dict | None) -> dict:
+    """提取清单中的未知字段，供读取后重新写入时原样保留。
+
+    顶层字段直接返回，local 内的字段保存在 local 子字典，
+    build_local_manifest 的 extra 参数按相同结构合并。
+    """
+    if not isinstance(manifest, dict):
+        return {}
+    extra = {key: value for key, value in manifest.items() if key not in _KNOWN_MANIFEST_KEYS}
+    local = manifest.get("local")
+    if isinstance(local, dict):
+        local_extra = {key: value for key, value in local.items() if key not in _KNOWN_LOCAL_KEYS}
+        if local_extra:
+            extra["local"] = local_extra
+    return extra
+
+
+def build_local_manifest(meta: dict, local: dict | None = None, *, extra: dict | None = None) -> dict:
+    """构造本地元数据清单。
+
+    完整保存用户信息，不使用分享字段白名单。预览文件单独存储并在重建时扫描，
+    因此清单中的 previews 为空，避免重复复制图片。local 保存分类路径、预览排序
+    和启用提示，分享导出时移除。
+
+    extra 包含读取时发现的未知字段，合并时保留这些字段，但不覆盖本模块管理的键。
+    """
+    manifest = {
+        "schema": SCHEMA_VERSION,
+        "kind": MANIFEST_KIND,
+        "name": (meta or {}).get("name", ""),
+        "info": deepcopy((meta or {}).get("info", {}) or {}),
+        "previews": [],
+    }
+    manifest["info"].pop("name", None)
+    if local:
+        manifest["local"] = dict(local)
+    for key, value in (extra or {}).items():
+        if key == "local" and isinstance(value, dict):
+            merged = manifest.setdefault("local", {})
+            if isinstance(merged, dict):
+                for local_key, local_value in value.items():
+                    merged.setdefault(local_key, local_value)
+            continue
+        manifest.setdefault(key, value)
+    if isinstance(manifest.get("local"), dict):
+        manifest["local"].pop("mod_id", None)
+        manifest["local"].pop("imported_at", None)
+    return manifest
+
+
+def write_sidecar(mod_path: str | Path, manifest: dict) -> bool:
+    """原子更新描述，持久身份由 .d3dxmod 保存。"""
+
+    p = Path(mod_path)
+    validated = _validate_manifest(deepcopy(manifest))
+    validated["info"].pop("name", None)
+    sidecar_dir = _resolve_sidecar_dir(p)
+    if sidecar_dir is None:
+        raise InvalidManagedMetadataError(f"write_sidecar requires a managed container: {p}")
+    local = dict(validated.get("local", {}))
+    local.pop("mod_id", None)
+    local.pop("imported_at", None)
+    if "local" in validated:
+        validated = dict(validated, local=local)
+    text = json.dumps(validated, ensure_ascii=False, indent=2)
+    temporary: Path | None = None
+    try:
+        fs.ensure_dir(sidecar_dir)
+        descriptor, temporary_name = tempfile.mkstemp(
+            prefix=".info-",
+            suffix=".tmp",
+            dir=fs.native_path(sidecar_dir),
+        )
+        os.close(descriptor)
+        temporary = Path(temporary_name)
+        fs.write_text(temporary, text, encoding="utf-8")
+        os.replace(fs.native_path(temporary), fs.native_path(sidecar_dir / MANIFEST_NAME))
+        return True
+    finally:
+        if temporary is not None:
+            fs.unlink(temporary, missing_ok=True)
+
+
+def strip_sidecar(mod_path: str | Path) -> bool:
+    """移除导出内容中的本地元数据。
+
+    清除分类路径、启用提示等私有字段，同时避免后续追加分享数据时产生重复成员。
+    """
+    p = Path(mod_path)
+    try:
+        # 优先移除容器或文件夹的 .d3dxmeta 目录。
+        # 容器中的本体归档保持不变；普通文件夹移除自身元数据目录。
+        sidecar_dir = None if fs.is_dir(p) else _resolve_sidecar_dir(p)
+        if sidecar_dir is not None:
+            if fs.is_dir(sidecar_dir):
+                fs.rmtree(sidecar_dir)
+            # 容器内本体无需再访问归档成员，避免无关重写。
+            if p.is_dir() or (p.is_file() and (p.parent / MOD_CONTAINER_MARKER).is_file()):
+                return True
+        if fs.is_dir(p):
+            # 分享文件夹没有容器 marker；与归档一致，清除任意层级的本地元数据。
+            def walk_error(error: OSError) -> None:
+                """将目录遍历错误继续抛出，阻止把不完整扫描误判为清理成功。"""
+                raise error
+
+            for directory, dirs, files in os.walk(fs.native_path(p), onerror=walk_error):
+                for name in files:
+                    if name.casefold() == MOD_CONTAINER_MARKER:
+                        fs.unlink(Path(directory) / name)
+                for name in tuple(dirs):
+                    if name.casefold() == META_DIR:
+                        fs.rmtree(Path(directory) / name)
+                        dirs.remove(name)
+            return True
+        # 独立导出归档需移除内部元数据成员。
+        if p.is_file() and p.suffix.lower() == ".zip":
+            # 没有元数据成员时直接返回，避免重建整个 ZIP。
+            try:
+                with zipfile.ZipFile(str(p), "r") as zf:
+                    if not any(_is_under_meta(n) for n in zf.namelist()):
+                        return True
+            except (OSError, zipfile.BadZipFile):
+                return False
+            return _rewrite_zip_meta(p, None)
+        # 7z/rar：剔除归档内部的 .d3dxmeta 成员，确保分享导出的包不带任何本地专属元数据。
+        if p.is_file() and p.suffix.lower() in _NONZIP_RESIDENT_SUFFIXES:
+            from src.services.archive import ArchiveService
+
+            svc = ArchiveService()
+            pred = lambda n: _is_under_meta(n)  # noqa: E731
+            if p.suffix.lower() == ".7z":
+                return svc.remove_members_7z(p, pred)
+            return svc.remove_members_rar(p, pred)
+        return sidecar_dir is not None
+    except OSError as e:
+        logger.warning("剥离 sidecar 失败: %s", e)
+        return False
+
+
+def read_sidecar(mod_path: str | Path) -> dict | None:
+    """读取经过校验的容器级元数据。
+
+    非容器或元数据缺失时返回 None；已有受管元数据无效时抛出异常。
+    """
+    p = Path(mod_path)
+    sidecar_dir = _resolve_sidecar_dir(p)
+    if sidecar_dir is None:
+        return None
+    mpath = sidecar_dir / MANIFEST_NAME
+    if not fs.is_file(mpath):
+        return None
+    try:
+        manifest = json.loads(fs.read_text(mpath, encoding="utf-8"))
+    except (OSError, ValueError) as e:
+        raise InvalidManagedMetadataError(
+            tr("无法解析容器级 sidecar: {mpath}: {e}", mpath=mpath, e=e),
+        ) from e
+    return _validate_manifest(manifest)
