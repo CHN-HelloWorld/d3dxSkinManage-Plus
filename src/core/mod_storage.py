@@ -902,3 +902,259 @@ class ModStorage:
         except OSError as e:
             logger.error("删除 Mod 源失败: %s", e)
             return False
+
+    @library_mutation
+    def delete_mod(
+        self,
+        source_path: str | Path,
+        deploy_name: str = "",
+        *,
+        delete_method: str = "permanent",
+        mod_id: str | None = None,
+    ) -> bool:
+        """删除 Mod: 从 3DMigoto 移除部署 + 删除源文件夹"""
+        if delete_method not in ("permanent", "recycle_bin"):
+            raise ValueError(tr("未知 Mod 删除方式: {delete_method}", delete_method=delete_method))
+        if delete_method == "recycle_bin":
+            self.ensure_source_recycle_compatible(source_path)
+        if not self.undeploy_mod(source_path, deploy_name=deploy_name, mod_id=mod_id):
+            return False
+        return self.delete_source(source_path, delete_method=delete_method)
+
+    @library_mutation
+    def move_mod(self, src: str | Path, dst_parent: str | Path) -> Path | None:
+        """移动 Mod 到新位置"""
+        src = Path(src)
+        dst_parent = Path(dst_parent)
+
+        if not fs.exists(src):
+            logger.error("源 Mod 不存在: %s", src)
+            return None
+
+        fs.ensure_dir(dst_parent)
+        dst = dst_parent / src.name
+
+        if fs.exists(dst):
+            counter = 1
+            while fs.exists(dst):
+                dst = dst_parent / f"{src.stem}_{counter}{src.suffix}"
+                counter += 1
+
+        try:
+            shutil.move(fs.native_path(src), fs.native_path(dst))
+            logger.info("Mod 已移动: %s -> %s", src, dst)
+            return dst
+        except OSError as e:
+            logger.error("移动 Mod 失败: %s", e)
+            return None
+
+    # 扫描
+
+    def scan_library_directory(
+        self,
+        library_root: str | Path,
+        *,
+        invalid_metadata: list[str] | None = None,
+        scope_filter: Callable[[Path], bool] | None = None,
+        marker_reader=None,
+    ) -> list[dict]:
+        """扫描受管库的类别及 Mod 直接成员。
+
+        scope_filter 限定与变化路径相关的分支，供目录事件触发的局部对账使用。
+        返回包含 folder_name、path、character_folder 的记录列表。
+        """
+        results = []
+        root = Path(library_root)
+        if not fs.is_dir(root):
+            return results
+
+        with os.scandir(fs.native_path(root)) as entries:
+            char_entries = sorted(entries, key=lambda child: os.path.normcase(child.name))
+        for char_entry in char_entries:
+            if char_entry.name.startswith(".") or not char_entry.is_dir():
+                continue
+            char_dir = Path(fs.normal_path(char_entry.path))
+            if scope_filter is not None and not scope_filter(char_dir):
+                continue
+            with os.scandir(fs.native_path(char_dir)) as entries:
+                children = sorted(entries, key=lambda child: os.path.normcase(child.name))
+            for child in children:
+                if child.name.startswith("."):
+                    continue
+                entry = Path(fs.normal_path(child.path))
+                if scope_filter is not None and not scope_filter(entry):
+                    continue
+                if child.is_dir():
+                    # 发现容器后返回本体路径和容器名称，避免将外层容器重复登记为资源。
+                    from src.core.mod_package import (
+                        InvalidManagedMetadataError,
+                        read_container_marker,
+                    )
+
+                    try:
+                        marker = (marker_reader or read_container_marker)(entry)
+                    except InvalidManagedMetadataError as e:
+                        logger.warning("跳过无效 Mod 容器 %s: %s", entry, e)
+                        if invalid_metadata is not None and str(entry) not in invalid_metadata:
+                            invalid_metadata.append(str(entry))
+                        continue
+                    if marker is not None:
+                        body = entry / marker["body"]
+                        results.append(
+                            {
+                                "folder_name": entry.name,
+                                "path": str(body),
+                                "character_folder": char_dir.name,
+                                "content_hash": marker["content_hash"],
+                            }
+                        )
+                        continue
+                    results.append(
+                        {
+                            "folder_name": entry.name,
+                            "path": str(entry),
+                            "character_folder": char_dir.name,
+                        }
+                    )
+                elif child.is_file() and is_resident_archive(entry):
+                    results.append(
+                        {
+                            "folder_name": entry.stem,
+                            "path": str(entry),
+                            "character_folder": char_dir.name,
+                        }
+                    )
+        return results
+
+    # 工具方法
+
+    def is_deployed(self, source_path: str | Path, deploy_name: str = "", *, mod_id: str = "") -> bool:
+        """核对资源的持久身份，不依赖显示名。"""
+        if not self._migoto_mods_dir:
+            return False
+        identity = mod_id or read_source_mod_id(source_path)
+        location = self.scan_deployments().get(validate_mod_id(identity))
+        return bool(location and location.active)
+
+    # 内部方法
+
+    @staticmethod
+    def _is_junction(path: Path) -> bool:
+        """检查路径是否是 NTFS junction"""
+        isjunction = getattr(os.path, "isjunction", None)
+        if callable(isjunction):
+            try:
+                return bool(isjunction(str(path)))
+            except OSError:
+                pass
+        try:
+            st = os.lstat(str(path))
+            attrs = getattr(st, "st_file_attributes", 0)
+            return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)) and not path.is_symlink()
+        except (OSError, ValueError, AttributeError):
+            return False
+
+    @classmethod
+    def _remove_deploy(cls, deploy_path: Path, *, mod_id: str | None = None) -> bool:
+        """移除部署；身份约束随每次重试重新验证，显式整目录清理可不传约束。"""
+        last_error: OSError | None = None
+        removing_empty_dirs = False
+
+        def _onerror(func, path, _exc_info):
+            """删除失败时重新核对部署身份，解除只读属性后重试原删除操作。"""
+            try:
+                if mod_id is not None and not removing_empty_dirs:
+                    cls._check_deployment_identity(deploy_path, mod_id)
+                os.chmod(path, stat.S_IWRITE)
+                func(path)
+            except OSError:
+                raise
+
+        def _unlink_or_rmdir(path: Path, *, directory: bool = False) -> None:
+            """按对象类型删除文件或空目录，忽略已缺失目标，其余错误进入只读重试。"""
+            remove = os.rmdir if directory else os.unlink
+            native = fs.native_path(path)
+            try:
+                remove(native)
+            except FileNotFoundError:
+                return
+            except OSError:
+                _onerror(remove, native, None)
+
+        def _remove_child(path: Path) -> None:
+            """按链接、联接、普通目录或文件类型移除子项，避免递归进入链接目标。"""
+            if path.is_symlink():
+                _unlink_or_rmdir(path)
+            elif cls._is_junction(path):
+                _unlink_or_rmdir(path, directory=True)
+            elif path.is_dir():
+                fs.rmtree(path, onerror=_onerror)
+            else:
+                _unlink_or_rmdir(path)
+
+        def _remove_owned_directory(expected_id: str) -> None:
+            """保留身份标记直至其他内容删除完毕，复核身份后删除根目录。
+
+            根目录删除失败时仅在对象身份仍一致的条件下恢复标记，以支持后续安全重试。"""
+            nonlocal removing_empty_dirs
+            directory_stat = os.stat(fs.native_path(deploy_path), follow_symlinks=False)
+            marker = deploy_path / DEPLOYMENT_IDENTITY_FILE
+            # 仍有内容可能删除失败时保留身份凭据。
+            for child in fs.list_children(deploy_path):
+                if child.name.casefold() != DEPLOYMENT_IDENTITY_FILE.casefold():
+                    _remove_child(child)
+            identity = cls._check_deployment_identity(deploy_path, expected_id)
+            try:
+                _unlink_or_rmdir(marker)
+                removing_empty_dirs = True
+                _unlink_or_rmdir(deploy_path, directory=True)
+            except OSError:
+                # Windows 上空目录仍可能被占用，只恢复原目录，且不覆盖已有标记。
+                try:
+                    current_stat = os.stat(fs.native_path(deploy_path), follow_symlinks=False)
+                    if os.path.samestat(directory_stat, current_stat):
+                        try:
+                            with open(fs.native_path(marker), "x", encoding="utf-8") as stream:
+                                json.dump(identity, stream, ensure_ascii=False)
+                                stream.flush()
+                                os.fsync(stream.fileno())
+                        except FileExistsError:
+                            pass
+                except OSError as restore_error:
+                    logger.error("删除未完成且身份凭据恢复失败 (%s): %s", deploy_path, restore_error)
+                raise
+            finally:
+                removing_empty_dirs = False
+
+        # Windows 杀毒/游戏句柄释放可能有几十毫秒延迟；短重试解决瞬时占用，持续占用则
+        # 返回 False，由上层保留 Mod 记录并在定时器/下次启动继续清理。
+        for attempt in range(3):
+            try:
+                if not cls._deploy_path_exists(deploy_path):
+                    return True
+                if mod_id is not None:
+                    cls._check_deployment_identity(deploy_path, mod_id)
+                if deploy_path.is_symlink():
+                    deploy_path.unlink()
+                elif cls._is_junction(deploy_path):
+                    os.rmdir(str(deploy_path))  # 仅移除重解析点，不遍历其目标目录。
+                elif deploy_path.is_dir():
+                    if mod_id is None:
+                        shutil.rmtree(str(deploy_path), onerror=_onerror)
+                    else:
+                        _remove_owned_directory(mod_id)
+                else:
+                    deploy_path.unlink(missing_ok=True)
+                if not cls._deploy_path_exists(deploy_path):
+                    logger.info("已移除 3DMigoto 部署: %s", deploy_path)
+                    return True
+            except IdentityConflict as e:
+                logger.error("部署身份已变更，停止移除 (%s): %s", deploy_path, e)
+                return False
+            except OSError as e:
+                last_error = e
+            if attempt < 2:
+                time.sleep(0.05 * (attempt + 1))
+
+        logger.error("移除部署失败: %s - %s", deploy_path, last_error or "路径仍存在")
+        return False
