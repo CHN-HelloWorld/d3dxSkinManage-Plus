@@ -154,3 +154,233 @@ def implicit_namespace(prefix: str, rel: str) -> str:
     head = prefix.strip("\\")
     body = (head + "\\" + tail) if head else tail
     return body.casefold()
+
+
+def full_key(namespace: str, var: str) -> str:
+    """拼出上游 ``get_namespaced_var_name_lower`` 的等价键：``$\\<ns>\\<var>``（全小写）。"""
+    return normalize_var_key("$\\" + namespace.strip("\\") + "\\" + var)
+
+
+def build_attribution_index(sources: Iterable[ModIniSource]) -> AttributionIndex:
+    """建唯一归属索引。冲突键从 ``owner`` 中剔除并登记到 ``conflicts``。"""
+    declarations: list[PersistDeclaration] = []
+    diagnostics: list[str] = []
+    claims: dict[str, list[str]] = {}
+    unresolved: set[str] = set()
+
+    for source in sources:
+        dep_id = (source.mod_id or "").strip()
+        if not dep_id:
+            diagnostics.append(tr("跳过：mod_id 为空（不得并入同一个空 id 桶）"))
+            continue
+        for rel, text in source.inis:
+            if not rel.lower().endswith(".ini"):
+                continue
+            text = decode_passthrough_text(text)
+            variables = [var for var, _initial in _persist_declarations(text)]
+            if not variables:
+                continue
+            try:
+                explicit = parse_namespace(text)
+            except ValueError as error:
+                unresolved.add(dep_id)
+                diagnostics.append(tr("跳过 {dep_id}/{rel}：{error}", dep_id=dep_id, rel=rel, error=error))
+                continue
+            if explicit:
+                namespace, is_explicit = explicit.casefold(), True
+            elif source.implicit_prefix:
+                namespace, is_explicit = implicit_namespace(source.implicit_prefix, rel), False
+            else:
+                unresolved.add(dep_id)
+                diagnostics.append(
+                    tr(
+                        (
+                            "跳过 {dep_id}/{rel}：ini 未声明 namespace "
+                            "且隐式前缀不可推导（部署目录不在 3DMigoto 目录之下 / 未配置 "
+                            "3DMigoto 路径 / 非激活部署）"
+                        ),
+                        dep_id=dep_id,
+                        rel=rel,
+                    )
+                )
+                continue
+            for var in variables:
+                key = full_key(namespace, var)
+                declarations.append(
+                    PersistDeclaration(
+                        mod_id=dep_id,
+                        rel=rel,
+                        namespace=namespace,
+                        var=var,
+                        full_key=key,
+                        explicit_namespace=is_explicit,
+                    )
+                )
+                owners = claims.setdefault(key, [])
+                owners.append(dep_id)
+
+    owner: dict[str, str] = {}
+    conflicts: dict[str, tuple[str, ...]] = {}
+    aliases = {key: key_variants(key) for key in claims}
+    alias_claims: dict[str, set[str]] = {}
+    for key, variants in aliases.items():
+        for variant in variants:
+            alias_claims.setdefault(variant, set()).add(key)
+    claim_order = {key: position for position, key in enumerate(claims)}
+    for key, variants in aliases.items():
+        collisions = {candidate for variant in variants for candidate in alias_claims[variant]}
+        owners = [
+            mod_id for candidate in sorted(collisions, key=claim_order.__getitem__) for mod_id in claims[candidate]
+        ]
+        if len(owners) == 1:
+            owner[key] = owners[0]
+            continue
+        conflicts[key] = tuple(dict.fromkeys(owners))
+        diagnostics.append(
+            tr(
+                "冲突：{key} 被重复声明 {count} 次（{value}），该键不写入任何 Mod 偏好",
+                key=key,
+                count=len(owners),
+                value=", ".join(dict.fromkeys(owners)),
+            )
+        )
+
+    keys_by_deployment: dict[str, list[str]] = {}
+    for decl in declarations:
+        bucket = keys_by_deployment.setdefault(decl.mod_id, [])
+        if decl.full_key not in bucket:
+            bucket.append(decl.full_key)
+
+    return AttributionIndex(
+        owner=owner,
+        conflicts=conflicts,
+        keys_by_deployment={k: tuple(v) for k, v in keys_by_deployment.items()},
+        declarations=tuple(declarations),
+        diagnostics=tuple(diagnostics),
+        unresolved_mods=tuple(sorted(unresolved)),
+    )
+
+
+def _portable_variable(decl: PersistDeclaration, value: str) -> VariantVariable:
+    """将声明和值转换为可随 Mod 移动的变体变量，保留显式命名空间信息。"""
+    return VariantVariable(
+        ini_path=decl.rel,
+        variable=decl.var,
+        namespace_mode="explicit" if decl.explicit_namespace else "implicit",
+        namespace=normalize_var_key(decl.namespace) if decl.explicit_namespace else "",
+        value=value,
+    )
+
+
+def _variable_identity(variable: VariantVariable) -> tuple[str, str, str, str]:
+    """组合 INI 路径、变量名和命名空间属性，生成与当前值无关的变量定位键。"""
+    return (variable.ini_path.casefold(), variable.variable, variable.namespace_mode, variable.namespace)
+
+
+def _validated_declarations(index: AttributionIndex, mod_id: str) -> tuple[PersistDeclaration, ...]:
+    """核对 Mod 声明唯一性、命名空间和归属索引一致性，拒绝无法确定归属的变量。"""
+    if not isinstance(mod_id, str) or not mod_id.strip():
+        raise ValueError(tr("mod_id 不能为空"))
+    if mod_id in index.unresolved_mods:
+        raise ValueError(tr("Mod 包含无法确定命名空间的持久变量"))
+    declarations = tuple(decl for decl in index.declarations if decl.mod_id == mod_id)
+    locations: set[tuple[str, str]] = set()
+    keys: set[str] = set()
+    for decl in declarations:
+        variable = _portable_variable(decl, "0")
+        location = (variable.ini_path.casefold(), variable.variable)
+        if location in locations or decl.full_key in keys:
+            raise ValueError(tr("Mod 包含重复变量定位或重复声明"))
+        if (
+            not decl.namespace
+            or decl.full_key != full_key(decl.namespace, decl.var)
+            or index.resolve(decl.full_key) != mod_id
+            or index.owner.get(decl.full_key) != mod_id
+            or decl.full_key in index.conflicts
+        ):
+            raise ValueError(tr("持久变量无法唯一归属：{full_key}", full_key=decl.full_key))
+        locations.add(location)
+        keys.add(decl.full_key)
+    if keys != set(index.keys_of(mod_id)):
+        raise ValueError(tr("持久变量归属索引与声明不一致"))
+    return declarations
+
+
+def _fingerprint(declarations: Iterable[PersistDeclaration]) -> str:
+    """排序可移植变量身份并计算 SHA-256，生成声明结构指纹。"""
+    identities = sorted(_variable_identity(_portable_variable(decl, "0")) for decl in declarations)
+    encoded = json.dumps(identities, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def declaration_fingerprint(index: AttributionIndex, mod_id: str) -> str:
+    """计算完整声明结构的摘要，不包含变量值和部署状态。"""
+    return _fingerprint(_validated_declarations(index, mod_id))
+
+
+def snapshot_variables(index: AttributionIndex, mod_id: str, values: dict[str, str]) -> tuple[VariantVariable, ...]:
+    """校验完整快照，并将运行时键转换为可移植定位信息。"""
+    declarations = _validated_declarations(index, mod_id)
+    if not isinstance(values, dict):
+        raise ValueError(tr("变量快照必须是字典"))
+    canonical: dict[str, str] = {}
+    for key, value in values.items():
+        if not isinstance(key, str) or index.resolve(key) != mod_id:
+            raise ValueError(tr("快照包含未知或归属不确定的变量：{key!r}", key=key))
+        normalized = index.canonical_key(key)
+        if normalized in canonical:
+            raise ValueError(tr("快照包含重复变量：{key}", key=key))
+        canonical[normalized] = validate_numeric_value(value)
+    if set(canonical) != {decl.full_key for decl in declarations}:
+        raise ValueError(tr("变量快照不完整或包含未知键"))
+    return tuple(
+        sorted(
+            (_portable_variable(decl, canonical[decl.full_key]) for decl in declarations),
+            key=_variable_identity,
+        )
+    )
+
+
+def resolve_variant_values(index: AttributionIndex, mod_id: str, variant: ModVariant) -> dict[str, str]:
+    """将每个可移植定位信息解析为当前部署的完整变量键。"""
+    if not isinstance(variant, ModVariant):
+        raise ValueError(tr("目标必须是 ModVariant"))
+    declarations = _validated_declarations(index, mod_id)
+    if variant.declaration_fingerprint and variant.declaration_fingerprint != _fingerprint(declarations):
+        raise ValueError(tr("变体与当前 Mod 的变量声明版本不兼容"))
+    stored = {_variable_identity(item): item.value for item in variant.variables}
+    expected = {_variable_identity(_portable_variable(decl, "0")): decl.full_key for decl in declarations}
+    if len(stored) != len(variant.variables) or set(stored) != set(expected):
+        raise ValueError(tr("变体变量定位与当前完整声明不一致"))
+    return {key: validate_numeric_value(stored[identity]) for identity, key in expected.items()}
+
+
+def read_default_values(index: AttributionIndex, mod_id: str, body_inis: Iterable[tuple[str, str]]) -> dict[str, str]:
+    """仅读取原始资源 INI 的字面默认值，不读取当前生效值。"""
+    declarations = _validated_declarations(index, mod_id)
+    expected = {_variable_identity(_portable_variable(decl, "0")): decl.full_key for decl in declarations}
+    found: dict[tuple[str, str, str, str], str] = {}
+    seen_paths: set[str] = set()
+    for rel, text in body_inis:
+        text = decode_passthrough_text(text)
+        namespace = parse_namespace(text)
+        variables = tuple(_persist_declarations(text))
+        path_key = rel.replace("\\", "/").casefold()
+        if path_key in seen_paths:
+            raise ValueError(tr("资源本体包含重复 INI 路径"))
+        seen_paths.add(path_key)
+        for var, initial in variables:
+            variable = VariantVariable(
+                ini_path=rel,
+                variable=var,
+                namespace_mode="explicit" if namespace else "implicit",
+                namespace=normalize_var_key(namespace) if namespace else "",
+                value="0" if initial is None else initial,
+            )
+            identity = _variable_identity(variable)
+            if identity in found:
+                raise ValueError(tr("资源本体包含重复变量声明"))
+            found[identity] = variable.value
+    if set(found) != set(expected):
+        raise ValueError(tr("资源本体与当前完整变量声明不一致，无法恢复默认"))
+    return {key: found[identity] for identity, key in expected.items()}
