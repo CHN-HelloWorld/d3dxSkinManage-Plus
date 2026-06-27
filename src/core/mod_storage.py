@@ -123,3 +123,69 @@ class ModStorage:
         override→部署副本同步、双向监测都需据此定位部署副本 ini。
         """
         return self._migoto_mods_dir
+
+    @staticmethod
+    def _resolve_deploy_name(
+        source_path: str | Path,
+        deploy_name: str = "",
+        *,
+        source_is_archive: bool | None = None,
+    ) -> str:
+        """返回稳定且不含路径穿越的部署目录名。
+
+        ``deploy_name`` 由索引中的 ``Mod.folder_name`` 提供，是新建部署时的首选名称；
+        未提供时按源路径取名。名称不参与身份判断。回退判定只看后缀而不看
+        ``is_file``，避免压缩档源容器被外部删除后把 ``Foo.zip`` 错当文件夹名。
+        """
+        raw = str(deploy_name or "").strip()
+        if raw:
+            # 从名称字段提取单一文件名，避免外部数据使操作路径超出部署根目录。
+            safe = Path(raw).name
+            if safe not in ("", ".", ".."):
+                return safe
+
+        src = Path(source_path)
+        is_archive = is_resident_archive(src) if source_is_archive is None else source_is_archive
+        return src.stem if is_archive else src.name
+
+    @classmethod
+    def _deploy_path_exists(cls, path: Path) -> bool:
+        """包含断链 symlink / junction 的部署路径存在性判断。"""
+        return os.path.lexists(str(path)) or path.is_symlink() or cls._is_junction(path)
+
+    @staticmethod
+    def _path_root_available(path: Path) -> bool:
+        """检查部署路径所在卷或 UNC 根的可达性，避免将离线状态误判为删除。"""
+        anchor = path.anchor
+        if not anchor:
+            return True
+        try:
+            return Path(anchor).exists()
+        except OSError:
+            return False
+
+    @library_mutation
+    def remove_deploy_path(self, deploy_path: str | Path) -> bool:
+        """按已持久化的完整路径移除部署，不依赖当前游戏配置或源文件。"""
+        target = Path(deploy_path)
+        if not self._path_root_available(target):
+            logger.warning("部署所在磁盘/共享当前不可用，保留清理凭据: %s", target)
+            return False
+        return self._remove_deploy(target)
+
+    def deployment_path_state(self, deploy_path: str | Path) -> bool | None:
+        """返回完整部署路径状态；卷离线时返回 None，避免误判为已被外删。"""
+        target = Path(deploy_path)
+        if not self._path_root_available(target):
+            return None
+        return self._deploy_path_exists(target)
+
+    @staticmethod
+    def safe_deploy_name(deploy_name: str) -> str:
+        """确保部署名对应 Mod 根目录中的一个直接子项。"""
+        raw = str(deploy_name).strip()
+        if not raw or raw in (".", "..") or Path(raw).name != raw:
+            raise ValueError(f"invalid deploy name: {deploy_name!r}")
+        if any(sep in raw for sep in ("/", "\\")):
+            raise ValueError(f"invalid deploy name: {deploy_name!r}")
+        return raw
