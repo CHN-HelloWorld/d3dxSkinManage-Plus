@@ -646,3 +646,259 @@ class ModStorage:
                 shutil.rmtree(str(meta), ignore_errors=True)
         except Exception as e:
             logger.warning("清理部署产物 sidecar 失败: %s", e)
+
+    @library_mutation
+    def undeploy_mod(
+        self,
+        source_path: str | Path,
+        deploy_name: str = "",
+        *,
+        capture_changes: bool = True,
+        deploy_path: str | Path | None = None,
+        mod_id: str | None = None,
+    ) -> bool:
+        """从 3DMigoto Mods 目录移除 Mod 部署 (禁用)
+
+        源 Mod 文件本身不受影响。
+
+        参数：
+            source_path: 源 Mod 路径 (用于确定在 3DMigoto 中的部署名称)
+            mod_id: 调用方保存的 UUID；省略时从源 .d3dxmod 读取，绝不按名称认领。
+                源已缺失的清理必须传入已保存的 UUID。
+
+        返回：
+            成功返回 True
+        """
+        src = Path(source_path)
+        if deploy_path is not None:
+            deploy_target = Path(deploy_path)
+            if not self._path_root_available(deploy_target):
+                logger.warning("部署所在磁盘/共享当前不可用，暂缓移除: %s", deploy_target)
+                return False
+        elif not self._migoto_mods_dir:
+            logger.info("未设置 3DMigoto 目录，无需取消部署")
+            return True
+        else:
+            # 必须优先使用稳定 deploy_name；源已被外删时不能再靠 is_file 推断类型。
+            stable_deploy_name = self._resolve_deploy_name(src, deploy_name)
+            deploy_target = self._migoto_mods_dir / stable_deploy_name
+
+        if not self._deploy_path_exists(deploy_target):
+            logger.info("3DMigoto 中不存在该 Mod 部署，无需移除: %s", deploy_target)
+            return True
+
+        try:
+            identity = read_source_mod_id(src) if mod_id is None else validate_mod_id(mod_id)
+            self._check_deployment_identity(deploy_target, identity)
+        except (OSError, ValueError) as error:
+            logger.error("部署身份无法确认，已取消移除 (%s): %s", deploy_target, error)
+            return False
+
+        if capture_changes and not self._capture_newer_deployed_inis(src, deploy_target):
+            logger.error("部署 ini 回收失败，为防止数据丢失已取消移除: %s", deploy_target)
+            return False
+        return self._remove_deploy(deploy_target, mod_id=identity)
+
+    # 源目录操作
+
+    @library_mutation
+    def copy_mod(
+        self,
+        src: str | Path,
+        dst_parent: str | Path,
+        *,
+        checkpoint=None,
+        should_cancel=None,
+        progress_cb=None,
+    ) -> Path | None:
+        """在锁内为目标分配唯一名称并复制 Mod。
+
+        重名时追加序号，保留原始扩展名，避免并发名称检查与复制之间发生覆盖。
+        """
+        src = Path(src)
+        dst_parent = Path(dst_parent)
+
+        if not fs.exists(src):
+            logger.error("源 Mod 不存在: %s", src)
+            return None
+
+        fs.ensure_dir(dst_parent)
+
+        # 全程锁内：分配唯一目标 + 实际复制
+        with _FS_OP_LOCK:
+            dst = dst_parent / src.name
+
+            if _is_name_taken(dst):
+                # 保留原始扩展名（仅文件有 suffix）
+                suffix = src.suffix if fs.is_file(src) else ""
+                base = src.stem if fs.is_file(src) else src.name
+                counter = 1
+                while _is_name_taken(dst):
+                    dst = dst_parent / f"{base}_{counter}{suffix}"
+                    counter += 1
+
+            try:
+                fs.copy_path(
+                    src,
+                    dst,
+                    checkpoint=checkpoint,
+                    should_cancel=should_cancel,
+                    progress_cb=progress_cb,
+                )
+                logger.info("Mod 已复制到 library: %s -> %s", src, dst)
+                return dst
+            except OSError as e:
+                logger.error("复制 Mod 失败: %s", e)
+                # 清理可能的半成品
+                try:
+                    if fs.is_dir(dst):
+                        fs.rmtree(dst, ignore_errors=True)
+                    elif fs.is_file(dst):
+                        fs.unlink(dst, missing_ok=True)
+                except OSError:
+                    pass
+                return None
+
+    @library_mutation
+    def copy_mod_into_container(
+        self,
+        src: str | Path,
+        dst_parent: str | Path,
+        *,
+        content_hash: str,
+        source_name: str = "",
+        mod_id: str | None = None,
+        imported_at: str | None = None,
+        checkpoint=None,
+        should_cancel=None,
+        progress_cb=None,
+        before_create=None,
+    ) -> Path | None:
+        """将 Mod 本体复制到新容器并返回本体路径。
+
+        容器包含身份标记及同基名的文件夹或归档；重名时同时调整容器和本体名称。
+        目标名称预留和创建在锁内完成，避免并发覆盖。
+        source_name 可提供原始文件名；仅使用其安全基名，源路径和归档后缀保持不变。
+        """
+        src = Path(src)
+        dst_parent = Path(dst_parent)
+        if not fs.exists(src):
+            logger.error("源 Mod 不存在: %s", src)
+            return None
+
+        fs.ensure_dir(dst_parent)
+        is_file = fs.is_file(src)
+        base = src.stem if is_file else src.name
+        suffix = src.suffix if is_file else ""
+        if source_name:
+            from src.core.mod_manager import _sanitize_folder_name
+
+            original = PureWindowsPath(source_name.strip())
+            candidate = _sanitize_folder_name(original.stem, fallback="")
+            is_reserved = getattr(ntpath, "isreserved", None)
+            reserved = is_reserved(candidate) if is_reserved is not None else PureWindowsPath(candidate).is_reserved()
+            if candidate and not reserved:
+                base = candidate
+
+        with _FS_OP_LOCK:
+            # 分配唯一容器名称，同时检查同名目录和归档。
+            container = dst_parent / base
+            if _is_name_taken(container):
+                counter = 1
+                while _is_name_taken(dst_parent / f"{base}_{counter}"):
+                    counter += 1
+                container = dst_parent / f"{base}_{counter}"
+                base = container.name
+
+            body = container / f"{base}{suffix}"
+            if before_create is not None:
+                before_create(container)
+            try:
+                fs.ensure_dir(container, exist_ok=False)
+                fs.copy_path(
+                    src,
+                    body,
+                    checkpoint=checkpoint,
+                    should_cancel=should_cancel,
+                    progress_cb=progress_cb,
+                )
+            except OSError as e:
+                logger.error("复制 Mod 到容器失败: %s", e)
+                fs.rmtree(container, ignore_errors=True)
+                return None
+
+        try:
+            from src.core.mod_package import write_container_marker
+
+            marker_written = write_container_marker(
+                container,
+                body.name,
+                content_hash,
+                mod_id=mod_id,
+                imported_at=imported_at or datetime.now().isoformat(),
+            )
+        except Exception as e:
+            logger.error("写容器 marker 失败，已回滚导入产物: %s", e)
+            marker_written = False
+        if not marker_written:
+            fs.rmtree(container, ignore_errors=True)
+            return None
+        logger.info("Mod 已复制进容器: %s -> %s", src, body)
+        return body
+
+    @staticmethod
+    def source_delete_target(source_path: str | Path) -> Path:
+        """返回本体路径或其完整受管容器。"""
+        path = Path(fs.normal_path(source_path))
+        parent = path.parent
+        if fs.is_file(parent / MOD_CONTAINER_MARKER):
+            return parent
+        if fs.is_dir(path) and fs.is_file(path / MOD_CONTAINER_MARKER):
+            return path
+        return path
+
+    def ensure_source_recycle_compatible(self, source_path: str | Path) -> None:
+        """回收站接口无法处理路径树时，在撤销部署前报告失败。"""
+        target = self.source_delete_target(source_path)
+        if fs.exists(target):
+            fs.ensure_recycle_bin_compatible(target)
+
+    @library_mutation
+    def delete_source(
+        self,
+        source_path: str | Path,
+        *,
+        delete_method: str = "permanent",
+    ) -> bool:
+        """删除源 Mod，可选择永久删除或移入回收站。
+
+        源位于容器中时一并删除整个容器及其身份、元数据，避免留下不完整目录。
+        """
+        if delete_method not in ("permanent", "recycle_bin"):
+            raise ValueError(tr("未知 Mod 删除方式: {delete_method}", delete_method=delete_method))
+
+        target = self.source_delete_target(source_path)
+        if not fs.exists(target):
+            logger.warning("要删除的 Mod 不存在: %s", target)
+            return True
+
+        if delete_method == "recycle_bin":
+            try:
+                fs.move_to_trash(target)
+                logger.info("Mod 已移入回收站: %s", target)
+                return True
+            except fs.RecycleBinError as e:
+                logger.warning("Mod 无法移入回收站 (%s): %s", target, e)
+                raise
+
+        try:
+            if fs.is_file(target):
+                fs.unlink(target)
+                logger.info("Mod 源文件已删除: %s", target)
+            else:
+                fs.rmtree(target)
+                logger.info("Mod 源文件夹已删除: %s", target)
+            return True
+        except OSError as e:
+            logger.error("删除 Mod 源失败: %s", e)
+            return False
