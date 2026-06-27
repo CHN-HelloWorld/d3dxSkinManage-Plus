@@ -350,3 +350,299 @@ class ModStorage:
                 if getattr(error, "winerror", None) not in (5, 32, 33) or remaining <= 0:
                     raise
                 time.sleep(min(0.05, remaining))
+
+    @library_mutation
+    def materialize_deployment(
+        self,
+        source_path: str | Path,
+        mod_id: str,
+        deploy_name: str,
+        *,
+        active: bool = True,
+        progress_cb=None,
+        should_cancel=None,
+    ) -> Path:
+        """通过临时禁用目录和原子改名创建物理部署。"""
+        source = Path(source_path)
+        validate_mod_id(mod_id)
+        if read_source_mod_id(source) != mod_id:
+            raise IdentityConflict(tr("源 Mod 与部署的 mod_id 不一致：{source}", source=source))
+        active_path, disabled_path, partial_path = self.deployment_paths(mod_id, deploy_name)
+        if not self._path_root_available(active_path):
+            raise OSError(f"deployment root is offline: {active_path.anchor}")
+        for path in (active_path, disabled_path, partial_path):
+            if self._deploy_path_exists(path):
+                raise FileExistsError(f"deployment invariant conflict: {path}")
+        if not fs.exists(source):
+            raise FileNotFoundError(str(source))
+
+        def cancelled() -> bool:
+            """读取可选取消回调并转换为布尔值，供部署复制过程检查。"""
+            return bool(should_cancel is not None and should_cancel())
+
+        # 资源库中的本体使用受支持的归档格式。
+        # 不支持的源格式直接拒绝，不转换为目录复制。
+        try:
+            if fs.is_file(source) and is_resident_archive(source):
+                from src.services.archive import ArchiveService
+
+                extracted = ArchiveService().extract(
+                    source,
+                    partial_path,
+                    progress_cb=progress_cb,
+                    should_cancel=should_cancel,
+                )
+                if cancelled():
+                    raise InterruptedError("deployment materialization cancelled")
+                if extracted is None:
+                    raise OSError(tr("解压失败，无法部署 Mod：{name}", name=source.name))
+                extracted_path = Path(extracted)
+                if self._path_key(extracted_path) != self._path_key(partial_path):
+                    if extracted_path.parent != partial_path:
+                        raise OSError(f"archive escaped partial path: {extracted_path}")
+                    for child in list(extracted_path.iterdir()):
+                        self._rename_staged_deployment(child, partial_path / child.name, should_cancel)
+                    extracted_path.rmdir()
+            else:
+                raise ValueError(f"unsupported deployment source: {source}")
+            if cancelled():
+                raise InterruptedError("deployment materialization cancelled")
+            from src.core.mod_package import list_overrides
+
+            self._strip_deployed_meta(partial_path)
+            self._apply_overrides_to_deploy(source, partial_path, list_overrides(str(source)))
+            from src.models.mod import Mod
+
+            write_deployment_identity(partial_path, mod_id, Mod.compute_sha1(source))
+
+            if not partial_path.is_dir():
+                raise OSError(f"partial deployment is not a directory: {partial_path}")
+            with _DEPLOYMENT_PUBLISH_LOCK:
+                # 解压期间同名位置可能被其他 Mod 占用，发布时重新选择名称而不覆盖。
+                active_path = self.active_deployment_path(mod_id, deploy_name)
+                disabled_path = active_path.with_name(self._parked_deploy_name(mod_id, active_path.name))
+                target = active_path if active else disabled_path
+                if os.path.lexists(target):
+                    raise FileExistsError(f"deployment target is occupied: {target}")
+                self._rename_staged_deployment(partial_path, target, should_cancel)
+            if self._deploy_path_exists(partial_path) or not self._deploy_path_exists(target):
+                raise OSError("materialize invariant verification failed")
+            return target
+        except Exception:
+            if self._deploy_path_exists(partial_path):
+                self._remove_deploy(partial_path)
+            raise
+
+    # 部署 / 取消部署
+
+    @library_mutation
+    def deploy_mod(self, source_path: str | Path, progress_cb=None, deploy_name: str = "") -> Path | None:
+        """通过暂存部署流程更新受管源自身的副本。"""
+        source = Path(source_path)
+        if self._migoto_mods_dir is None:
+            logger.warning("未配置部署目录，无法部署 Mod")
+            return None
+        try:
+            identity = read_source_mod_id(source)
+            name = self._resolve_deploy_name(source, deploy_name)
+            existing = self.scan_deployments(force=True).get(identity)
+            if existing is not None:
+                if existing.active:
+                    name = existing.path.name
+                if not self.undeploy_mod(source, deploy_path=existing.path, mod_id=identity):
+                    raise OSError(tr("旧部署无法移除：{path}", path=existing.path))
+            return self.materialize_deployment(source, identity, name, progress_cb=progress_cb)
+        except Exception as error:
+            logger.error("Mod 部署失败：%s", error)
+            return None
+
+    def _apply_overrides_to_deploy(
+        self,
+        src_body: Path,
+        deploy_target: Path,
+        overrides: list[str],
+    ) -> None:
+        """将容器 INI 覆盖文件关联到部署目录中的对应相对路径。
+
+        依次尝试符号链接、硬链接和复制。链接成功后两侧共享修改，
+        复制方式由 ini_sync 执行双向同步。
+        """
+        if not overrides:
+            return
+        from src.core.mod_package import override_path_for, read_override
+
+        for rel in overrides:
+            try:
+                op = override_path_for(str(src_body), rel)
+                target = Path(deploy_target) / rel
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if op is not None and Path(op).is_file():
+                    # 覆盖文件存在时建立链接，使部署与源覆盖文件共享内容。
+                    self.link_ini(Path(op), target)
+                    continue
+                # 覆盖文件缺失时写入已读取的有效内容。
+                text = read_override(str(src_body), rel)
+                if text is None:
+                    continue
+                write_ini_preserve_link(target, text)
+            except OSError as e:
+                logger.warning("关联 override 到部署产物失败 (%s): %s", rel, e)
+
+    def _capture_newer_deployed_inis(
+        self,
+        src_body: Path,
+        deploy_target: Path,
+    ) -> bool:
+        """移除或替换部署前，将独立副本中的最新 INI 保存到覆盖目录。
+
+        应用关闭期间没有同步基线，因此根据磁盘内容和修改时间判断来源。
+        共享链接或内容相同时无需复制；内容不同时保留较新的版本，时间相同时采用部署内容。
+        返回 False 表示必要写入失败，调用方须保留部署。
+        """
+        src_body = Path(src_body)
+        deploy_target = Path(deploy_target)
+
+        # junction/symlink 整目录部署：用户改部署就是改源本体，不存在独立副本丢失问题。
+        if not deploy_target.is_dir() or deploy_target.is_symlink() or self._is_junction(deploy_target):
+            return True
+
+        from src.core.mod_package import (
+            META_DIR,
+            iter_effective_inis,
+            override_path_for,
+            resolve_ini_overrides_dir,
+            write_override,
+        )
+
+        # 非容器路径没有覆盖目录，不修改源本体。
+        if resolve_ini_overrides_dir(str(src_body)) is None:
+            return True
+
+        try:
+            effective = {
+                rel.replace("\\", "/").casefold(): text.encode("utf-8", errors="surrogateescape")
+                for rel, text in iter_effective_inis(str(src_body))
+            }
+        except Exception as e:
+            # 即使来源读取失败也继续：部署副本是即将被删除的最后一份数据，后面会将其
+            # 写进 override。这里只记录诊断，不把“读不到来源”误当成“没有修改”。
+            logger.warning("读取有效 ini 失败，将优先保全旧部署副本: %s", e)
+            effective = {}
+
+        failures = 0
+        captured = 0
+        try:
+            deployed_inis = sorted(p for p in deploy_target.rglob("*") if p.is_file() and p.suffix.lower() == ".ini")
+        except OSError as e:
+            logger.warning("扫描旧部署 ini 失败 (%s): %s", deploy_target, e)
+            return False
+
+        for deployed in deployed_inis:
+            try:
+                rel_path = deployed.relative_to(deploy_target)
+            except ValueError:
+                continue
+            if META_DIR in rel_path.parts:
+                continue
+            rel = rel_path.as_posix()
+
+            try:
+                deployed_data = deployed.read_bytes()
+            except OSError as e:
+                logger.warning("读取旧部署 ini 失败 (%s): %s", deployed, e)
+                failures += 1
+                continue
+
+            if effective.get(rel.casefold()) == deployed_data:
+                continue
+
+            # 找到当前来源的磁盘时间。已有 override 最精确；文件夹本体可定位到单文件；
+            # 归档本体则以归档 mtime 作为整体版本时间。
+            reference: Path | None = None
+            op = override_path_for(str(src_body), rel)
+            if op is not None and Path(op).is_file():
+                reference = Path(op)
+            elif src_body.is_dir() and (src_body / rel_path).is_file():
+                reference = src_body / rel_path
+            elif src_body.is_file():
+                reference = src_body
+
+            try:
+                deployed_mtime = deployed.stat().st_mtime_ns
+            except OSError:
+                deployed_mtime = 0
+            try:
+                reference_mtime = reference.stat().st_mtime_ns if reference else -1
+            except OSError:
+                reference_mtime = -1
+
+            if reference_mtime > deployed_mtime:
+                logger.info("旧部署 ini 与来源不同，但来源更新，保留来源: %s", rel)
+                continue
+
+            text = deployed_data.decode("utf-8", errors="surrogateescape")
+            if write_override(str(src_body), rel, text):
+                effective[rel.casefold()] = deployed_data
+                captured += 1
+                logger.info("已回收旧部署 ini 修改: %s", rel)
+            else:
+                failures += 1
+
+        if captured:
+            logger.info("旧部署 ini 回收完成: %s（%d 个）", deploy_target, captured)
+        return failures == 0
+
+    def link_ini(self, override_path: Path, deploy_path: Path) -> str:
+        """将部署 INI 关联到覆盖文件，并返回实际采用的方式。
+
+        优先创建符号链接，其次尝试同卷硬链接，均不可用时复制内容并由同步器维持一致。
+        创建前移除现有目标以保持幂等。链接建立后须就地写入，避免原子替换破坏链接关系。
+        """
+        override_path = Path(override_path)
+        deploy_path = Path(deploy_path)
+        # 创建链接前移除现有目标。
+        try:
+            if deploy_path.is_symlink() or deploy_path.exists():
+                deploy_path.unlink()
+        except OSError:
+            try:
+                if deploy_path.exists():
+                    deploy_path.unlink()
+            except OSError:
+                pass
+        # ① symlink 优先
+        try:
+            os.symlink(str(override_path), str(deploy_path))
+            logger.debug("ini 已软链接: %s -> %s", deploy_path, override_path)
+            return "symlink"
+        except (OSError, NotImplementedError, AttributeError):
+            pass
+        # ② hardlink 回退（同卷）
+        try:
+            os.link(str(override_path), str(deploy_path))
+            logger.debug("ini 已硬链接: %s == %s", deploy_path, override_path)
+            return "hardlink"
+        except OSError:
+            pass
+        # 链接不可用时复制内容；使用就地写入以保留可能存在的链接关系。
+        try:
+            data = override_path.read_bytes()
+            write_ini_preserve_link(deploy_path, data.decode("utf-8", errors="surrogateescape"))
+            logger.debug("ini 链接不可用，回退复制: %s", deploy_path)
+        except OSError as e:
+            logger.warning("INI 复制回退失败 (%s): %s", deploy_path, e)
+        return "copy"
+
+    def _strip_deployed_meta(self, target: Path) -> None:
+        """移除真实部署目录中的元数据。
+
+        归档整体解压后需单独清理元数据成员；目录链接与源共享内容，不能在此删除其元数据。
+        """
+        try:
+            from src.core.mod_package import META_DIR
+
+            meta = Path(target) / META_DIR
+            if meta.is_dir() and not meta.is_symlink():
+                shutil.rmtree(str(meta), ignore_errors=True)
+        except Exception as e:
+            logger.warning("清理部署产物 sidecar 失败: %s", e)
