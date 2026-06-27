@@ -189,3 +189,69 @@ class ModStorage:
         if any(sep in raw for sep in ("/", "\\")):
             raise ValueError(f"invalid deploy name: {deploy_name!r}")
         return raw
+
+    def deployment_paths(self, mod_id: str, deploy_name: str) -> tuple[Path, Path, Path]:
+        """生成同一 Mod 的活动、停放及未完成部署路径，要求已配置部署根且身份有效。"""
+        root = self._migoto_mods_dir
+        if root is None:
+            raise RuntimeError("3DMigoto Mods directory is not configured")
+        validate_mod_id(mod_id)
+        name = self.active_deployment_path(mod_id, deploy_name).name
+        token = mod_id[:12]
+        disabled = root / f"{MIGOTO_DISABLED_PREFIX}_{token}_{name}"
+        return root / name, disabled, disabled.with_name(disabled.name + ".partial")
+
+    def active_deployment_path(self, mod_id: str, deploy_name: str) -> Path:
+        """保留可读名称，通过持久身份区分已占用名称。"""
+        validate_mod_id(mod_id)
+        root = self._migoto_mods_dir
+        if root is None:
+            raise RuntimeError("3DMigoto Mods directory is not configured")
+        name = self.safe_deploy_name(deploy_name)
+        for candidate in (name, f"{name[:180]}_{mod_id[:12]}", f"{name[:180]}_{mod_id}"):
+            target = root / candidate
+            if not os.path.lexists(target):
+                return target
+            identity = read_deployment_identity(target) if target.is_dir() else None
+            if identity is not None and identity["mod_id"] == mod_id:
+                return target
+        raise IdentityConflict(tr("部署目录被其他内容占用：{name}", name=name))
+
+    def scan_deployments(self, remembered_paths=(), *, force: bool = False):
+        """共用带轮询缓存的部署目录清单。
+
+        改名立即改变根时间戳；周期扫描补查标记变化，修改和重建操作使用新清单。
+        """
+        roots = []
+        if self._migoto_mods_dir is not None:
+            roots.append(self._migoto_mods_dir)
+        roots.extend(Path(path).parent for path in remembered_paths if path)
+        roots = list({self._path_key(root): Path(root) for root in roots}.values())
+        state = scan_deployment_inventory(roots, self.deployment_inventory_snapshot(), force=force)
+        self.adopt_deployment_inventory(state)
+        return {location.mod_id: location for location in state.locations}
+
+    def deployment_inventory_snapshot(self) -> DeploymentInventory:
+        """返回与当前修改代次匹配的部署清单快照，缓存失效时返回空清单。"""
+        if self._identity_cache_epoch != self._library_epoch:
+            return DeploymentInventory()
+        return DeploymentInventory(
+            self._identity_cache_signature or (), self._identity_cache_time, tuple(self._identity_cache.values())
+        )
+
+    def adopt_deployment_inventory(self, state: DeploymentInventory) -> None:
+        """仅供所有者线程调用，周期任务须先验证令牌。"""
+        self._identity_cache_signature = state.signature
+        self._identity_cache_time = state.scanned_at
+        self._identity_cache = {location.mod_id: location for location in state.locations}
+        self._identity_cache_epoch = self._library_epoch
+
+    @staticmethod
+    def active_name_from_parked(path: str | Path, mod_id: str) -> str:
+        """剥离包含身份或普通形式的禁用前缀，恢复活动部署名称。"""
+        name = Path(path).name
+        prefix = f"{MIGOTO_DISABLED_PREFIX}_{mod_id[:12]}_"
+        if name.casefold().startswith(prefix.casefold()):
+            return name[len(prefix) :]
+        prefix = f"{MIGOTO_DISABLED_PREFIX}_"
+        return name[len(prefix) :] if name.casefold().startswith(prefix.casefold()) else name
