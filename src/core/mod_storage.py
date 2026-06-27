@@ -255,3 +255,98 @@ class ModStorage:
             return name[len(prefix) :]
         prefix = f"{MIGOTO_DISABLED_PREFIX}_"
         return name[len(prefix) :] if name.casefold().startswith(prefix.casefold()) else name
+
+    @staticmethod
+    def _parked_deploy_name(mod_id: str, deploy_name: str) -> str:
+        """由有效身份片段和安全部署名生成停放目录名，空身份会被拒绝。"""
+        token = "".join(ch for ch in str(mod_id) if ch.isalnum())[:12]
+        if not token:
+            raise ValueError("mod_id is empty")
+        return f"{MIGOTO_DISABLED_PREFIX}_{token}_{ModStorage.safe_deploy_name(deploy_name)}"
+
+    @staticmethod
+    def _check_deployment_identity(deploy_path: str | Path, mod_id: str) -> dict:
+        """同步或移除已定位路径前重新读取其归属。"""
+        validate_mod_id(mod_id)
+        identity = read_deployment_identity(deploy_path)
+        if identity is None or identity["mod_id"] != mod_id:
+            raise IdentityConflict(tr("部署目录身份不符，保留原目录：{deploy_path}", deploy_path=deploy_path))
+        return identity
+
+    @library_mutation
+    def park_deployment(self, deploy_path: str | Path, mod_id: str) -> Path | None:
+        """原子停放活动部署，不覆盖任一目标。"""
+        source = Path(deploy_path)
+        if self._migoto_mods_dir is None or not self._path_root_available(source):
+            return None
+        try:
+            self._check_deployment_identity(source, mod_id)
+            parked = source.with_name(self._parked_deploy_name(mod_id, source.name))
+        except (OSError, ValueError):
+            return None
+        try:
+            if self._deploy_path_exists(parked):
+                logger.error("停放目标已存在，拒绝覆盖: %s", parked)
+                return None
+            if not self._deploy_path_exists(source):
+                return None
+            os.replace(str(source), str(parked))
+            if self._deploy_path_exists(source) or not self._deploy_path_exists(parked):
+                raise OSError("park invariant verification failed")
+            logger.info("部署已停放: %s -> %s", source, parked)
+            return parked
+        except OSError as e:
+            logger.warning("停放部署失败 (%s): %s", source, e)
+            return None
+
+    @library_mutation
+    def restore_parked_deployment(
+        self,
+        parked_path: str | Path,
+        deploy_name: str,
+    ) -> Path | None:
+        """把预设缓存目录恢复成启用名；目标被占用时拒绝覆盖。"""
+        parked = Path(parked_path)
+        root = self._migoto_mods_dir
+        if root is None or not self._path_root_available(parked):
+            return None
+        target = parked.parent / self.safe_deploy_name(deploy_name)
+        try:
+            if self._deploy_path_exists(target):
+                logger.warning("恢复停放部署时目标已存在，拒绝覆盖: %s", target)
+                return None
+            if not self._deploy_path_exists(parked):
+                return None
+            os.replace(str(parked), str(target))
+            if self._deploy_path_exists(parked) or not self._deploy_path_exists(target):
+                raise OSError("restore invariant verification failed")
+            logger.info("部署已恢复: %s -> %s", parked, target)
+            return target
+        except OSError as e:
+            logger.warning("恢复停放部署失败 (%s): %s", parked, e)
+            return None
+
+    @staticmethod
+    def _path_key(path: str | Path) -> str:
+        """生成部署路径的绝对且按平台规范大小写的比较键。"""
+        return os.path.normcase(os.path.abspath(str(path)))
+
+    @staticmethod
+    def _rename_staged_deployment(source: Path, target: Path, should_cancel=None) -> None:
+        """等待 Windows 的短暂目录占用解除后再判定失败。"""
+        deadline = time.monotonic() + 1.0
+        while True:
+            if should_cancel is not None and should_cancel():
+                raise InterruptedError("deployment materialization cancelled")
+            if os.path.lexists(fs.native_path(target)):
+                raise FileExistsError(f"deployment target is occupied: {target}")
+            try:
+                os.rename(fs.native_path(source), fs.native_path(target))
+                return
+            except OSError as error:
+                # 子目录共享句柄也可能暂时阻止父目录移动；
+                # 不重新解压或改用复制，仅在原子改名成功后发布。
+                remaining = deadline - time.monotonic()
+                if getattr(error, "winerror", None) not in (5, 32, 33) or remaining <= 0:
+                    raise
+                time.sleep(min(0.05, remaining))
