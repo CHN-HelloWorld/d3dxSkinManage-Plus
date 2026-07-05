@@ -536,3 +536,215 @@ class LibraryDiscoveryController(QObject):
     def _valid(self):
         """返回当前规划是否仍满足发现请求的范围和版本约束。"""
         return self._current()
+
+    def _retry(self, *, delay=0):
+        """撤销当前准备状态并重新合并请求，优先接续已有完整审计，必要时延迟重试。"""
+        self._cancel_capture()
+        active, self.active = self.active, None
+        self.planning = False
+        self._prepared = None
+        self._probe_ready = False
+        if active and active["game_id"] == self.manager.current_game_id and not self.closing:
+            # 并发导入可能使发现结果失效，按当前已接受证据重新采集路径；显式请求仍单独调度。
+            join = (
+                not delay
+                and self.pending is None
+                and active["changed_paths"] is None
+                and getattr(self.probe, "current_full_audit_state", lambda *a, **kw: None)(
+                    active["game_id"], force_source_audit=active["force_source_audit"]
+                )
+            )
+            if join:
+                self._prepare_timer.stop()
+                self._enqueue(active, start=False)
+                if join == "settled":
+                    self._start_after_probe()
+                return
+            self._enqueue(active, start=not delay)
+        elif self.pending and not self.closing and not delay:
+            self._schedule_probe()
+        if delay and self.pending and not self.closing:
+            self._error_retry.start(delay)
+
+    def _finished(self):
+        """回收发现线程并记录耗时；错误或过期结果重新排队，有效结果交给规划阶段。"""
+        worker, self.worker = self.worker, None
+        self.metrics["completed"] += 1
+        self.metrics["worker_ms"].append(worker.elapsed_ms)
+        worker.deleteLater()
+        if self.closing:
+            self.stopped.emit()
+            return
+        if not self._current() or worker.error:
+            self.metrics["discarded"] += 1
+            failed = worker.error and not isinstance(worker.error, InterruptedError)
+            if failed:
+                logger.warning("Library discovery preserved current state: %s", worker.error)
+            self._retry(delay=1000 if failed else 0)
+            return
+        self._prepared = worker.result
+        self._begin_plan()
+
+    def _begin_plan(self):
+        """等待所需审计并核验清单一致性，将稳定候选交给分片规划，变化候选重新发现。"""
+        if (
+            self.active
+            and not self._probe_ready
+            and (self.active["force_source_audit"] or self.active["changed_paths"] is None)
+        ):
+            # 启动时可能发现离线移动的已登记容器，先恢复身份归属再导入。
+            return
+        if not self._current():
+            self.metrics["discarded"] += 1
+            self._retry()
+            return
+        if self._probe_ready and self.active["force_source_audit"] and not self._discovery_request.verify_markers:
+            before, accepted = self._discovery_request.source_inventory, self._accepted_inventory
+            matches = (
+                before is accepted
+                or (before is None and accepted is not None and not accepted.entries)
+                or (
+                    before is not None
+                    and accepted is not None
+                    and before.root == accepted.root
+                    and before.entries == accepted.entries
+                    and before.signature == accepted.signature
+                )
+            )
+            if not matches:
+                # 完整审计负责身份校验，发现语义变化时按该冻结结果重新准备，不重复全量扫描。
+                self.metrics["discarded"] += 1
+                self._prepared = None
+                self._start_worker(
+                    replace(
+                        self._discovery_request,
+                        source_inventory=accepted,
+                        verify_markers=accepted is None,
+                        audit_owns_known_checks=(
+                            accepted is not None and accepted.root == path_key(self._discovery_request.root)
+                        ),
+                    )
+                )
+                return
+        descriptors, self.report.invalid_containers = self._prepared
+        deferred = {item["path"] for item in descriptors if item.get("_deferred")}
+        if deferred:
+            self.schedule(self.active["game_id"], trigger="watcher", changed_paths=deferred)
+        descriptors = [item for item in descriptors if not item.get("_deferred")]
+        self._prepared = None
+        self._descriptors = iter(descriptors)
+        self._planning_snapshot = None
+        self.planning = True
+        self._plan_slice()
+
+    def _plan_slice(self):
+        """在界面时间片内将候选来源转换为纳管请求，受保护路径延期，已有容器按身份变更处理。"""
+        if not self._valid():
+            self._retry()
+            return
+        from src.core.mod_intake import IntakeTargetMissingError, ModIntakeService
+
+        service = ModIntakeService(self.manager)
+        start = time.perf_counter()
+        try:
+            while True:
+                if not self.planning:
+                    return
+                item = next(self._descriptors)
+                source = Path(item["path"])
+                if self.manager.is_library_path_protected(source):
+                    self.schedule(self.active["game_id"], trigger="watcher", changed_paths={str(source)})
+                    if (time.perf_counter() - start) * 1000 >= 8:
+                        self._timer.start(0)
+                        return
+                    continue
+                if self.manager._index.paths.locate(str(source)) is not None:
+                    owner = self.manager._index.paths.locate(str(source))
+                    if owner[0] == "mod":
+                        mod = self.manager.get_mod(owner[1])
+                        if mod is not None and Path(mod.path) != source:
+                            from src.core.watcher import FileChange
+
+                            service = getattr(self.manager, "_local_source_events", None)
+                            delta = self.manager.apply_local_source_events(
+                                [
+                                    FileChange(
+                                        str(self.manager._index.paths.roots[mod.game_id]),
+                                        service.generation if service is not None else 0,
+                                        "modified",
+                                        str(source.parent / ".d3dxmod"),
+                                    )
+                                ]
+                            )
+                            self.report.claimed += int(mod.mod_id in delta.changed_ids)
+                        continue  # 其他导入任务已经发布此输入。
+                managed = self.manager._is_body_in_container(source)
+                external_copy = str(source) in self.active.get("external_copy_paths", ())
+                try:
+                    self.report.intake_requests.append(
+                        service.plan_request(
+                            source_path=source,
+                            game_id=self.active["game_id"],
+                            node_id=item.get("node_id", ""),
+                            # 扫描文件名只是默认值，不覆盖分享包或受管 sidecar 的正式名称。
+                            move_source=external_copy or not managed,
+                            context="rediscovery" if managed and not external_copy else "external",
+                            external_copy=external_copy,
+                            source_version=item.get("source_version"),
+                        )
+                    )
+                except IntakeTargetMissingError:
+                    pass
+                if not self.planning:
+                    return
+                if (time.perf_counter() - start) * 1000 >= 8:
+                    self._timer.start(0)
+                    return
+        except StopIteration:
+            self._finish()
+        except Exception:
+            logger.exception("Could not plan discovered library inputs")
+            self._retry(delay=1000)
+        finally:
+            self.metrics["planning_slice_ms"].append((time.perf_counter() - start) * 1000)
+
+    def _finish(self):
+        """等候强审计完成后交付发现报告与请求选项，再推进下一项待处理请求。"""
+        if self.active["force_source_audit"] and not self._probe_ready:
+            self._awaiting_audit = True
+            self.planning = False
+            return
+        options, self.active = self.active, None
+        self.planning = False
+        self.consume(self.report, options)
+        if self.pending:
+            self._schedule_probe()
+
+    def cancel(self, *, cancel_probe=True):
+        """丢弃当前刷新尚未提交的暂存项，允许新的刷新开始。"""
+        self._source_generation += 1
+        self._cancel_capture()
+        self.pending = self.active = None
+        self._prepared = None
+        self._probe_ready = False
+        self._accepted_inventory = None
+        self._awaiting_audit = False
+        self.planning = False
+        self._timer.stop()
+        self._prepare_timer.stop()
+        self._error_retry.stop()
+        if self.worker:
+            self.worker.requestInterruption()
+        if cancel_probe:
+            self.probe.cancel()
+
+    def stop(self):
+        """关闭发现控制器并取消当前流程，同时保留独立探测器的生命周期。"""
+        self.closing = True
+        self.cancel(cancel_probe=False)
+
+    def resume(self):
+        """解除关闭状态，并为当前游戏重新安排一次手动强审计。"""
+        self.closing = False
+        if self.manager.current_game_id:
+            self.schedule(self.manager.current_game_id, trigger="manual")
