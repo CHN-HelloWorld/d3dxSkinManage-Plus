@@ -287,3 +287,118 @@ def animate_fixed_width(
     group.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
     widget._width_anim = group  # type: ignore[attr-defined]  # 保活引用
     return group
+
+
+# 顶级窗口淡入（windowOpacity，原生 alpha，不用 QGraphicsEffect）
+
+# 适用的顶层窗口使用原生透明度淡入，避免整棵控件树重复进行离屏合成。
+# 原生亚克力窗口使用独立的位移动画入口。
+
+
+def fade_in_window(
+    window: QWidget | None,
+    duration: int | None = None,
+) -> QPropertyAnimation | None:
+    """对顶层窗口应用整体透明度淡入。
+
+    显示事件在首帧前设置动画起点，避免先完整显示再变透明。
+    """
+    if not _enabled or window is None:
+        return None
+    anim = QPropertyAnimation(window, b"windowOpacity", window)
+    anim.setDuration(duration or DURATION["normal"])
+    anim.setStartValue(0.0)
+    anim.setEndValue(1.0)
+    anim.setEasingCurve(_EASE)
+    # 结束时恢复完全不透明，避免窗口保留中间状态。
+    anim.finished.connect(lambda: _safe_set_window_opacity(window, 1.0))
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    window._win_fade_anim = anim  # type: ignore[attr-defined]  # 保活引用
+    return anim
+
+
+def _safe_set_window_opacity(window: QWidget, value: float) -> None:
+    """设置窗口透明度，忽略动画期间窗口已经销毁的情况。"""
+    try:
+        window.setWindowOpacity(value)
+    except RuntimeError:  # 窗口已析构
+        pass
+
+
+class _IntroFadeFilter(QObject):
+    """首次显示时播放一次窗口淡入，随后移除事件过滤器。"""
+
+    def __init__(self, target: QWidget, duration: int | None) -> None:
+        """保存目标窗口和动画时长，并初始化首次显示标记。"""
+        super().__init__(target)
+        self._target = target
+        self._duration = duration
+        self._done = False
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
+        """仅在目标窗口首次显示时启动窗口淡入动画。"""
+        if not self._done and obj is self._target and event.type() == QEvent.Type.Show:
+            self._done = True
+            fade_in_window(self._target, self._duration)
+        return False
+
+
+def install_intro_fade(
+    window: QWidget | None,
+    duration: int | None = None,
+) -> None:
+    """安装首次显示淡入过滤器，无需修改窗口基类；动画禁用时不安装。"""
+    if not _enabled or window is None:
+        return
+    filt = _IntroFadeFilter(window, duration)
+    window.installEventFilter(filt)
+    window._intro_fade_filter = filt  # type: ignore[attr-defined]  # 保活引用
+
+
+# 页面 / 分区进入：从下方上滑到位（纯几何位移，不用 effect）
+
+# 页面包含 QScrollArea/QAbstractScrollArea，QGraphicsOpacityEffect 对其视口的合成不可靠。
+# 位移动画可避开该限制，同时省去离屏 pixmap 渲染。
+
+
+def _safe_move(widget: QWidget, pos: QPoint) -> None:
+    """移动仍有效的控件，忽略动画期间对象销毁导致的异常。"""
+    try:
+        widget.move(pos)
+    except RuntimeError:
+        pass
+
+
+# 切页交叉淡出：旧页快照盖在上面淡出，露出新页（= 淡出旧 → 淡入新）
+
+# 快照自己绘制透明度，避免 QGraphicsOpacityEffect 的 drawSource 快捷路径在
+# QWidget.render 的前景捕获中重复应用容器偏移。新页的滚动区与卡片 effect 不变。
+
+
+class _PageSnapshot(QWidget):
+    """以旧页面快照覆盖新页面完成淡出，超时、切页或尺寸变化时自动释放。"""
+
+    def __init__(self, container: QWidget, snapshot: QPixmap, duration: int):
+        """保存页面快照并启动到期清理，同时订阅容器尺寸、隐藏和切页事件。"""
+        super().__init__(container)
+        self.setAttribute(Qt.WidgetAttribute.WA_NoSystemBackground)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._snapshot = snapshot
+        self._opacity = 1.0
+        self._duration = duration
+        self._elapsed = QElapsedTimer()
+        self._elapsed.start()
+        self._finished = False
+        self._expiry = QTimer(self)
+        self._expiry.setSingleShot(True)
+        self._expiry.setTimerType(Qt.TimerType.PreciseTimer)
+        self._expiry.timeout.connect(self.finish)
+        self._expiry.start(duration)
+        container.installEventFilter(self)
+        if isinstance(container, QStackedWidget):
+            container.currentChanged.connect(self.finish)
+
+    @Property(float)
+    def opacity(self):
+        """返回当前快照叠加层的不透明度。"""
+        return self._opacity
