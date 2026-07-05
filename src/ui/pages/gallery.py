@@ -684,3 +684,169 @@ class GalleryPage(QWidget):
             return False
         self._vs_apply_preview(item, image)
         return True
+
+    def _vs_prepare_prefetch(self, first_idx: int, last_idx: int) -> None:
+        """按可见区距离准备邻近图片预取，跳过隐藏成人预览、已有缓存和正在请求的路径。"""
+        if not image_cache_budget.prefetch_allowed:
+            self._vs_pending_prefetch = []
+            return
+        rows = max(1, (self._scroll_area.viewport().height() + self._vs_row_h - 1) // self._vs_row_h)
+        row = self._scroll_area.verticalScrollBar().value() // self._vs_row_h
+        first = max(0, row - rows) * self._vs_cols
+        last = min(len(self._mods), (row + 2 * rows + 1) * self._vs_cols)
+        indices = [i for i in range(first, last) if self._mods[i].mod_id not in self._vs_card_cache]
+        indices.sort(key=lambda i: max(first_idx - i, i - last_idx, 0))
+        self._vs_pending_prefetch = []
+        for i in indices:
+            mod = self._mods[i]
+            if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+                continue
+            path = str(mod.primary_preview or "")
+            request = self._vs_image_requests.get(mod.mod_id)
+            if (
+                path
+                and not (request and request[2] == path)
+                and cached_preview(path, self._preview_size(), auto_transform=True, validate=False) is None
+            ):
+                self._vs_pending_prefetch.append((mod.mod_id, path))
+
+    def _vs_schedule_pixmaps(self) -> None:
+        """在总请求和预取上限内安排下一批图片加载，已有定时任务时合并调度。"""
+        prefetch_count = sum(card is None for _req, card, _path in self._vs_image_requests.values())
+        has_work = self._vs_pending_pixmap_items or (
+            image_cache_budget.prefetch_allowed
+            and self._vs_pending_prefetch
+            and prefetch_count < self._MAX_PREFETCH_REQUESTS
+        )
+        if (
+            has_work
+            and len(self._vs_image_requests) < self._MAX_IMAGE_REQUESTS
+            and not self._vs_pixmap_timer.isActive()
+        ):
+            self._vs_pixmap_timer.start()
+
+    def _vs_load_deferred_pixmaps(self):
+        """优先加载可见预览，再利用空闲容量预取。"""
+        if not image_cache_budget.prefetch_allowed:
+            self._vs_pending_prefetch = []
+        for _ in range(self._PIXMAP_BATCH_SIZE):
+            if len(self._vs_image_requests) >= self._MAX_IMAGE_REQUESTS:
+                break
+            if self._vs_pending_pixmap_items:
+                mod_id, item = self._vs_pending_pixmap_items.pop(0)
+                if self._vs_card_cache.get(mod_id) is not item:
+                    continue
+                if item._preview_resolved:
+                    item._preview_requested = False
+                    continue
+                mod = item._mod
+                if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+                    item._preview_requested = False
+                    item._preview_resolved = True
+                    continue
+                path = mod.primary_preview
+                if not path:
+                    item.set_no_preview()
+                    continue
+                if self._vs_restore_preview(item):
+                    continue
+            else:
+                prefetch_count = sum(c is None for _r, c, _p in self._vs_image_requests.values())
+                if not self._vs_pending_prefetch or prefetch_count >= self._MAX_PREFETCH_REQUESTS:
+                    break
+                mod_id, path = self._vs_pending_prefetch.pop(0)
+                item = None
+                if cached_preview(path, self._preview_size(), auto_transform=True, validate=False) is not None:
+                    continue
+            request = self._vs_image_requests.get(mod_id)
+            if request is not None and request[2] == str(path):
+                if item is not None:
+                    self._vs_image_requests[mod_id] = (request[0], item, request[2])
+                continue
+            self._vs_image_request_id += 1
+            request_id = self._vs_image_request_id
+            self._vs_image_requests[mod_id] = (request_id, item, str(path))
+            size = self._preview_size()
+            self._pixmap_worker.enqueue(mod_id, str(path), size.width(), size.height(), request_id)
+        self._vs_schedule_pixmaps()
+
+    def _on_bg_pixmap_loaded(
+        self,
+        mod_id: str,
+        path: str,
+        request_id: int,
+        result: DecodedPreview | None,
+    ):
+        """后台线程完成图片加载 → 主线程设置 QPixmap"""
+        request = self._vs_image_requests.get(mod_id)
+        if request is None or request[0] != request_id or request[2] != path:
+            return
+        self._vs_image_requests.pop(mod_id, None)
+        self._vs_schedule_pixmaps()
+        item = self._vs_card_cache.get(mod_id)
+        if item is None or item is not request[1]:
+            return
+        mod = item._mod
+        if mod.mod_id != mod_id or not self._same_path(mod.primary_preview or "", path):
+            return
+        if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+            item._preview_requested = False
+            item._preview_resolved = True
+            return
+        if result is not None and not result.is_current(path):
+            item._preview_resolved = False
+            item._preview_requested = True
+            item._cached_pixmap = None
+            self._vs_pending_pixmap_items.insert(0, (mod_id, item))
+            self._vs_schedule_pixmaps()
+            return
+        retain_viewed_preview(path, self._preview_size(), result, auto_transform=True)
+        self._vs_apply_preview(
+            item,
+            result.image if result is not None else None,
+            cache_generation=result.cache_token[2] if result is not None and result.cache_token else None,
+        )
+
+    @staticmethod
+    def _vs_apply_preview(item: GalleryItem, qimage: object, *, cache_generation: int | None = None) -> None:
+        """在界面线程合成含模糊填充和圆角的预览，图像无效时显示无预览状态。"""
+        try:
+            pixmap = QPixmap.fromImage(qimage) if qimage is not None else QPixmap()
+        except (TypeError, RuntimeError):
+            pixmap = QPixmap()
+        if pixmap.isNull():
+            item.set_no_preview()
+            return
+        # 后台已把图缩到工作尺寸（contain、未裁切）；主线程做模糊填充合成 + 圆角：
+        # 完整看到整张预览图，比例不一致处由同图高斯模糊垫底，无 letterbox 黑边。
+        item.set_pixmap(
+            rendered_preview(
+                qimage,
+                GalleryItem.ITEM_WIDTH - 8,
+                GalleryItem.ITEM_HEIGHT - 60,
+                "contain",
+                fill_blur_rounded,
+                cache_generation=cache_generation,
+            )
+        )
+
+    def _on_scroll_value_changed(self, _value: int):
+        """滚动条变化时，延迟触发虚拟滚动更新"""
+        if _value != self._vs_population_anchor_value:
+            self._card_reveal.cancel()
+        if (
+            getattr(self, "_fresh_population", False)
+            and self._vs_population_timer.isActive()
+            and _value != self._vs_population_anchor_value
+        ):
+            self._fresh_population = False
+            self._vs_population_timer.stop()
+        self._vs_schedule_pixmaps()
+        if not self._vs_scroll_timer.isActive():
+            self._vs_scroll_timer.start()
+
+    def hideEvent(self, event):
+        """页面隐藏时停止卡片出现效果与首屏渐进填充。"""
+        self._card_reveal.cancel()
+        self._vs_population_timer.stop()
+        super().hideEvent(event)
