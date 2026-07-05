@@ -252,3 +252,140 @@ class DiscoveryWorker(QThread):
             self.error = error
         finally:
             self.elapsed_ms = (time.perf_counter() - start) * 1000
+
+
+class LibraryDiscoveryController(QObject):
+    """协调探测审计、分片快照捕获、后台发现和界面纳管规划，隔离过期游戏与来源代次。"""
+
+    stopped = Signal()
+    observed = Signal(object)
+    failed = Signal(str, object)
+
+    def __init__(self, manager, probe, *, busy, consume, parent=None):
+        """绑定探测器与消费回调，建立捕获、规划、准备和重试定时器及审计信号连接。"""
+        super().__init__(parent)
+        self.manager, self.probe = manager, probe
+        self.busy, self.consume = busy, consume
+        self.worker = None
+        self.pending = None
+        self.active = None
+        self._prepared = None
+        self._capture_iterator = None
+        self._probe_ready = False
+        self._accepted_inventory = None
+        self.closing = False
+        self.planning = False
+        self._source_generation = 0
+        self.metrics = dict(started=0, completed=0, discarded=0, capture_ms=[], worker_ms=[], planning_slice_ms=[])
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(self._plan_slice)
+        self._prepare_timer = QTimer(self)
+        self._prepare_timer.setSingleShot(True)
+        self._prepare_timer.timeout.connect(self._prepare)
+        self._capture_timer = QTimer(self)
+        self._capture_timer.setSingleShot(True)
+        self._capture_timer.timeout.connect(self._capture_slice)
+        self._error_retry = QTimer(self)
+        self._error_retry.setSingleShot(True)
+        self._error_retry.timeout.connect(self._schedule_probe)
+        probe.settled.connect(self._after_probe)
+        if hasattr(probe, "invalidated"):
+            probe.invalidated.connect(self._invalidate)
+        if hasattr(probe, "failed"):
+            probe.failed.connect(self._probe_failed)
+
+    def _probe_failed(self, error):
+        """取消当前发现流程，并优先携带手动请求上下文报告探测失败。"""
+        options = self.active or self.pending
+        if self.pending and self.pending["manual"]:
+            options = self.pending
+        self.cancel(cancel_probe=False)
+        if options is not None:
+            self.failed.emit(error, options)
+
+    def _invalidate(self):
+        """撤销已接受的审计清单，并取消依赖全量审计的在途扫描。"""
+        self._probe_ready = False
+        self._accepted_inventory = None
+        if self.worker is not None and self.active and self.active["changed_paths"] is None:
+            self.worker.requestInterruption()
+
+    def reset_scope(self):
+        """增加来源范围代次并清除待处理请求，使旧范围的发现结果失效。"""
+        self._source_generation += 1
+        self.pending = None
+        if self.worker is not None:
+            self.worker.requestInterruption()
+
+    def schedule(
+        self,
+        game_id,
+        *,
+        trigger,
+        changed_paths=None,
+        manual=False,
+        discover=True,
+        publish="on-change",
+        external_copy_paths=(),
+        **unused,
+    ):
+        """将触发来源转换为全量或局部发现选项，并合并手动审计与外部复制路径。"""
+        if self.closing:
+            return
+        self._error_retry.stop()
+        wants = discover and self.manager.trigger_discovers(trigger, changed_paths)
+        new = dict(
+            game_id=game_id,
+            trigger=trigger,
+            manual=manual,
+            discover=wants,
+            external_copy_paths=set(external_copy_paths),
+            force_source_audit=manual or trigger == "manual",
+            publish=publish,
+            changed_paths=None if trigger != "watcher" else set(changed_paths or ()),
+        )
+        self._enqueue(new)
+
+    def _enqueue(self, new, *, start=True):
+        """合并同一游戏的待处理请求，保留更强审计和发布要求，并按需安排准备。"""
+        game_id = new["game_id"]
+        old = self.pending
+        if old and old["game_id"] == game_id:
+            new.setdefault("external_copy_paths", set()).update(old.get("external_copy_paths", ()))
+            new["manual"] |= old["manual"]
+            new["discover"] |= old["discover"]
+            new["force_source_audit"] |= old["force_source_audit"]
+            if old["publish"] == "always":
+                new["publish"] = "always"
+            if old["changed_paths"] is None or new["changed_paths"] is None:
+                new["changed_paths"] = None
+            else:
+                new["changed_paths"].update(old["changed_paths"])
+        self.pending = new
+        if start:
+            # 延后一个所有者事件周期采集，使同步到达的刷新和监控请求先合并范围。
+            self._prepare_timer.start(0)
+
+    def _schedule_probe(self):
+        """局部发现直接安排准备，全量请求按所需强度启动库探测。"""
+        options = self.pending or self.active
+        if self.closing or options is None:
+            return
+        if options and options["changed_paths"] is not None:
+            self._prepare_timer.start(0)
+            return
+        if options and options["force_source_audit"]:
+            self.probe.schedule(force_source_audit=True)
+        else:
+            self.probe.schedule()
+
+    def _prepare(self):
+        """安排必要审计并尝试启动发现；准备异常时保留请求并延迟重试。"""
+        try:
+            if self.pending and self.pending["changed_paths"] is None:
+                self._schedule_probe()
+            self._start_discovery(probe_ready=False)
+        except Exception:
+            logger.exception("Could not prepare library discovery")
+            self._retry(delay=1000)
