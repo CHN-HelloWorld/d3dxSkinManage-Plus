@@ -850,3 +850,81 @@ class GalleryPage(QWidget):
         self._card_reveal.cancel()
         self._vs_population_timer.stop()
         super().hideEvent(event)
+
+    def showEvent(self, event):
+        """页面可见时，延迟校正布局（切换页面后 viewport 尺寸可能尚未更新）"""
+        super().showEvent(event)
+        if self._mods:
+            self._vs_population_anchor_value = self._scroll_area.verticalScrollBar().value()
+            self._fresh_population = True
+        self._resize_timer.start()
+
+    def _check_and_refresh_layout(self):
+        """更新几何并补齐可视行，保留已有控件和图片。"""
+        if not self._mods:
+            self._resize_empty_label()
+            return
+        avail_w = self._scroll_area.viewport().width()
+        if avail_w <= 100:
+            avail_w = self.width() - 48
+        new_cols = max(1, (avail_w - 24) // (GalleryItem.ITEM_WIDTH + 12))
+        if new_cols != self._vs_cols:
+            self._vs_cols = new_cols
+            self._vs_total_rows = (len(self._mods) + new_cols - 1) // new_cols
+            total_h = self._vs_total_rows * self._vs_row_h + 12
+            self._scroll_content.setMinimumHeight(total_h)
+            self._scroll_content.setMaximumHeight(total_h)
+        self._vs_update_visible()
+
+    def eventFilter(self, obj, event):
+        """视口尺寸变化时合并安排延后的布局检查，避免同步布局事件递归。"""
+        if obj is self._scroll_area.viewport() and event.type() == QEvent.Type.Resize:
+            if not self._resize_timer.isActive():
+                self._resize_timer.start()
+        return super().eventFilter(obj, event)
+
+    def _resize_empty_label(self) -> None:
+        """调整空状态标签使其填满可视区域并居中"""
+        if not self._mods:
+            vp = self._scroll_area.viewport()
+            w = vp.width() if vp.width() > 100 else self.width() - 48
+            h = vp.height() if vp.height() > 100 else self.height() - 60
+            self._empty_label.move(0, 0)
+            self._empty_label.resize(w, h)
+            self._loading_panel.setGeometry(0, 0, w, h)
+            self._scroll_content.setMinimumHeight(h)
+            self._scroll_content.setMaximumHeight(h)
+
+    def resizeEvent(self, event):
+        """窗口大小变化时，重新计算布局"""
+        super().resizeEvent(event)
+        if not self._resize_timer.isActive():
+            self._resize_timer.start()
+
+    def set_adult_mode(self, mode: str) -> None:
+        """外部同步成人级预览模式（show|hide|blur）"""
+        if mode not in ("show", "hide", "blur"):
+            mode = "show"
+        self._adult_mode = mode
+        self._adult_mode_combo.blockSignals(True)
+        idx = self._adult_mode_combo.findData(mode)
+        if idx >= 0:
+            self._adult_mode_combo.setCurrentIndex(idx)
+        self._adult_mode_combo.blockSignals(False)
+        self._refresh()
+
+    def _on_adult_mode_changed(self, _index: int = 0) -> None:
+        """画廊中切换成人级预览模式"""
+        mode = self._adult_mode_combo.currentData() or "show"
+        self._adult_mode = mode
+        self._refresh()
+        self.adult_mode_changed.emit(mode)
+
+    def closeEvent(self, event) -> None:
+        """确保后台图片线程先退出，再允许页面析构。"""
+        self._card_reveal.cancel()
+        self._vs_population_timer.stop()
+        if self._pixmap_worker.isRunning():
+            self._pixmap_worker.stop()
+            self._pixmap_worker.wait(1000)
+        super().closeEvent(event)
