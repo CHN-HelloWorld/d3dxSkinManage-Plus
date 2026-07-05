@@ -389,3 +389,150 @@ class LibraryDiscoveryController(QObject):
         except Exception:
             logger.exception("Could not prepare library discovery")
             self._retry(delay=1000)
+
+    def _after_probe(self):
+        """在审计完成后推进发现流程，异常时转为延迟重试。"""
+        try:
+            self._start_after_probe()
+        except Exception:
+            logger.exception("Could not prepare library discovery")
+            self._retry(delay=1000)
+
+    def _start_after_probe(self):
+        # 较弱的后续轮询不撤销当前代次已接受的证据。
+        """核验审计模式和强度后接受清单，恢复等待审计的完成或规划阶段。"""
+        if self._probe_ready and self._current():
+            return
+        options = self.active or self.pending
+        if options is not None:
+            mode = self.probe.last_mode
+            accepted_modes = {"full"}
+            if options["changed_paths"] is not None:
+                accepted_modes.add("source")
+            strong = self.probe.last_force_source_audit
+            if mode not in accepted_modes or (options["force_source_audit"] and not strong):
+                # 事件探测可能先于完整审计结束，手动刷新仍要求完整检查，部署证据不能授权源导入。
+                self._probe_ready = False
+                return
+        if self.active is not None:
+            self._probe_ready = True
+            self._accepted_inventory = getattr(self.probe, "source_inventory", None)
+            if getattr(self, "_awaiting_audit", False):
+                self._awaiting_audit = False
+                self._finish()
+                return
+            if self._prepared is not None:
+                self._begin_plan()
+            return
+        self._accepted_inventory = getattr(self.probe, "source_inventory", None)
+        self._start_discovery(probe_ready=True)
+
+    def _start_discovery(self, *, probe_ready):
+        """仅为空闲且仍属当前游戏的请求建立发现状态，并分片捕获后台扫描所需快照。"""
+        if (
+            self.closing
+            or self.active is not None
+            or self.worker
+            or self.planning
+            or not self.pending
+            or self._error_retry.isActive()
+        ):
+            return
+        options = self.pending
+        if options["game_id"] != self.manager.current_game_id:
+            self.pending = None
+            return
+        if (
+            options["discover"]
+            and options["changed_paths"] is None
+            and not options["force_source_audit"]
+            and not probe_ready
+        ):
+            # 启动恢复更新身份位置后再采集发现输入，避免重复读取或使用过期路径重新审计。
+            return
+        self.pending, self.active = None, options
+        self._probe_ready = probe_ready
+        if not probe_ready:
+            self._accepted_inventory = None
+        self._prepared = None
+        self._stamp = self.manager.library_probe_stamp
+        self._generation = self.probe.generation
+        self._discovery_generation = self._source_generation
+        self.report = ReconcileReport(game_id=options["game_id"], trigger=options["trigger"])
+        if not options["discover"]:
+            self._finish()
+            return
+        try:
+            self._capture_started = time.perf_counter()
+            inventory = getattr(self.probe, "source_inventory", None)
+            self._capture_iterator = iter_capture_discovery(
+                self.manager,
+                options["changed_paths"],
+                source_inventory=inventory,
+                verify_markers=options["force_source_audit"] and inventory is None,
+                external_copy_paths=options.get("external_copy_paths", ()),
+                audit_owns_known_checks=options["force_source_audit"] or probe_ready,
+            )
+            self._capture_slice()
+        except Exception:
+            logger.exception("Could not start library discovery")
+            self._retry(delay=1000)
+
+    def _cancel_capture(self):
+        """停止快照时间片并关闭未完成的索引迭代器。"""
+        self._capture_timer.stop()
+        iterator, self._capture_iterator = self._capture_iterator, None
+        if iterator is not None:
+            iterator.close()
+
+    def _capture_slice(self):
+        """按八毫秒预算推进快照捕获，结束后启动扫描；请求过期或读取失败时重新调度。"""
+        if self._capture_iterator is None:
+            return
+        start = time.perf_counter()
+        try:
+            if not self._current():
+                self.metrics["discarded"] += 1
+                self._retry()
+                return
+            while (time.perf_counter() - start) * 1000 < 8:
+                next(self._capture_iterator)
+            self._capture_timer.start(0)
+        except StopIteration as completed:
+            self._capture_iterator = None
+            self.metrics["capture_ms"].append((time.perf_counter() - self._capture_started) * 1000)
+            self._start_worker(completed.value)
+        except Exception:
+            logger.exception("Could not capture library discovery snapshot")
+            self._retry(delay=1000)
+        finally:
+            self.metrics.setdefault("capture_slice_ms", []).append((time.perf_counter() - start) * 1000)
+
+    def _start_worker(self, request):
+        """启动持有快照的发现线程，并仅为仍有效的请求转发观察路径。"""
+        self._discovery_request = request
+        self.worker = DiscoveryWorker(request, self)
+        self.worker.finished.connect(self._finished)
+        self.worker.observed.connect(lambda paths: self.observed.emit(paths) if self._current() else None)
+        self.metrics["started"] += 1
+        self.worker.start()
+
+    def _current(self):
+        """核验关闭状态、游戏、来源代次及全量请求的库与探测版本是否仍匹配。"""
+        try:
+            return (
+                not self.closing
+                and self.active is not None
+                and self.active["game_id"] == self.manager.current_game_id
+                and (getattr(self, "_discovery_generation", 0) == getattr(self, "_source_generation", 0))
+                and (
+                    self.active["changed_paths"] is not None
+                    or (self._stamp == self.manager.library_probe_stamp and self._generation == self.probe.generation)
+                )
+            )
+        except Exception:
+            return False
+
+    def _valid(self):
+        """返回当前规划是否仍满足发现请求的范围和版本约束。"""
+        return self._current()
