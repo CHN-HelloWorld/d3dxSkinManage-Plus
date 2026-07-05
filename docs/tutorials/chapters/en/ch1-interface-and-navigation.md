@@ -61,3 +61,43 @@ Export, batch deletion, Mod preset switching, and updates each have their own pr
 
 Brief notifications also appear in the top-right, for example when a theme is applied or a variant is saved. To look up a specific error later, open **Tools → View Logs**.
 
+### 1.5 Common shortcuts
+
+Manager shortcuts are handled only within the application window; they are not system-wide hotkeys. Change them in **Settings → Shortcuts → Key bindings**.
+
+| Default key | Action |
+| --- | --- |
+| `Ctrl+I` | Import into the current category |
+| `F5` | Refresh the current game's Mod library |
+| `Ctrl+F` | Focus the current page's search box, if the page supports search |
+| `Ctrl+K` | Open Settings and search all settings |
+| `Ctrl+,` | Open Settings |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` / `Ctrl+4` | Games / Category Overview / Gallery / Online Mods |
+| `Alt+Left` | Go to the parent category, or close Online Mods details |
+| `Ctrl+Shift+N` | Create a category at the current level |
+| `F2` | Edit the single selected item in the overview |
+| `Space` | Enable or disable the single selected Mod in the overview |
+| `Ctrl+Shift+E` | Export the selected items in the overview |
+| `F6` / `F7` | Launch the Mod loader / game |
+
+Lists and text fields also support copying, cutting, pasting, selecting all, deleting, and other actions. See Appendix A for the complete table. Text fields, input methods, key recording, and modal dialogs handle their own input first; pressing Space in a text field does not toggle a Mod.
+
+`Esc` handles context-specific actions such as ending key recording, closing some popups, or canceling a cut operation in the overview. 3DMigoto's in-game F10 reload key is configured by the loader, not in the manager's shortcuts.
+
+### 1.6 Navigating Settings
+
+The Settings page has six sections across the top, each with its own subnavigation on the left. This tutorial gives complete paths such as **Settings → General → Images and cache**.
+
+![Settings and section navigation](../../images/guide-en/11-设置常规.webp)
+
+*Use the top row to switch sections and the left side to switch subpages. The search box in the top-right can take you directly to a setting.*
+
+Type a term such as “cache,” “proxy,” “variant,” or a command name in the Settings search box, then click a result to jump to it. Shortcut commands and registered plugin commands also appear in Settings search.
+
+Settings usually save immediately. Text inputs such as proxy addresses are submitted when editing finishes; some sliders preview changes while dragging and save when released. Game configuration still requires clicking **Save**, so keep that distinction in mind.
+
+### 1.7 Theme, language, and background
+
+Open **Settings → Personalization → Appearance** to choose Dark, Light, or Follow System. **Follow System uses the Windows app theme.** The same page lets you choose a font and language and refresh the list of language packs.
+
+**Personalization → Window background** supports Off, Image, Video, and WE scenes. Videos and scenes have options such as frame rate and playback controls; WE scenes require Wallpaper Engine installed locally. See Chapter 6 for full configuration details.
