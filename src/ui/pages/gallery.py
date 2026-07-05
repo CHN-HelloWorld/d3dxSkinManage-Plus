@@ -197,3 +197,93 @@ class GalleryItem(QFrame):
         self._status_label = status_label
         status_label.setStyleSheet(f"color: {color}; font-size: {theme.font('size_secondary')}px;")
         layout.addWidget(status_label)
+
+    def set_mod(self, mod: Mod, *, adult_mode: str = "show") -> None:
+        """复用已有标签和图片，不重新构造控件。"""
+        self._mod = mod
+        self._adult_mode = adult_mode
+        self._cached_pixmap = None
+        self._preview_requested = False
+        hidden = adult_mode == "hide" and mod.info.age_rating == AgeRating.X
+        self._preview_resolved = hidden or not bool(mod.primary_preview)
+        if self._image.styleSheet():
+            self._image.setStyleSheet("")
+        if hidden:
+            self._image.setText(tr("已隐藏"))
+            self._image.setStyleSheet(
+                f"QLabel {{ background-color: {theme.surface_color('bg.subtle', 'placeholder')}; "
+                f"color: {theme.color('danger')}; font-size: 12px; "
+                f"border-radius: {theme.radius('control')}px; }}"
+            )
+        elif mod.primary_preview:
+            self._image.start_loading()
+        else:
+            self._image.setText(t("无预览"))
+        elided = self._name_label.fontMetrics().elidedText(
+            mod.display_name,
+            Qt.TextElideMode.ElideRight,
+            self.ITEM_WIDTH - 16,
+        )
+        self._name_label.setText(elided)
+        self._name_label.setToolTip(mod.display_name if elided != mod.display_name else "")
+        self._status_label.setText(t("● 已启用") if mod.is_enabled else t("○ 已禁用"))
+        color = theme.color("success") if mod.is_enabled else theme.color("text.tertiary")
+        status_style = f"color: {color}; font-size: {theme.font('size_secondary')}px;"
+        if self._status_label.styleSheet() != status_style:
+            self._status_label.setStyleSheet(status_style)
+        self._apply_adult_blur()
+
+    def scroll_render_key(self) -> tuple | None:
+        """按预览标识、标题、启用状态和显示策略构造滚动绘制缓存键，无预览标识时返回空值。"""
+        preview = preview_cache_key(self._image)
+        if preview is None:
+            return None
+        return preview, self._name_label.text(), self._status_label.text(), self._adult_mode
+
+    def _apply_adult_blur(self) -> None:
+        """blur 模式下给 X 级预览图加模糊（与 Mod 商店 NSFW 模糊一致）；其余模式清除。"""
+        want = (
+            self._adult_mode == "blur" and self._mod.info.age_rating == AgeRating.X and self._cached_pixmap is not None
+        )
+        if want:
+            if not isinstance(self._image.graphicsEffect(), QGraphicsBlurEffect):
+                effect = QGraphicsBlurEffect(self._image)
+                effect.setBlurRadius(20)
+                self._image.setGraphicsEffect(effect)
+        elif self._image.graphicsEffect() is not None:
+            self._image.setGraphicsEffect(None)
+
+    def set_pixmap(self, pixmap: QPixmap):
+        """设置预览图（由后台线程回调调用）"""
+        if not pixmap.isNull():
+            self._cached_pixmap = pixmap
+            self._preview_requested = False
+            self._preview_resolved = True
+            self._image.setPixmap(pixmap)
+            self._image.setText("")  # 清除占位文字
+            self._image.setStyleSheet("")
+            self._apply_adult_blur()
+
+    def set_no_preview(self) -> None:
+        """清除图片引用并结束加载状态，显示统一的无预览占位。"""
+        self._cached_pixmap = None
+        self._preview_requested = False
+        self._preview_resolved = True
+        self._image.setText(t("无预览"))
+        self._image.setStyleSheet(
+            f"QLabel {{ background-color: {theme.surface_color('bg.subtle', 'placeholder')}; "
+            f"color: {theme.color('text.tertiary')}; font-size: 12px; "
+            f"border-radius: {theme.radius('control')}px; }}"
+        )
+
+    def mousePressEvent(self, event):
+        """左键点击时发布当前 Mod 标识，并保留基类鼠标处理。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._mod.mod_id)
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """左键双击时发布当前 Mod 标识，供宿主打开详情或预览。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit(self._mod.mod_id)
+        super().mouseDoubleClickEvent(event)
