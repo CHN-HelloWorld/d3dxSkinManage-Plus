@@ -287,3 +287,200 @@ class GalleryItem(QFrame):
         if event.button() == Qt.MouseButton.LeftButton:
             self.double_clicked.emit(self._mod.mod_id)
         super().mouseDoubleClickEvent(event)
+
+
+class GalleryPage(QWidget):
+    """画廊视图页面 - 虚拟滚动优化：只创建可视区域内的卡片，预览图后台线程加载"""
+
+    _INITIAL_CARD_BATCH_SIZE = 1
+    _INITIAL_CARD_INTERVAL_MS = 20
+    _PIXMAP_BATCH_SIZE = 4
+    _PIXMAP_INTERVAL_MS = 32
+    _MAX_IMAGE_REQUESTS = 8
+    _MAX_PREFETCH_REQUESTS = 2
+
+    mod_selected = Signal(str)
+    mod_toggle_requested = Signal(str)
+    back_requested = Signal()
+    adult_mode_changed = Signal(str)  # 同步到其他页面（"show"|"hide"|"blur"）
+
+    def __init__(self, parent: QWidget | None = None):
+        """建立虚拟卡片窗口、复用池和图片请求状态，启动受页面生命周期管理的预览工作线程。"""
+        super().__init__(parent)
+        self._mods: list[Mod] = []
+        self._mods_signature: tuple | None = None
+        self._game_id: str | None = None
+        self._load_state = "pending"
+        self._adult_mode = "show"
+        # 虚拟滚动状态。
+        self._vs_card_cache: dict[str, GalleryItem] = {}  # mod_id → GalleryItem
+        self._vs_card_pool = CardPool()
+        self._vs_window: tuple | None = None
+        self._vs_image_request_id = 0
+        self._vs_image_requests: dict[str, tuple[int, GalleryItem | None, str]] = {}
+        self._vs_pending_prefetch: list[tuple[str, str]] = []
+        self._vs_cols: int = 1
+        self._vs_row_h: int = GalleryItem.ITEM_HEIGHT + 12
+        self._vs_total_rows: int = 0
+        # 滚动防抖定时器
+        self._vs_scroll_timer = QTimer(self)
+        self._vs_scroll_timer.setSingleShot(True)
+        self._vs_scroll_timer.setInterval(8)
+        self._vs_scroll_timer.timeout.connect(self._vs_update_visible)
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(0)
+        self._resize_timer.timeout.connect(self._check_and_refresh_layout)
+        # 首次进入只同步构造一张卡片，剩余首屏内容按帧补齐。
+        self._vs_population_timer = QTimer(self)
+        self._vs_population_timer.setInterval(self._INITIAL_CARD_INTERVAL_MS)
+        self._vs_population_timer.timeout.connect(self._vs_update_visible)
+        self._vs_population_anchor_value = 0
+        # 延迟加载预览图定时器
+        self._vs_pixmap_timer = QTimer(self)
+        self._vs_pixmap_timer.setSingleShot(True)
+        self._vs_pixmap_timer.setInterval(self._PIXMAP_INTERVAL_MS)
+        self._vs_pixmap_timer.timeout.connect(self._vs_load_deferred_pixmaps)
+        self._vs_pending_pixmap_items: list[tuple[str, GalleryItem]] = []
+        # 后台图片加载线程
+        self._pixmap_worker = _GalleryPixmapWorker(self)
+        manage_page_worker(self, self._pixmap_worker)
+        self._pixmap_worker.image_loaded.connect(self._on_bg_pixmap_loaded)
+        self._pixmap_worker.start()
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """构建成人预览模式、虚拟滚动区域、卡片出现效果以及加载和空状态提示。"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        toolbar = QHBoxLayout()
+        title = QLabel(t("画廊视图"))
+        title.setStyleSheet("font-size: 18px; font-weight: bold;")
+        toolbar.addWidget(title)
+        toolbar.addStretch()
+
+        # 成人级Mod预览模式（与 Mod 商店一致：下拉框内前置眼睛图标，图标不进下拉项）
+        self._adult_mode_combo = LeadingIconComboBox("status/visible")
+        self._adult_mode_combo.addItem(tr("显示 NSFW"), "show")
+        self._adult_mode_combo.addItem(tr("隐藏 NSFW"), "hide")
+        self._adult_mode_combo.addItem(tr("模糊 NSFW"), "blur")
+        self._adult_mode_combo.setToolTip(
+            tr("显示：正常显示 NSFW Mod 预览\n隐藏：用占位遮挡\n模糊：模糊预览（与在线 Mod 一致）")
+        )
+        self._adult_mode_combo.currentIndexChanged.connect(self._on_adult_mode_changed)
+        toolbar.addWidget(self._adult_mode_combo)
+
+        layout.addLayout(toolbar)
+
+        # 滚动区域
+        self._scroll_area = QScrollArea()
+        self._scroll_area.setWidgetResizable(True)
+        # 透明滚动区：去掉默认 StyledPanel 视口底色，让卡片直接浮在背景图上
+        self._scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll_area.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        # 滚轮平滑缓动（与商店/总览一致的柔和滚动手感）
+        SmoothScroller.attach(self._scroll_area)
+
+        self._scroll_content = QWidget()
+        self._scroll_content.setMinimumHeight(0)
+        self._scroll_area.setWidget(self._scroll_content)
+        self._scroll_area.viewport().installEventFilter(self)
+        self._scroll_edge_fade = ScrollEdgeFade(
+            self._scroll_area,
+            lambda cache=self._vs_card_cache: cache.values(),
+        )
+        self._card_reveal = CardRevealQueue(
+            self, self._scroll_edge_fade, lambda card, mod_id: self._vs_card_cache.get(mod_id) is card
+        )
+
+        # 空状态提示
+        self._empty_label = QLabel(t("暂无 Mod 数据\n请先在类别页面导入 Mod"))
+        self._empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 14px; padding: 60px;")
+        self._empty_label.setParent(self._scroll_content)
+        self._empty_label.hide()
+
+        self._loading_panel = GalleryLoadingPanel(
+            (GalleryItem.ITEM_WIDTH, GalleryItem.ITEM_HEIGHT), self._scroll_content
+        )
+
+        layout.addWidget(self._scroll_area)
+        self._update_empty_state()
+
+    @staticmethod
+    def _same_path(left: str, right: str) -> bool:
+        """将非空路径规范化为绝对路径后比较，仅判断路径表示而不读取文件身份。"""
+        if not left or not right:
+            return False
+        return Path(fs.normal_path(left)).absolute() == Path(fs.normal_path(right)).absolute()
+
+    def set_mods(self, mods: list[Mod]):
+        """按名称、预览和分级签名判断是否重建；签名不变时仅替换模型并刷新启用状态。"""
+        self._load_state = "ready"
+        signature = tuple(
+            (
+                mod.mod_id,
+                mod.display_name,
+                mod.primary_preview or "",
+                mod.info.age_rating.value,
+            )
+            for mod in mods
+        )
+        if signature == self._mods_signature:
+            self._mods = mods
+            current = {mod.mod_id: mod for mod in mods}
+            for mod_id, card in self._vs_card_cache.items():
+                if mod_id in current:
+                    card._mod = current[mod_id]
+                    self._update_card_status(card)
+            self._update_empty_state()
+            return
+        self._mods_signature = signature
+        self._mods = mods
+        self._refresh()
+
+    def set_loading(self, game_id: str) -> None:
+        """同步显示加载状态；同一游戏刷新时保留已显示的卡片。"""
+        self._load_state = "loading"
+        self._loading_panel.set_progress(-1)
+        if game_id != self._game_id:
+            self._game_id = game_id
+            self._mods = []
+            self._mods_signature = None
+            self._refresh()
+        else:
+            self._update_empty_state()
+
+    def set_load_failed(self) -> None:
+        """将本轮库加载标记为失败，并更新空状态提示。"""
+        self._load_state = "error"
+        self._update_empty_state()
+
+    def set_loading_progress(self, count: int) -> None:
+        """仅在加载状态下更新已读取条目数量，忽略迟到进度。"""
+        if self._load_state == "loading":
+            self._loading_panel.set_progress(count)
+
+    def _update_empty_state(self) -> None:
+        """按数据与加载状态显示加载面板、空库或错误提示，无内容时恢复视口高度约束。"""
+        key = {
+            "ready": N_("暂无 Mod 数据\n请先在类别页面导入 Mod"),
+            "error": N_("Mod 数据加载失败\n请按 F5 重试"),
+        }.get(self._load_state)
+        loading = not self._mods and self._load_state in ("pending", "loading")
+        self._loading_panel.setVisible(loading)
+        if self._mods or key is None:
+            self._empty_label.hide()
+        else:
+            self._empty_label.setText(t(key))
+            self._empty_label.show()
+        if self._mods:
+            return
+        self._scroll_content.setMinimumHeight(0)
+        self._scroll_content.setMaximumHeight(16777215)
+        self._resize_empty_label()
+        # 隐藏页面在导航显示时才获得最终视口尺寸。
+        call_later(0, self, self._resize_empty_label)
