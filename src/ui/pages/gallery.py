@@ -484,3 +484,203 @@ class GalleryPage(QWidget):
         self._resize_empty_label()
         # 隐藏页面在导航显示时才获得最终视口尺寸。
         call_later(0, self, self._resize_empty_label)
+
+    @staticmethod
+    def _update_card_status(card: GalleryItem) -> None:
+        """刷新卡片启用状态文字与颜色，仅在样式变化时重新设置样式表。"""
+        enabled = card._mod.is_enabled
+        card._status_label.setText(t("● 已启用") if enabled else t("○ 已禁用"))
+        color = theme.color("success") if enabled else theme.color("text.tertiary")
+        style = f"color: {color}; font-size: {theme.font('size_secondary')}px;"
+        if card._status_label.styleSheet() != style:
+            card._status_label.setStyleSheet(style)
+
+    def update_mods_in_place(self, mods: list[Mod]) -> None:
+        """原位替换已有 Mod 模型并更新当前卡片的启用标记，保留布局和预览。"""
+        changed = {mod.mod_id: mod for mod in mods}
+        if not changed:
+            return
+        self._mods = [changed.get(mod.mod_id, mod) for mod in self._mods]
+        for mod_id, mod in changed.items():
+            card = self._vs_card_cache.get(mod_id)
+            if card is not None:
+                card._mod = mod
+                self._update_card_status(card)
+
+    def refresh_from_index(self) -> None:
+        """重新刷新视图（响应预设切换等外部触发）"""
+        self._refresh()
+
+    def _refresh(self):
+        """虚拟滚动版：计算布局参数，按需创建可视区域卡片"""
+        self._card_reveal.cancel()
+        self._vs_scroll_timer.stop()
+        self._vs_population_timer.stop()
+        self._vs_pixmap_timer.stop()
+        self._vs_pending_pixmap_items.clear()
+        self._vs_pending_prefetch.clear()
+        self._pixmap_worker.clear_queue()
+
+        # 清除旧缓存卡片
+        for card in self._vs_card_cache.values():
+            card.hide()
+            card.setParent(None)
+            card.deleteLater()
+        self._vs_card_cache.clear()
+        self._vs_card_pool.clear(lambda card: card.deleteLater())
+        self._vs_window = None
+        self._vs_image_requests.clear()
+
+        if not self._mods:
+            self._update_empty_state()
+            return
+
+        self._empty_label.hide()
+        self._loading_panel.hide()
+
+        # 计算虚拟滚动布局参数
+        viewport_w = self._scroll_area.viewport().width()
+        avail_w = viewport_w if viewport_w > 100 else self.width() - 48
+        spacing = 12
+        cols = max(1, (avail_w - 24) // (GalleryItem.ITEM_WIDTH + spacing))
+        self._vs_cols = cols
+        self._vs_row_h = GalleryItem.ITEM_HEIGHT + spacing
+        self._vs_total_rows = (len(self._mods) + cols - 1) // cols
+        total_h = self._vs_total_rows * self._vs_row_h + spacing
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+
+        # 初始渲染可视区域
+        # 标记全量重建：_vs_update_visible 据此对新建可视卡片做一次交错淡入。
+        self._vs_population_anchor_value = self._scroll_area.verticalScrollBar().value()
+        self._fresh_population = True
+        self._vs_update_visible()
+
+    def _vs_update_visible(self):
+        """根据滚动位置，创建/显示可视区域内的卡片，回收远离的卡片"""
+        if not self._mods or not self.isVisible():
+            return
+
+        scroll_y = self._scroll_area.verticalScrollBar().value()
+        viewport_h = self._scroll_area.viewport().height()
+        row_h = self._vs_row_h if self._vs_row_h > 0 else 1
+        cols = self._vs_cols if self._vs_cols > 0 else 1
+
+        # 保持固定行窗口，并在两侧各预取一行。
+        first_row = max(0, scroll_y // row_h - 1)
+        last_row = min(self._vs_total_rows - 1, scroll_y // row_h + (viewport_h + row_h - 1) // row_h + 1)
+
+        first_idx = first_row * cols
+        last_idx = min(len(self._mods) - 1, (last_row + 1) * cols - 1)
+
+        initial_population = bool(getattr(self, "_fresh_population", False))
+        window = (first_idx, last_idx, cols)
+        if window == self._vs_window and not initial_population:
+            return
+        if window != self._vs_window:
+            self._vs_pending_pixmap_items.clear()
+            self._vs_image_requests = {
+                mod_id: (request_id, None, path)
+                for mod_id, (request_id, _card, path) in self._vs_image_requests.items()
+            }
+            for card in self._vs_card_cache.values():
+                card._preview_requested = False
+        self._vs_window = window
+        visible_ids = {self._mods[i].mod_id for i in range(first_idx, last_idx + 1)}
+        for mod_id in list(self._vs_card_cache):
+            if mod_id in visible_ids:
+                continue
+            card = self._vs_card_cache.pop(mod_id)
+            self._vs_card_pool.release(card)
+
+        spacing = 12
+        x_pad = 12
+        viewport = self._scroll_area.viewport().rect().translated(0, scroll_y)
+        creation_budget = self._INITIAL_CARD_BATCH_SIZE if initial_population else None
+        population_remaining = False
+
+        for i in range(first_idx, last_idx + 1):
+            mod = self._mods[i]
+            row = i // cols
+            col = i % cols
+            x = x_pad + col * (GalleryItem.ITEM_WIDTH + spacing)
+            y = spacing // 2 + row * self._vs_row_h
+
+            item = self._vs_card_cache.get(mod.mod_id)
+            is_new = item is None
+            if item is None:
+                if creation_budget is not None and creation_budget <= 0:
+                    population_remaining = True
+                    continue
+                item = self._vs_card_pool.take(GalleryItem)
+                if item is None:
+                    item = GalleryItem(mod, parent=self._scroll_content, adult_mode=self._adult_mode, defer_pixmap=True)
+                    item.clicked.connect(self.mod_selected.emit)
+                    item.double_clicked.connect(self.mod_toggle_requested.emit)
+                else:
+                    item.set_mod(mod, adult_mode=self._adult_mode)
+                self._vs_restore_preview(item)
+                self._vs_card_cache[mod.mod_id] = item
+                if creation_budget is not None:
+                    creation_budget -= 1
+            if item.x() != x or item.y() != y:
+                item.move(x, y)
+            if initial_population and is_new and item.geometry().intersects(viewport):
+                self._card_reveal.add(item, mod.mod_id)
+            if item.isHidden():
+                item.show()
+
+        # 收集所有需要加载预览图的可见卡片（包括因滚动事件
+        # 清空 pending 列表后仍未加载预览图的已缓存卡片）
+        items_need_pixmap: list[tuple[str, GalleryItem]] = []
+        for i in range(first_idx, last_idx + 1):
+            mod = self._mods[i]
+            card = self._vs_card_cache.get(mod.mod_id)
+            if card and not card._preview_resolved and not card._preview_requested:
+                card._preview_requested = True
+                request = self._vs_image_requests.get(mod.mod_id)
+                if request is not None and request[2] == str(mod.primary_preview):
+                    self._vs_image_requests[mod.mod_id] = (request[0], card, request[2])
+                else:
+                    items_need_pixmap.append((mod.mod_id, card))
+
+        self._vs_pending_pixmap_items.extend(items_need_pixmap)
+        indices = {self._mods[i].mod_id: i for i in range(first_idx, last_idx + 1)}
+        visible_first = scroll_y // row_h * cols
+        visible_last = ((scroll_y + viewport_h - 1) // row_h + 1) * cols - 1
+
+        def image_priority(entry):
+            """优先加载实际可见卡片，其余图片按距可见区的距离排序。"""
+            index = indices.get(entry[0], last_idx + 1)
+            visible = visible_first <= index <= visible_last
+            return not visible, index if visible else min(abs(index - visible_first), abs(index - visible_last))
+
+        self._vs_pending_pixmap_items.sort(key=image_priority)
+        self._vs_prepare_prefetch(first_idx, last_idx)
+        self._vs_schedule_pixmaps()
+
+        if initial_population:
+            if population_remaining:
+                if not self._vs_population_timer.isActive():
+                    self._vs_population_timer.start()
+            else:
+                self._fresh_population = False
+                self._vs_population_timer.stop()
+                self._scroll_edge_fade.refresh_later()
+        self._scroll_edge_fade.refresh()
+
+    @staticmethod
+    def _preview_size() -> QSize:
+        """返回画廊图片解码和缓存使用的目标尺寸。"""
+        return QSize(GalleryItem.ITEM_WIDTH - 8, GalleryItem.ITEM_HEIGHT - 60)
+
+    def _vs_restore_preview(self, item: GalleryItem) -> bool:
+        """为未完成预览的卡片尝试读取共享缓存，命中时立即应用并返回成功。"""
+        if item._preview_resolved:
+            return True
+        path = item._mod.primary_preview
+        image = cached_preview(path, self._preview_size(), auto_transform=True) if path else None
+        if image is None:
+            return False
+        self._vs_apply_preview(item, image)
+        return True
