@@ -402,3 +402,234 @@ class _PageSnapshot(QWidget):
     def opacity(self):
         """返回当前快照叠加层的不透明度。"""
         return self._opacity
+
+    @opacity.setter
+    def opacity(self, value):
+        """更新快照不透明度并请求重绘，供属性动画驱动。"""
+        self._opacity = value
+        self.update()
+
+    def paintEvent(self, event):
+        # 界面任务可能延后首个动画帧，不能在清理定时器等待期间重放已过期页面。
+        """在叠加层有效期内按当前透明度绘制旧页面快照。"""
+        if self._finished or self._elapsed.elapsed() >= self._duration:
+            return
+        painter = QPainter(self)
+        painter.setOpacity(self._opacity)
+        painter.drawPixmap(0, 0, self._snapshot)
+
+    def eventFilter(self, watched, event):
+        """容器缩放或隐藏时立即结束快照过渡，避免使用过期几何。"""
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.Hide):
+            self.finish()
+        return False
+
+    def finish(self):
+        """幂等结束过渡，撤销过滤器与保活引用，停止动画并延迟删除叠加层。"""
+        if self._finished:
+            return
+        self._finished = True
+        self._expiry.stop()
+        # 立即隐藏旧快照，避免延迟删除前仍被前景捕获或嵌套事件循环显示。
+        self.hide()
+        container = self.parentWidget()
+        container.removeEventFilter(self)
+        if getattr(container, "_cross_fade_overlay", None) is self:
+            container._cross_fade_overlay = None
+        animation = getattr(self, "_cross_fade_anim", None)
+        if animation is not None:
+            animation.stop()
+        self.deleteLater()
+
+
+def cross_fade(container: QWidget | None, switch_fn, duration: int | None = None):
+    """截取切换前内容，执行 switch_fn 后将旧快照覆盖在新内容上淡出。
+
+    动画禁用、容器不可见或尺寸无效时直接切换；前次淡出未结束时也直接切换，
+    避免快速切页反复截取整页图像。
+    """
+    prev = getattr(container, "_cross_fade_overlay", None)
+    if prev is not None:
+        # 上一轮淡出还在进行（快速连切）→ 清掉旧快照、本次直接切换不再 grab/动画
+        try:
+            prev.finish()
+        except RuntimeError:
+            pass
+        container._cross_fade_overlay = None  # type: ignore[attr-defined]
+        if switch_fn is not None:
+            switch_fn()
+        return None
+    if (
+        not _enabled
+        or container is None
+        or not container.isVisible()
+        or container.width() <= 0
+        or container.height() <= 0
+    ):
+        if switch_fn is not None:
+            switch_fn()
+        return None
+    try:
+        snapshot = container.grab()  # 旧内容快照（切换前）
+    except RuntimeError:
+        snapshot = QPixmap()
+    if switch_fn is not None:
+        switch_fn()
+    if snapshot.isNull():
+        return None
+    duration = duration or DURATION["normal"]
+    overlay = _PageSnapshot(container, snapshot, duration)
+    overlay.setGeometry(0, 0, container.width(), container.height())
+    overlay.show()
+    overlay.raise_()
+    container._cross_fade_overlay = overlay  # type: ignore[attr-defined]
+    anim = QPropertyAnimation(overlay, b"opacity", overlay)
+    anim.setDuration(duration)
+    anim.setStartValue(1.0)
+    anim.setEndValue(0.0)
+    anim.setEasingCurve(_EASE)
+
+    anim.finished.connect(overlay.finish)
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    overlay._cross_fade_anim = anim  # type: ignore[attr-defined]
+    return anim
+
+
+# 几何位移到目标（用于卡片重排：旧位 → 新位 平滑过渡）
+
+
+def animate_move(
+    widget: QWidget | None,
+    target: QPoint,
+    duration: int | None = None,
+) -> QPropertyAnimation | None:
+    """将控件平滑移动到目标位置，无需动画时直接定位。
+
+    用于卡片重排，短时长可减少与滚动回收和直接定位的交叠。
+    """
+    if not _enabled or widget is None or not widget.isVisible():
+        if widget is not None:
+            _safe_move(widget, target)
+        return None
+    start = widget.pos()
+    if start == target:
+        return None
+    prev = getattr(widget, "_move_anim", None)
+    if prev is not None:
+        try:
+            prev.stop()
+        except RuntimeError:
+            pass
+    anim = QPropertyAnimation(widget, b"pos", widget)
+    anim.setDuration(duration or DURATION["fast"])
+    anim.setStartValue(start)
+    anim.setEndValue(target)
+    anim.setEasingCurve(_EASE)
+    anim.finished.connect(lambda: _safe_move(widget, target))
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    widget._move_anim = anim  # type: ignore[attr-defined]
+    return anim
+
+
+def animate_geometry(
+    widget: QWidget | None,
+    target: QRect,
+    duration: int | None = None,
+    on_finished: Callable[[], None] | None = None,
+) -> QPropertyAnimation | None:
+    """将控件几何过渡到目标状态。
+
+    无需动画时直接设置几何；两种路径均调用完成回调，供隐藏浮层等收尾逻辑使用。
+    """
+    if not _enabled or widget is None or not widget.isVisible():
+        if widget is not None:
+            try:
+                widget.setGeometry(target)
+            except RuntimeError:
+                pass
+        if on_finished:
+            on_finished()
+        return None
+    start = widget.geometry()
+    if start == target:
+        if on_finished:
+            on_finished()
+        return None
+    prev = getattr(widget, "_geom_anim", None)
+    if prev is not None:
+        try:
+            prev.stop()
+        except RuntimeError:
+            pass
+    anim = QPropertyAnimation(widget, b"geometry", widget)
+    anim.setDuration(duration or DURATION["fast"])
+    anim.setStartValue(start)
+    anim.setEndValue(target)
+    anim.setEasingCurve(_EASE)
+    if on_finished:
+        anim.finished.connect(on_finished)
+    anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+    widget._geom_anim = anim  # type: ignore[attr-defined]
+    return anim
+
+
+# 交错淡入（列表/卡片视图「逐项显示」）
+
+
+def stagger_reveal(
+    cards: list,
+    step: int = 26,
+    duration: int | None = None,
+    max_total: int = 320,
+) -> None:
+    """按间隔逐项淡入一组控件，并限制总等待时间。
+
+    先同步设置透明状态，再依次显示，避免首帧闪烁。
+    延迟期间控件可能被回收，访问前需检查对象及效果是否仍有效。
+    """
+    if not _enabled or not cards:
+        return
+    dur = duration or DURATION["normal"]
+    # 先同步设置透明状态，避免首帧完整显示。
+    # 新加入的卡片可能尚未完成可见性传播，因此不以即时可见性跳过整批动画。
+    prepared: list = []
+    for card in cards:
+        try:
+            if card is None:
+                continue
+            eff = QGraphicsOpacityEffect(card)
+            eff.setOpacity(0.0)
+            card.setGraphicsEffect(eff)
+            prepared.append((card, eff))
+        except RuntimeError:
+            continue
+    for i, (card, eff) in enumerate(prepared):
+        delay = min(i * step, max_total)
+        call_later(delay, card, lambda c=card, e=eff, d=dur: _run_staggered_fade(c, e, d))
+
+
+def _run_staggered_fade(card: QWidget, eff: QGraphicsOpacityEffect, dur: int) -> None:
+    """为仍持有预期透明度效果的卡片启动淡入，并保存动画引用至结束。"""
+    try:
+        # 延迟期间控件或效果已销毁时跳过。
+        if card.graphicsEffect() is not eff:
+            return  # 效果已被替换或清除时结束当前动画。
+        anim = QPropertyAnimation(eff, b"opacity", card)
+        anim.setDuration(dur)
+        anim.setStartValue(0.0)
+        anim.setEndValue(1.0)
+        anim.setEasingCurve(_EASE)
+
+        def _cleanup() -> None:
+            """仅在卡片仍使用本次效果时移除效果，避免覆盖后续动画。"""
+            try:
+                if card.graphicsEffect() is eff:
+                    card.setGraphicsEffect(None)
+            except RuntimeError:
+                pass
+
+        anim.finished.connect(_cleanup)
+        anim.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        card._stagger_anim = anim  # type: ignore[attr-defined]
+    except RuntimeError:
+        pass
