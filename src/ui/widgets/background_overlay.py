@@ -271,3 +271,209 @@ class BackgroundOverlay(QWidget):
             return
         self._ready_callbacks.append(callback)
         self._notify_ready()
+
+    def dispose(self) -> None:
+        """丢弃待办和回调；线程池持有正在读取的任务，无须在 GUI 等待 IO。"""
+        self._disposed = True
+        self._loading = False
+        self._pending_read = None
+        self._active_read = None
+        self._ready_callbacks.clear()
+        self._generation += 1
+        self._pending_frame = None
+        self._dynamic_image = QImage()
+        self._orig = None
+        self._render = None
+        self._invalidate_scaled()
+
+    def set_scrim_live(self, scrim_pct: int) -> None:
+        """将遮罩比例限制在有效范围内，刷新原生呈现器及控件以实时显示变化。"""
+        if self._disposed:
+            return
+        self._scrim = max(0.0, min(1.0, (scrim_pct or 0) / 100.0))
+        if self._native_presenter is not None:
+            self._native_presenter.refresh()
+        self.update()
+
+    def set_blur_live(self, blur_pct: int) -> None:
+        """应用模糊比例变化，按原生呈现、动态帧或静态图像路径刷新结果；调用方负责节流。"""
+        if self._disposed:
+            return
+        new_blur = max(0, min(100, int(blur_pct or 0)))
+        if new_blur == self._blur:
+            return
+        self._blur = new_blur
+        if self._native_presenter is not None:
+            self._native_presenter.refresh()
+            return
+        if self._dynamic:
+            self._generation += 1
+            self._pending_frame = None
+            self.set_dynamic_frame(self._dynamic_image)
+            return
+        self._render = self._make_blurred(self._orig, self._blur)
+        self._invalidate_scaled()
+        self.update()
+
+    # 内部绘制。
+    def _start_pending_read(self) -> None:
+        """串行提交最新静态读图请求，使用全局线程池避免窗口析构等待文件读取。"""
+        if self._disposed or self._active_read is not None or self._pending_read is None:
+            return
+        generation, path = self._pending_read
+        self._pending_read = None
+        task = _ImageReadTask(generation, path)
+        task.signals.finished.connect(self._image_read, Qt.ConnectionType.QueuedConnection)
+        self._active_read = task
+        # 不创建归控件所有的 QThreadPool：它的析构会等待仍在读盘的任务。
+        QThreadPool.globalInstance().start(task)
+
+    @Slot(int, QImage)
+    def _image_read(self, generation: int, image: QImage) -> None:
+        """接收读图结果，仅更新当前代次的背景，然后继续排队读取并检查就绪回调。"""
+        if self._disposed:
+            return
+        self._active_read = None
+        if generation == self._generation:
+            pm = QPixmap.fromImage(image) if not image.isNull() else None
+            self._orig = pm if pm is not None and not pm.isNull() else None
+            self._render = self._make_blurred(self._orig, self._blur)
+            self._invalidate_scaled()
+            self._loading = False
+            self.update()
+        self._start_pending_read()
+        self._notify_ready()
+
+    def _notify_ready(self) -> None:
+        """在最新静态背景已就绪时依次执行回调，防止重入并隔离单个回调的异常。"""
+        if self._notifying_ready:
+            return
+        self._notifying_ready = True
+        try:
+            while self._ready_callbacks and not self._loading and not self._disposed:
+                callback = self._ready_callbacks.popleft()
+                try:
+                    callback()
+                except Exception:
+                    logger.exception("Background readiness callback failed")
+        finally:
+            self._notifying_ready = False
+
+    def _invalidate_scaled(self) -> None:
+        """释放缩放后的位图及其缓存键，使下次绘制按当前参数重建缓存。"""
+        self._scaled = None
+        self._scaled_key = None
+
+    @classmethod
+    def _make_blurred(cls, pm: QPixmap | None, blur_pct: int) -> QPixmap | None:
+        """先降采样并延伸边缘像素，再模糊及裁剪；保留不透明图像的覆盖范围，返回处理后的位图。"""
+        if pm is None or pm.isNull() or blur_pct <= 0:
+            return pm
+        # 先降采样再模糊，减少 QGraphicsScene 处理的像素数和主线程耗时。
+        # 绘制时将模糊结果缩放至背景区域。
+        max_side = 1280
+        src = pm
+        longest = max(pm.width(), pm.height())
+        scale = 1.0
+        if longest > max_side:
+            scale = max_side / float(longest)
+            src = pm.scaled(
+                max(1, int(pm.width() * scale)),
+                max(1, int(pm.height() * scale)),
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
+        radius = blur_pct / 100.0 * cls._MAX_BLUR_RADIUS * (scale if scale < 1.0 else 1.0)
+        effect = QGraphicsBlurEffect()
+        effect.setBlurRadius(radius)
+        # 延伸边缘像素后再模糊、裁回原尺寸，避免把图外透明黑色混进边缘。
+        # 仍在降采样尺寸处理；只多出与模糊半径有关的一圈，不影响缩放缓存。
+        rect = QRectF(0, 0, src.width(), src.height())
+        bounds = effect.boundingRectFor(rect)
+        padding = ceil(
+            max(-bounds.left(), -bounds.top(), bounds.right() - rect.right(), bounds.bottom() - rect.bottom())
+        )
+        padded = QPixmap(src.width() + padding * 2, src.height() + padding * 2)
+        padded.fill(Qt.GlobalColor.transparent)
+        edge_painter = QPainter(padded)
+        xs = (
+            (0, padding, 0, 1),
+            (padding, src.width(), 0, src.width()),
+            (padding + src.width(), padding, src.width() - 1, 1),
+        )
+        ys = (
+            (0, padding, 0, 1),
+            (padding, src.height(), 0, src.height()),
+            (padding + src.height(), padding, src.height() - 1, 1),
+        )
+        for dx, dw, sx, sw in xs:
+            for dy, dh, sy, sh in ys:
+                edge_painter.drawPixmap(QRectF(dx, dy, dw, dh), src, QRectF(sx, sy, sw, sh))
+        edge_painter.end()
+        scene = QGraphicsScene()
+        item = QGraphicsPixmapItem(padded)
+        item.setGraphicsEffect(effect)
+        scene.addItem(item)
+        out = QImage(src.size(), QImage.Format.Format_ARGB32_Premultiplied)
+        out.fill(0)
+        painter = QPainter(out)
+        scene.render(painter, rect, rect.translated(padding, padding))
+        painter.end()
+        if not src.hasAlphaChannel():
+            # Qt 的快速模糊会在不透明区域也留下少量 alpha 舍入误差。
+            # 先解除预乘再丢弃 alpha，保持原本不透明的图片颜色与覆盖范围。
+            out = out.convertToFormat(QImage.Format.Format_ARGB32).convertToFormat(QImage.Format.Format_RGB32)
+        return QPixmap.fromImage(out)
+
+    def _scaled_for(self, pm: QPixmap, w: int, h: int) -> QPixmap | None:
+        """按适应或填充模式缩放位图，并按视口尺寸、模式及源图缓存结果。"""
+        key = (w, h, self._fit, pm.cacheKey())
+        if self._scaled_key == key and self._scaled is not None:
+            return self._scaled
+        if self._fit == "contain":
+            scaled = pm.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        else:  # 按比例填充。
+            scaled = pm.scaled(
+                w, h, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+            )
+        self._scaled = scaled
+        self._scaled_key = key
+        return scaled
+
+    def paintEvent(self, _event) -> None:
+        """绘制背景及主题遮罩并统计动态帧；前景捕获或原生呈现期间由对应流程负责显示。"""
+        if self._capturing_foreground or self._native_presenter is not None:
+            return
+        if not self._enabled or self._orig is None or self._orig.isNull():
+            return
+        pm = self._render if (self._render and not self._render.isNull()) else self._orig
+        painter = QPainter(self)
+        if self._dynamic and self._painted_sequence != self._frame_sequence:
+            self.frames_drawn += 1
+            self._painted_sequence = self._frame_sequence
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            painter.end()
+            return
+        if self._dynamic:
+            # 动态帧已匹配显示尺寸，绘制时不重复分配和缩放全窗图像。
+            pw = pm.width() / pm.devicePixelRatioF()
+            ph = pm.height() / pm.devicePixelRatioF()
+            painter.drawPixmap(QRectF((w - pw) / 2, (h - ph) / 2, pw, ph), pm, QRectF(0, 0, pm.width(), pm.height()))
+        elif self._fit == "tile":
+            painter.drawTiledPixmap(self.rect(), pm)
+        else:
+            scaled = self._scaled_for(pm, w, h)
+            if scaled is not None and not scaled.isNull():
+                if self._fit == "contain":
+                    painter.drawPixmap((w - scaled.width()) // 2, (h - scaled.height()) // 2, scaled)
+                else:  # cover：等比放大铺满后居中裁剪
+                    sx = max(0, (scaled.width() - w) // 2)
+                    sy = max(0, (scaled.height() - h) // 2)
+                    painter.drawPixmap(0, 0, scaled, sx, sy, w, h)
+        if self._scrim > 0:
+            # 浅色界面以白色柔化图片，保持深色文字可读；深色界面保留原压暗效果。
+            tint = 255 if theme.current_theme() == "light" else 0
+            painter.fillRect(self.rect(), QColor(tint, tint, tint, int(self._scrim * 255)))
+        painter.end()
