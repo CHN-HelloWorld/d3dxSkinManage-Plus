@@ -182,3 +182,92 @@ class BackgroundOverlay(QWidget):
         self.set_blur_live(blur_pct)
         if old_fit != self._fit:
             self._refresh_dynamic_frame()
+
+    def _refresh_dynamic_frame(self) -> None:
+        """作废旧的帧处理结果，以当前尺寸和参数重新提交最近的动态帧。"""
+        if self._disposed or not self._dynamic or self._dynamic_image.isNull():
+            return
+        self._generation += 1
+        self._pending_frame = None
+        self.set_dynamic_frame(self._dynamic_image)
+
+    def resizeEvent(self, event) -> None:
+        """在控件尺寸变化后重新处理当前动态帧，使其匹配新的显示区域。"""
+        super().resizeEvent(event)
+        self._refresh_dynamic_frame()
+
+    def set_dynamic_frame(self, image: QImage) -> None:
+        """接收有效动态帧；需要缩放或模糊时合并到待处理帧，否则直接安装。"""
+        if self._disposed or not self._dynamic or image.isNull():
+            return
+        self._dynamic_image = image
+        ratio = self.devicePixelRatioF()
+        aspect = (
+            Qt.AspectRatioMode.KeepAspectRatio
+            if self._fit == "contain"
+            else Qt.AspectRatioMode.KeepAspectRatioByExpanding
+        )
+        target = self.size() * ratio
+        if self._blur or image.size() != image.size().scaled(target, aspect):
+            self._pending_frame = image
+            self._start_frame_blur()
+        else:
+            self._install_frame(image)
+
+    def reset_dynamic_frames(self) -> None:
+        """递增代次使异步结果失效，清空动态帧及绘制缓存并请求重绘。"""
+        self._generation += 1
+        self._pending_frame = None
+        self._dynamic_image = QImage()
+        self._orig = self._render = None
+        self._invalidate_scaled()
+        self.update()
+
+    def _start_frame_blur(self) -> None:
+        """仅在没有帧任务运行时，按当前像素尺寸向全局线程池提交最新待处理帧。"""
+        if self._blur_task is not None or self._pending_frame is None:
+            return
+        from src.ui.backgrounds.blur import BlurFrame
+
+        image, self._pending_frame = self._pending_frame, None
+        ratio = self.devicePixelRatioF()
+        task = BlurFrame(
+            self._generation,
+            image,
+            self._blur,
+            (max(1, round(self.width() * ratio)), max(1, round(self.height() * ratio))),
+            self._fit,
+        )
+        task.signals.ready.connect(self._frame_blurred)
+        self._blur_task = task
+        QThreadPool.globalInstance().start(task)
+
+    @Slot(int, QImage)
+    def _frame_blurred(self, generation: int, image: QImage) -> None:
+        """仅安装当前代次的处理结果，释放任务槽位后继续处理最新排队帧。"""
+        self._blur_task = None
+        if self._disposed or not self._dynamic:
+            return
+        if generation == self._generation:
+            self._install_frame(image)
+        self._start_frame_blur()
+
+    def _install_frame(self, image: QImage) -> None:
+        """在界面线程把处理后的图像转为带像素比的位图，更新帧序号并作废缩放缓存。"""
+        self._orig = QPixmap.fromImage(image)
+        self._orig.setDevicePixelRatio(self.devicePixelRatioF())
+        self._render = self._orig
+        self._invalidate_scaled()
+        self._frame_sequence += 1
+        self.update()
+
+    def is_loading(self) -> bool:
+        """最新请求是否仍在准备；已经清空背景时不等待旧请求的读盘。"""
+        return self._loading
+
+    def when_ready(self, callback: Callable[[], None]) -> None:
+        """在 GUI 线程调用一次 callback；已就绪时立即调用，销毁后不再调用。"""
+        if self._disposed:
+            return
+        self._ready_callbacks.append(callback)
+        self._notify_ready()
