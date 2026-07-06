@@ -407,3 +407,110 @@ class BackgroundSettingsMixin:
         self._update_background_panels()
         for source in self._bg_assets:
             self._refresh_bg_asset(source)
+
+    def _on_bg_source_changed(self):
+        """同步背景来源与启用配置，更新可见设置区域并通知背景变化。"""
+        source = self._bg_source_combo.currentData()
+        self._config.set("appearance.background.source", source)
+        self._config.set("appearance.background.enabled", source != "off")
+        self._update_background_panels()
+        self.background_changed.emit()
+
+    def _update_background_panels(self):
+        """按来源和引擎有效性安放共用设置、控制分区可见性，并限定图片来源才可平铺。"""
+        source = self._bg_source_combo.currentData()
+        scene_ready = source == "scene" and self._bg_engine_validator.valid
+        self._bg_source_buttons[source].setChecked(True)
+        self._bg_off_note.setVisible(source == "off")
+        # 共用设置保留在场景来源面板内，不增加重复表面。
+        target = self._bg_we_layout if source == "scene" else self._bg_settings_layout
+        for widget in (self._bg_sub, self._bg_motion_panel):
+            if widget.parentWidget() is not target.parentWidget():
+                if source == "scene":
+                    target.addWidget(widget)
+                else:
+                    target.insertWidget(max(0, target.count() - 1), widget)
+            widget.setStyleSheet(
+                "#settingsGroup { background: transparent; border: none; }"
+                if source == "scene"
+                else (
+                    f"#settingsGroup {{ background-color: {surface(over='nav')};"
+                    f" border: 1px solid {stroke()}; border-radius: {theme.radius('card')}px; }}"
+                )
+            )
+        self._bg_we_panel.setVisible(source == "scene")
+        self._bg_engine_panel.setVisible(source == "scene")
+        self._bg_scene_panel.setVisible(scene_ready)
+        self._bg_video_panel.setVisible(source == "video")
+        self._bg_playback_panel.setVisible(source == "video" or scene_ready)
+        self._bg_motion_panel.setVisible(source == "video" or scene_ready)
+        self._bg_quality_row.setVisible(scene_ready)
+        self._bg_volume_row.setVisible(source == "video" or scene_ready)
+        self._bg_sub.setVisible(source in ("image", "video") or scene_ready)
+        self._bg_image_row.setVisible(source == "image")
+        self._bg_image_error_row.setVisible(source == "image" and self._bg_playback_state == "error")
+        with QSignalBlocker(self._bg_fit_combo):
+            tile = self._bg_fit_combo.findData("tile")
+            if source == "image" and tile < 0:
+                self._bg_fit_combo.addItem(tr("平铺"), "tile")
+            elif source != "image" and tile >= 0:
+                self._bg_fit_combo.removeItem(tile)
+            index = self._bg_fit_combo.findData(self._config.get("appearance.background.fit", "cover"))
+            self._bg_fit_combo.setCurrentIndex(max(0, index))
+
+    def _on_bg_path_changed(self, key, value):
+        """更新素材配置和预览；引擎路径交由校验器处理，其他素材直接通知背景变化。"""
+        self._config.set(f"appearance.background.{key}", value)
+        source = "image" if key == "path" else key.removesuffix("_path")
+        if source in getattr(self, "_bg_assets", {}):
+            self._refresh_bg_asset(source)
+        if key == "engine_path":
+            # 按配置加载时的路径规则校验可移植相对路径。
+            self._bg_engine_validator.set_path(self._config.get("appearance.background.engine_path", ""))
+        else:
+            self.background_changed.emit()
+
+    def _on_bg_engine_status(self, status, message):
+        """显示引擎校验结果并更新场景可用区域，通知背景覆盖层重新同步。"""
+        self._bg_engine_status.setText(message)
+        self._bg_engine_status.setStyleSheet(
+            f"color: {color('danger' if status == 'invalid' else 'secondary')};"
+            " background: transparent; padding: 0 20px 16px;"
+        )
+        self._update_background_panels()
+        self.bg_overlay_refresh.emit()
+
+    def _save_bg_dynamic_parameter(self, key, value):
+        """更新指定动态背景参数，并请求覆盖层应用配置。"""
+        self._config.set(f"appearance.background.{key}", value)
+        self.bg_overlay_refresh.emit()
+
+    def _on_bg_volume_changed(self, value):
+        """同步百分比或静音文案，并提交当前背景音量配置。"""
+        self._bg_volume_label.setText(f"{value}%" if value else tr("静音"))
+        self._save_bg_dynamic_parameter("volume", value)
+
+    def set_video_background_preview(self, path, image):
+        """仅为当前视频路径接收有效预览帧，等比填充后裁剪为素材缩略图。"""
+        if path != self._config.get("appearance.background.video_path", "") or image.isNull():
+            return
+        thumb = self._bg_assets["video"][3]
+        pixmap = QPixmap.fromImage(image).scaled(
+            88, 60, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+        )
+        thumb.setPixmap(pixmap.copy((pixmap.width() - 88) // 2, (pixmap.height() - 60) // 2, 88, 60))
+
+    def set_background_status(self, state, message):
+        """根据播放状态同步提示、暂停恢复按钮和重试入口，并更新图片来源的错误行。"""
+        self._bg_playback_state = state
+        self._bg_playback_status.setText(message)
+        self._bg_playback_status.setStyleSheet(
+            f"color: {color('danger' if state == 'error' else 'secondary')};"
+            " background: transparent; padding: 0 20px 16px;"
+        )
+        self._bg_pause_button.setText(tr("继续播放") if state == "paused" else tr("暂停播放"))
+        self._bg_pause_button.setEnabled(state in ("playing", "paused"))
+        self._bg_retry_button.setVisible(state == "error")
+        if hasattr(self, "_bg_image_error_row"):
+            self._bg_image_status.setText(message)
+            self._bg_image_error_row.setVisible(self._bg_source_combo.currentData() == "image" and state == "error")
