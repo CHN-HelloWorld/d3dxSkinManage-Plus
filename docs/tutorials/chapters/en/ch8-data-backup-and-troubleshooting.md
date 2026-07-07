@@ -36,3 +36,29 @@ The `.d3dxmod` and `.d3dxmeta/` entries inside a complete container are essentia
 
 Named variants are stored in `.d3dxmeta/variants/`. Back up the complete mod containers together with `presets.json` to restore both presets and the appearance configurations they reference.
 
+### 8.3 Recommended full backup procedure
+
+1. Wait for import, export, deployment, update, and recovery tasks to finish.
+2. Exit the application normally. If the game or loader is still writing configuration, finish those operations too.
+3. Copy `config/`, `data/`, and `plugins/` from the actual data root, along with any external assets you need.
+4. Save custom loader configuration and manually added resources in deployment folders separately.
+5. Store the backup in a different location from the source data, and spot-check containers, metadata, and preset files.
+
+While the application is running, the database may also use `-wal` and `-shm` files. Close the app normally before copying to avoid an inconsistent snapshot. Do not copy just one database file while it is being written.
+
+To share an individual mod, export it from Category Overview and include metadata. To share a category structure, use `.d3dxcp`. Neither replaces a full backup of your data.
+
+### 8.4 Moving to another folder, disk, or computer
+
+To move the entire manager, first back up as described above and exit the app, then copy the complete distribution and personal data. After starting from the new location, check each of the following:
+
+- Game executable and loader paths.
+- The actual deployment location specified by **Mod folder**.
+- External background images, videos, or WE scenes, and the WE application path.
+- Availability of fonts you installed, language packs, and plugins.
+- Whether the games' resource drives are connected.
+
+Some paths managed by the app can be stored relative to the data root. Paths to external games, loaders, and media may still need to be entered again.
+
+When changing the deployment location, prefer the migration confirmation provided on the **Games** page. Do not reimport an incomplete deployment folder as a new mod library, especially after discarding identity markers and while still using the old index.
+
