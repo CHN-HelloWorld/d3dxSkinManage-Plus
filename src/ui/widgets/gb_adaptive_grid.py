@@ -218,3 +218,190 @@ class GbAdaptiveGrid(QWidget):
         x = self.MARGIN + col * (self._card_w + self.SPACING)
         y = self.MARGIN + row * (self._card_h + self.SPACING)
         return x, y
+
+    def _index_window(self) -> tuple[int, int]:
+        """返回固定行窗口的首末下标，包含部分可见行和上下缓冲。"""
+        bar = self.scroll_area.verticalScrollBar()
+        scroll_y = bar.value()
+        vh = self.scroll_area.viewport().height() or 1
+        row_h = self._row_h or 1
+        first_row = max(0, scroll_y // row_h - self.VISIBLE_BUFFER_ROWS)
+        last_row = min(self._total_rows - 1, scroll_y // row_h + (vh + row_h - 1) // row_h + self.VISIBLE_BUFFER_ROWS)
+        n = len(self._records)
+        first_idx = first_row * self._cols
+        last_idx = min(n - 1, (last_row + 1) * self._cols - 1)
+        return first_idx, last_idx
+
+    def _update_visible(self) -> None:
+        """跨行时复用卡片，同一窗口内只检查分页。"""
+        if not self.isVisible():
+            return  # 网格可绘制前保留显示请求。
+        if not self._records or self._card_factory is None or self._total_rows <= 0:
+            return
+        first_idx, last_idx = self._index_window()
+        if last_idx < 0:
+            return
+        prefetch_changed = self._sync_prefetch_window()
+        window = (first_idx, last_idx, self._cols, self._card_w, self._card_h)
+        if window == self._visible_window:
+            self._pending_reveal = False
+            self._maybe_emit_next()
+            if prefetch_changed:
+                self._rebuild_prefetch_queue()
+                self._schedule_images()
+            return
+        # 先回收再分配，跨越很远的滚动也只需一屏控件。
+        for idx in list(self._cards):
+            if idx < first_idx or idx > last_idx:
+                card = self._cards.pop(idx)
+                self._image_requested.pop(idx, None)
+                # 回收控件前保留临近视口的有效图片工作，转为独立数据预取。
+                if getattr(card, "_thumb_loaded", False) and self._prefetch_bounds is not None:
+                    if self._prefetch_bounds[0] <= idx <= self._prefetch_bounds[1]:
+                        self._request_prefetch(idx)
+                self._reflow_targets.pop(card, None)
+                if self._card_binder is not None and type(card) is GbModCard:
+                    card.cancel_thumbnail()
+                    self._card_pool.release(card)
+                else:
+                    self._dispose_card(card)
+        # 2) 创建 / 摆放可视卡片
+        reveal = self._pending_reveal and not self._scrolling
+        viewport = self.scroll_area.viewport().rect().translated(0, self.scroll_area.verticalScrollBar().value())
+        for i in range(first_idx, last_idx + 1):
+            card = self._cards.get(i)
+            is_new = card is None
+            if card is None:
+                card = self._card_pool.take(GbModCard) if self._card_binder is not None else None
+                try:
+                    if card is None:
+                        card = self._card_factory(self._records[i])
+                        card.setParent(self._content)
+                    else:
+                        self._card_binder(card, self._records[i])
+                except Exception:
+                    if card is not None:
+                        self._dispose_card(card)
+                    continue
+                self._cards[i] = card
+            # 重排动画中的卡片由动画驱动，避免直接定位使动画提前结束。
+            if card not in self._reflow_targets:
+                x, y = self._cell_pos(i)
+                if card.x() != x or card.y() != y:
+                    card.move(x, y)
+            if reveal and is_new and card.geometry().intersects(viewport):
+                self._card_reveal.add(card, i)
+            if card.isHidden():
+                card.show()
+        self._visible_window = window if len(self._cards) == last_idx - first_idx + 1 else None
+        self._pending_reveal = False
+        self._scroll_edge_fade.refresh()
+        # 4) 同时判断是否需要预拉下一页
+        self._maybe_emit_next()
+        self._rebuild_prefetch_queue()
+        self._schedule_images()
+
+    def _schedule_images(self) -> None:
+        """网格可见时安排图片加载批次，保留已经启动的定时截止时间。"""
+        if not self._img_timer.isActive() and self.isVisible():
+            self._img_timer.start()
+
+    def _visible_image_range(self) -> tuple[int, int]:
+        """根据滚动位置和视口高度返回覆盖可见行的记录下标闭区间。"""
+        y = self.scroll_area.verticalScrollBar().value()
+        height = self.scroll_area.viewport().height() or 1
+        first = y // self._row_h * self._cols
+        last = ((y + height - 1) // self._row_h + 1) * self._cols - 1
+        return first, min(len(self._records) - 1, last)
+
+    def _sync_prefetch_window(self) -> bool:
+        """更新视口周围的预取范围并取消移出范围的请求，返回范围是否发生变化。"""
+        if self._image_prefetcher is None:
+            return False
+        y = self.scroll_area.verticalScrollBar().value()
+        height = self.scroll_area.viewport().height() or 1
+        padding = height * self.IMAGE_PRELOAD_VIEWPORTS
+        first = max(0, (y - padding) // self._row_h) * self._cols
+        last = min(len(self._records) - 1, ((y + height + padding) // self._row_h + 1) * self._cols - 1)
+        bounds = first, last
+        if bounds == self._prefetch_bounds:
+            return False
+        self._prefetch_bounds = bounds
+        for index in list(self._prefetch_requested):
+            if not first <= index <= last:
+                record = self._prefetch_requested.pop(index)
+                if self._image_prefetch_canceller is not None:
+                    self._image_prefetch_canceller(record)
+        return True
+
+    def _rebuild_prefetch_queue(self) -> None:
+        """将预取范围内尚无卡片及请求的记录排队，优先处理靠近可见区的图片。"""
+        if self._prefetch_bounds is None or self._image_prefetcher is None:
+            self._prefetch_queue = []
+            return
+        first, last = self._prefetch_bounds
+        visible_first, visible_last = self._visible_image_range()
+        self._prefetch_queue = sorted(
+            (
+                index
+                for index in range(first, last + 1)
+                if index not in self._cards and index not in self._prefetch_requested
+            ),
+            key=lambda index: min(abs(index - visible_first), abs(index - visible_last)),
+        )
+
+    def _request_prefetch(self, index: int) -> bool:
+        """提交尚未登记的图片预取，回调明确拒绝时返回 False 并保留重试机会。"""
+        if index in self._prefetch_requested or self._image_prefetcher is None:
+            return True
+        record = self._records[index]
+        if self._image_prefetcher(record) is False:
+            return False
+        self._prefetch_requested[index] = record
+        return True
+
+    def _load_visible_images(self) -> None:
+        """小批提交当前可见卡，再准备邻近记录；滚动中保持原定截止时间。"""
+        if not self._cards or self._total_rows <= 0 or not self.isVisible():
+            return
+        first, last = self._visible_image_range()
+        candidates = sorted(
+            self._cards,
+            key=lambda index: (
+                not first <= index <= last,
+                index if first <= index <= last else min(abs(index - first), abs(index - last)),
+            ),
+        )
+        remaining = self.IMG_BATCH_SIZE
+        pending = False
+        for idx in candidates:
+            card = self._cards[idx]
+            if self._image_requested.get(idx) is card or getattr(card, "_thumb_loaded", False):
+                continue
+            load = getattr(card, "load_thumbnail", None)
+            if callable(load):
+                if remaining == 0:
+                    pending = True
+                    break
+                try:
+                    load()
+                except RuntimeError:
+                    pass
+                remaining -= 1
+            self._image_requested[idx] = card
+        if not pending:
+            while remaining and self._prefetch_queue:
+                index = self._prefetch_queue[0]
+                if not self._request_prefetch(index):
+                    break
+                self._prefetch_queue.pop(0)
+                remaining -= 1
+        if pending or self._prefetch_queue:
+            self._schedule_images()
+
+    def _reposition_cached(self) -> None:
+        """立即将卡片放置到当前格位，供首次布局及禁用动画时使用。"""
+        self._stop_reflow()
+        for idx, card in self._cards.items():
+            x, y = self._cell_pos(idx)
+            card.move(x, y)
