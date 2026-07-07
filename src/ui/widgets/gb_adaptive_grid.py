@@ -405,3 +405,169 @@ class GbAdaptiveGrid(QWidget):
         for idx, card in self._cards.items():
             x, y = self._cell_pos(idx)
             card.move(x, y)
+
+    def _animate_reposition(self) -> None:
+        """列数变化后将可见卡片缓动至目标格位。"""
+        targets: dict = {}
+        for idx, card in self._cards.items():
+            x, y = self._cell_pos(idx)
+            try:
+                cur = card.pos()
+            except RuntimeError:
+                continue
+            if cur.x() == x and cur.y() == y:
+                continue
+            targets[card] = QPoint(x, y)
+        if not targets:
+            return
+        self._reflow_targets = targets
+        if not self._reflow_timer.isActive():
+            self._reflow_timer.start()
+
+    def _reflow_tick(self) -> None:
+        """推进一帧重排动画，全部卡片到达目标后停止。"""
+        if not self._reflow_targets:
+            self._reflow_timer.stop()
+            return
+        alpha = self.REFLOW_ALPHA
+        snap = self.REFLOW_SNAP_PX
+        done = []
+        for card, tgt in self._reflow_targets.items():
+            try:
+                cur = card.pos()
+            except RuntimeError:
+                done.append(card)
+                continue
+            dx = tgt.x() - cur.x()
+            dy = tgt.y() - cur.y()
+            if abs(dx) <= snap and abs(dy) <= snap:
+                card.move(tgt)
+                done.append(card)
+                continue
+            card.move(cur.x() + round(dx * alpha), cur.y() + round(dy * alpha))
+        for c in done:
+            self._reflow_targets.pop(c, None)
+        if not self._reflow_targets:
+            self._reflow_timer.stop()
+
+    def _stop_reflow(self) -> None:
+        """停止卡片重排定时器并丢弃剩余位置目标。"""
+        if self._reflow_timer.isActive():
+            self._reflow_timer.stop()
+        self._reflow_targets = {}
+
+    # 事件
+    def eventFilter(self, obj, event):
+        """视口宽度变化时重算列数并调整卡片位置，尺寸变化后延后检查可见区及分页回填。"""
+        if obj is self.scroll_area.viewport() and event.type() == QEvent.Type.Resize:
+            w = event.size().width()
+            if w != self._last_viewport_width:
+                first = self._last_viewport_width < 0
+                self._last_viewport_width = w
+                self._relayout()
+                # 首次获得有效宽度时直接布局，后续宽度变化再使用重排动画。
+                if first or not anim.is_enabled() or not self._cards:
+                    self._reposition_cached()
+                else:
+                    self._animate_reposition()
+            # 高度变化后延迟检查回填，使滚动范围先完成更新。
+            call_later(0, self, self._update_visible)
+            call_later(0, self, self._maybe_fill_viewport)
+        return super().eventFilter(obj, event)
+
+    def showEvent(self, event):
+        """页面重新显示时按当前视口恢复布局和图片请求，并补查隐藏期间未执行的回填。"""
+        # QStackedWidget 切到可见时按当前 viewport 宽重排（切换期间可能没发生 resize 事件）。
+        super().showEvent(event)
+        if self._records:
+            self._scrolling = False
+            self._scroll_idle.stop()
+            # 重新显示页面属于恢复，仅处理隐藏期间新产生的显示请求。
+            self._visible_window = None
+            self._updating_items = True
+            try:
+                self._relayout()
+                self._reposition_cached()
+                self._update_visible()
+            finally:
+                self._updating_items = False
+            self._schedule_images()
+            # 隐藏期间不进行视口回填，重新显示时须再检查一次。
+            call_later(0, self, self._maybe_fill_viewport)
+
+    def hideEvent(self, event):
+        """隐藏网格时取消卡片入场揭示，保留数据供返回页面时恢复。"""
+        self._card_reveal.cancel()
+        super().hideEvent(event)
+
+    # 数据
+    def set_items(
+        self,
+        records: list[GbModRecord],
+        *,
+        has_more: bool,
+        card_factory: Callable,
+        card_binder: Callable | None = None,
+        image_prefetcher: Callable | None = None,
+        image_prefetch_canceller: Callable | None = None,
+        append: bool = False,
+    ) -> None:
+        """替换或追加资源记录及绑定回调，结束加载状态、更新可见卡片并安排视口回填检查。"""
+        if not append:
+            self._destroy_all_cards()
+            self._records = list(records)
+            self._scrolling = False
+            self._scroll_idle.stop()
+        else:
+            self._records.extend(records)
+        self._card_factory = card_factory
+        self._card_binder = card_binder
+        if not append or image_prefetcher is not None:
+            self._image_prefetcher = image_prefetcher
+            self._image_prefetch_canceller = image_prefetch_canceller
+            self._prefetch_bounds = None
+        # 仅为非滚动状态下新增的可视卡片安排入场动画，返回页面时不重播。
+        self._pending_reveal = not self._scrolling
+        self._has_more = has_more
+        self._loading = False
+        # 数据到达后收起分页加载条。
+        self._updating_items = True
+        try:
+            self._emit_loading_more(False)
+            self._relayout()
+            self._update_visible()
+        finally:
+            self._updating_items = False
+        # 本批布局完成后检查内容是否覆盖视口，未覆盖时再请求一页。
+        call_later(0, self, self._maybe_fill_viewport)
+
+    def append_items(
+        self,
+        records,
+        *,
+        has_more,
+        card_factory,
+        card_binder=None,
+        image_prefetcher=None,
+        image_prefetch_canceller=None,
+    ) -> None:
+        """沿用统一数据提交入口追加一页记录，保留已有卡片和数据。"""
+        self.set_items(
+            records,
+            has_more=has_more,
+            card_factory=card_factory,
+            card_binder=card_binder,
+            image_prefetcher=image_prefetcher,
+            image_prefetch_canceller=image_prefetch_canceller,
+            append=True,
+        )
+
+    @staticmethod
+    def _dispose_card(card: QWidget) -> None:
+        """取消卡片可选的缩略图请求，暂停其交互及动画后解除父对象并延后销毁。"""
+        cancel = getattr(card, "cancel_thumbnail", None)
+        if callable(cancel):
+            cancel()
+        suspend_card(card)
+        card.setParent(None)
+        card.deleteLater()
