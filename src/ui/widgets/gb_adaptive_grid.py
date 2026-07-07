@@ -571,3 +571,102 @@ class GbAdaptiveGrid(QWidget):
         suspend_card(card)
         card.setParent(None)
         card.deleteLater()
+
+    def _destroy_all_cards(self) -> None:
+        """停止卡片更新与动画，取消已登记预取，并清理活动卡片和池中缓存控件。"""
+        self._card_reveal.cancel()
+        self._stop_reflow()  # 销毁卡片前停止重排动画。
+        self._vs_timer.stop()
+        self._img_timer.stop()
+        self._visible_window = None
+        if self._image_prefetch_canceller is not None:
+            for record in self._prefetch_requested.values():
+                self._image_prefetch_canceller(record)
+        self._prefetch_requested.clear()
+        self._prefetch_bounds = None
+        self._prefetch_queue.clear()
+        self._image_requested.clear()
+        for card in self._cards.values():
+            self._dispose_card(card)
+        self._cards.clear()
+        self._card_pool.clear(self._dispose_card)
+
+    def clear(self) -> None:
+        """清空卡片、记录、空闲任务及分页状态，将虚拟内容高度归零。"""
+        self._destroy_all_cards()
+        self._scroll_idle.stop()
+        self._idle_jobs.clear()
+        self._scrolling = False
+        self._has_more = False
+        self._loading = False
+        self._emit_loading_more(False)
+        self._records = []
+        self._total_rows = 0
+        self._pending_reveal = False
+        self._content.setMinimumHeight(0)
+        self._content.setMaximumHeight(0)
+
+    def count(self) -> int:
+        """返回已加载记录总数，供页面判断空状态及视口回填。"""
+        return len(self._records)
+
+    def iter_cards(self):
+        """迭代可见行及缓冲行中的活动卡片。
+
+        离屏条目的状态须保存到记录或页面中，供卡片重新创建时读取。
+        """
+        yield from list(self._cards.values())
+
+    # 加载态
+    def mark_loading(self) -> None:
+        """记录分页请求正在进行，仅在已有内容时显示追加加载提示。"""
+        self._loading = True
+        # 已有记录时显示分页加载条；无记录时由浏览视图显示首次加载状态。
+        if len(self._records) > 0:
+            self._emit_loading_more(True)
+
+    def stop_loading(self) -> None:
+        """外部（如请求失败）复位加载态：允许后续滚动再次触发分页，并收起加载条。"""
+        self._loading = False
+        self._emit_loading_more(False)
+
+    def _emit_loading_more(self, on: bool) -> None:
+        """只在追加加载提示状态变化时发送显示或隐藏信号。"""
+        # 去抖：避免分块渲染多次 append / backfill 反复发同向信号触发动画抖动。
+        if on == self._loading_more_shown:
+            return
+        self._loading_more_shown = on
+        (self.loading_more_started if on else self.loading_more_finished).emit()
+
+    def _viewport_metrics_usable(self) -> bool:
+        """判断可见性及视口尺寸是否足以用于分页回填。
+
+        隐藏控件不参与正常布局，滚动范围可能始终为零，不能据此判断内容不足。
+        同时检查视口高度，避免刚显示而尚未布局时连续请求所有分页。
+        """
+        if not self.isVisible():
+            return False
+        return self.scroll_area.viewport().height() > 50
+
+    def _maybe_emit_next(self) -> None:
+        """视口接近内容末尾且仍有后续页时登记加载状态并请求下一页，避免重复请求。"""
+        if self._loading or not self._has_more:
+            return
+        if not self._viewport_metrics_usable():
+            return
+        bar = self.scroll_area.verticalScrollBar()
+        viewport_h = self.scroll_area.viewport().height() or 1
+        if bar.maximum() - bar.value() <= viewport_h * self.PRELOAD_VIEWPORTS:
+            self._loading = True
+            self.request_next_page.emit()
+
+    def _maybe_fill_viewport(self) -> None:
+        """内容尚未覆盖视口时请求下一页，出现有效滚动范围后停止回填。"""
+        if self._loading or not self._has_more:
+            return
+        if not self._viewport_metrics_usable():
+            return
+        bar = self.scroll_area.verticalScrollBar()
+        if bar.maximum() <= 0:
+            self._loading = True
+            self.request_next_page.emit()
