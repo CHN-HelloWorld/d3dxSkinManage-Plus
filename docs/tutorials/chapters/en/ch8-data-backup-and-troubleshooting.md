@@ -62,3 +62,18 @@ Some paths managed by the app can be stored relative to the data root. Paths to 
 
 When changing the deployment location, prefer the migration confirmation provided on the **Games** page. Do not reimport an incomplete deployment folder as a new mod library, especially after discarding identity markers and while still using the old index.
 
+### 8.5 File identity, verification, and recovery messages
+
+The app checks managed source files, metadata, and deployment records before an operation. The following changes can block writes:
+
+| Message type | First action |
+| --- | --- |
+| File missing or disk offline | Reconnect the disk and check the actual path |
+| File in use | Close the relevant editor or preview, or finish related game operations, then retry |
+| Source file or metadata changed | Select the item again, refresh, and check where the change came from |
+| Identity mismatch or ownership cannot be determined | Keep the complete container and records; check whether only some files were copied or replaced |
+| Verification mismatch | Keep the original package and error details; check whether the file is damaged or was modified |
+| Unfinished transaction, rollback, or cleanup | Wait for recovery, or restart and retry as instructed |
+
+These messages prevent operations from continuing on the wrong item. **Do not delete markers, the database, or transaction records to dismiss the message.** Those records may contain the file contents and path information needed for recovery.
+
