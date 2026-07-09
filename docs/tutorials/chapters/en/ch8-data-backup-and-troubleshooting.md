@@ -115,3 +115,50 @@ You can replace or obscure game names, mod names, and personal paths in screensh
 
 ---
 
+## Appendix A: Default keyboard shortcuts
+
+These are the application's default bindings. If you have customized them, or plugin conflict resolution has changed them, refer to **Settings → Shortcuts**.
+
+| Default shortcut | Action | Where it works |
+| --- | --- | --- |
+| `Ctrl+C` | Copy | Text areas; copies a preset in the presets list |
+| `Ctrl+X` | Cut | Text areas; prepares to move selected items in Category Overview |
+| `Ctrl+V` | Paste | Text areas, Category Overview, or the presets list |
+| `Ctrl+A` | Select all | The current text area, Category Overview, or presets list |
+| `Delete` | Delete | Text or selected items in Category Overview; deleting items still requires the applicable confirmation |
+| `F5` | Refresh the current game library | Main window |
+| `Ctrl+I` | Import mods | A game is active and the destination category is open |
+| `Ctrl+F` | Search this page | The current page, if it supports search |
+| `Ctrl+K` | Search all settings | Main window |
+| `Ctrl+,` | Open Settings | Main window |
+| `Ctrl+1` | Games | Main window |
+| `Ctrl+2` | Category Overview | Main window |
+| `Ctrl+3` | Gallery | Main window |
+| `Ctrl+4` | Online Mods | Main window |
+| `Alt+Left` | Go up one level / close online details | The corresponding page |
+| `Ctrl+Shift+N` | New Category | Category Overview |
+| `F2` | Edit the selected item | A single mod or category selected in Category Overview |
+| `Space` | Enable or disable | A single mod selected in Category Overview |
+| `Ctrl+Shift+E` | Export selected items | Category Overview |
+| `F6` | Launch Mod loader | A valid loader is configured |
+| `F7` | Launch Game | A game executable is configured |
+
+`Esc`, `Ctrl+Enter` in edit windows, and similar keys are contextual actions outside the customizable command set listed above. In-game F10 is configured by 3DMigoto.
+
+---
+
+## Appendix B: Operation scope reference
+
+| What you want to do | Where to do it | Key point |
+| --- | --- | --- |
+| Stop using a mod temporarily | Disable | Keeps the source container in the library |
+| Delete a mod | Delete in Category Overview | Check whether it uses the Recycle Bin or permanent deletion |
+| Delete all data for a game | Delete on the Games page | Permanently removes resources, configuration, and managed deployments; back up first |
+| Switch to another set of enabled mods | Presets | Includes both mod selections and variant references |
+| Change the appearance within one mod | Variants | Requires the mod to support the corresponding variables |
+| Share an empty category structure | Export category preset | Produces a `.d3dxcp` file without mods |
+| Share a mod and its named variants | Export the mod with metadata | Check the output package and keep all associated content |
+| Clear regenerable images | Images and cache | Distinguish memory cleanup from disk cleanup |
+| Remove duplicate downloaded source packages | Download data → Clean up installed | Keeps downloads that have not yet been installed |
+| Reset application preferences | Reset | Requires confirmation; preserves game configurations and imported mods |
+| Repair the index | Tools → Rebuild Index | Requires intact source files; cannot restore deleted resources |
