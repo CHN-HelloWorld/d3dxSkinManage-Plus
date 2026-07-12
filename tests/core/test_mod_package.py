@@ -557,3 +557,377 @@ def test_import_rolls_back_when_local_sidecar_write_fails(
     assert (source / "mod.ini").is_file()
     assert mm.get_mods(node_id=char.id) == []
     assert not (mm._get_character_library(char.id) / "SidecarFail").exists()
+
+
+def test_import_rejects_container_whose_body_link_escapes_source(
+    temp_data_dir,
+    tmp_path,
+):
+    from src.core.mod_manager import ModManager
+
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "private.ini").write_text("[Private]\n", encoding="utf-8")
+    container = tmp_path / "LinkedContainer"
+    container.mkdir()
+    body = container / "LinkedContainer"
+    _link_directory(body, outside)
+    _write_raw_container_marker(container, _current_marker(body))
+    marker_text = (container / MOD_CONTAINER_MARKER).read_text(encoding="utf-8")
+
+    mm = ModManager()
+    mm.set_game("game_a")
+    char = mm.add_character(name="角色越界容器", node_type="character")
+
+    assert mm.import_mod(str(container), node_id=char.id) is None
+    assert container.is_dir()
+    assert body.is_dir()
+    assert (container / MOD_CONTAINER_MARKER).read_text(encoding="utf-8") == marker_text
+    assert (outside / "private.ini").read_text(encoding="utf-8") == "[Private]\n"
+    assert mm.get_mods(node_id=char.id) == []
+
+
+def test_import_plain_zip_has_no_envelope_metadata(temp_data_dir, tmp_path):
+    from src.core.mod_manager import ModManager
+
+    z = tmp_path / "plain.zip"
+    with zipfile.ZipFile(z, "w") as zf:
+        zf.writestr("PlainMod/dummy.ini", "[X]\n")
+
+    mm = ModManager()
+    mm.set_game("game_a")
+    char = mm.add_character(name="角色Y", node_type="character")
+    mod = mm.import_mod(source_path=str(z), node_id=char.id)
+    assert mod is not None
+    # 向后兼容：无信封 → 元数据保持空
+    assert mod.info.author == ""
+    assert mod.info.tags == []
+
+
+def test_gb_update_source_survives_export_import(qtbot, temp_data_dir, tmp_path):
+    import zipfile as _zip
+    from unittest.mock import MagicMock
+
+    from src.core.config import Config
+    from src.core.mod_exporter import ExportItem, ModExporter
+    from src.core.mod_manager import ModManager
+    from src.core.mod_update_service import ModUpdateService
+    from src.services.gamebanana.models import GbInstallMetadata
+
+    src_zip = tmp_path / "orig.zip"
+    with _zip.ZipFile(src_zip, "w") as zf:
+        zf.writestr("GBMod/dummy.ini", "[X]\n")
+
+    mm = ModManager()
+    mm.set_game("game_a")
+    char = mm.add_character(name="角色G", node_type="character")
+    gb_meta = GbInstallMetadata(
+        mod_id=555,
+        file_id=777,
+        file_md5="abc",
+        file_ts=1700000000,
+        page_url="https://gamebanana.com/mods/555",
+        version="1.0",
+        submitter_id=9,
+        submitter_name="Auth",
+        last_checked_iso="2026-01-01T00:00:00",
+    )
+    orig = mm.import_mod(source_path=str(src_zip), node_id=char.id, gb_meta=gb_meta)
+    assert orig is not None
+    assert orig.info.custom_data["gamebanana"]["mod_id"] == 555
+
+    # 导出（带信封）
+    dest = tmp_path / "out"
+    dest.mkdir()
+    item = ExportItem(
+        name=orig.display_name,
+        src_path=orig.path,
+        meta=share_meta_from_mod(orig),
+        preview_paths=list(orig.preview_images or []),
+    )
+    res = ModExporter(library_root=str(mm._get_library_root())).export_one(
+        item, dest, fmt="zip", preserve_tree=False, include_meta=True
+    )
+    assert res.ok
+
+    # 删除原 Mod，再导入产物
+    mm.delete_mod(orig.mod_id)
+    reimported = mm.import_mod(source_path=res.out_path, node_id=char.id)
+    assert reimported is not None
+
+    gb = reimported.info.custom_data.get("gamebanana") or {}
+    assert gb.get("mod_id") == 555
+    assert gb.get("file_id") == 777
+    assert gb.get("page_url") == "https://gamebanana.com/mods/555"
+    assert gb.get("last_checked_iso") == ""  # 重置：接收方从未检测开始
+    assert "ignored" not in gb  # 不继承本地忽略偏好
+
+    # 核心：更新检测会把它纳入候选（_collect_jobs 靠 custom_data["gamebanana"]["mod_id"]）
+    svc = ModUpdateService(mm, Config(), MagicMock())
+    jobs, _ = svc._collect_jobs(force=True)
+    assert reimported.mod_id in {mid for mid, _m in jobs}
+
+
+def test_folder_import_reads_envelope_keeps_source_clean_hash(temp_data_dir, tmp_path):
+    """目录导入应恢复分享元数据，并保留源目录中的信封。
+
+    库内副本移除信封后计算内容哈希，与压缩包导入和不含信封的输入保持一致。
+    """
+    from src.core.mod_manager import ModManager
+    from src.models.mod import AgeRating, Mod
+
+    src = tmp_path / "MyFolderMod"
+    src.mkdir()
+    (src / "mod.ini").write_text("[X]\nk=v\n", encoding="utf-8")
+    clean_hash = Mod.compute_sha1(str(src))  # 写信封前的干净哈希
+    cover = _png(tmp_path / "cover.png")
+    meta = {
+        "name": "文件夹皮",
+        "info": {
+            "author": "Bob",
+            "age_rating": "R",
+            "tags": ["x"],
+            "url": "https://gamebanana.com/mods/999",
+            "custom_data": {
+                "gamebanana": {"mod_id": 999, "file_id": 5, "file_md5": "m", "file_ts": 100, "last_checked_iso": ""}
+            },
+        },
+    }
+    assert write_envelope_to_folder(src, meta, [str(cover)])
+    assert (src / META_DIR).is_dir()
+
+    mm = ModManager()
+    mm.set_game("game_a")
+    char = mm.add_character(name="角色F", node_type="character")
+    mod = mm.import_mod(source_path=str(src), node_id=char.id)
+    assert mod is not None
+
+    # 元数据还原
+    assert mod.info.author == "Bob"
+    assert mod.info.age_rating == AgeRating.R
+    assert mod.display_name == "文件夹皮"
+    assert (mod.info.custom_data.get("gamebanana") or {}).get("mod_id") == 999
+    # 库副本落入容器；sidecar 在**容器级**（本体之外、与本体同级），哈希仍为去信封后的
+    # 干净值（compute_sha1 跳过 .d3dxmeta）。mod.path 指向容器内本体、其父目录即容器。
+    container = Path(mod.path).parent
+    assert (container / ".d3dxmod").is_file()
+    assert (container / META_DIR / "info.json").is_file()
+    assert mod.content_hash == clean_hash
+    # 绝不删除用户源目录里的信封
+    assert (src / META_DIR).is_dir()
+    # 外部封面随信封还原
+    assert any("cover" in p for p in mod.preview_images)
+
+
+# 当前容器标记格式。
+
+
+def _write_raw_container_marker(container: Path, payload) -> None:
+    container.mkdir(parents=True, exist_ok=True)
+    (container / MOD_CONTAINER_MARKER).write_text(
+        json.dumps(payload),
+        encoding="utf-8",
+    )
+
+
+def _current_marker(body_path: Path, **overrides) -> dict:
+    marker = {
+        "schema": CONTAINER_SCHEMA_VERSION,
+        "kind": CONTAINER_KIND,
+        "body": body_path.name,
+        "body_type": "archive" if body_path.is_file() else "folder",
+        "content_hash": _VALID_HASH,
+    }
+    marker.update(overrides)
+    return marker
+
+
+def test_current_container_marker_roundtrip_resolves_declared_body(tmp_path):
+    container = tmp_path / "Current"
+    body = container / "Current"
+    body.mkdir(parents=True)
+
+    assert write_container_marker(container, body.name, _VALID_HASH, imported_at="2026-10-05T10:00:00")
+
+    marker = read_container_marker(container)
+    assert marker == _current_marker(body, mod_id=marker["mod_id"], imported_at="2026-10-05T10:00:00")
+    from src.core.mod_identity import validate_mod_id
+
+    assert validate_mod_id(marker["mod_id"]) == marker["mod_id"]
+    assert resolve_body_path(container) == body
+
+
+def test_read_container_marker_missing_returns_none(tmp_path):
+    container = tmp_path / "NoMarker"
+    container.mkdir()
+
+    assert read_container_marker(container) is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        [],
+        {},
+        {
+            "schema": CONTAINER_SCHEMA_VERSION,
+            "kind": "wrong-kind",
+            "body": "Body",
+            "body_type": "folder",
+            "content_hash": _VALID_HASH,
+        },
+    ],
+)
+def test_read_container_marker_rejects_broken_identity(tmp_path, payload):
+    container = tmp_path / "Invalid"
+    (container / "Body").mkdir(parents=True)
+    _write_raw_container_marker(container, payload)
+
+    with pytest.raises(InvalidManagedMetadataError):
+        read_container_marker(container)
+
+
+@pytest.mark.parametrize("schema", [2, True, 1.0, 999, None, "1"])
+def test_read_container_marker_accepts_other_schema(tmp_path, schema):
+    container = tmp_path / f"Schema_{schema!r}"
+    body = container / "Body"
+    body.mkdir(parents=True)
+    payload = {
+        "schema": schema,
+        "kind": CONTAINER_KIND,
+        "body": "Body",
+        "body_type": "folder",
+        "content_hash": _VALID_HASH,
+    }
+    _write_raw_container_marker(container, payload)
+
+    marker = read_container_marker(container)
+    assert marker is not None
+    assert marker["content_hash"] == _VALID_HASH
+    assert resolve_body_path(container) == body
+
+
+@pytest.mark.parametrize("body_type", [None, "vhd", 1])
+def test_read_container_marker_infers_unknown_body_type(tmp_path, body_type):
+    container = tmp_path / "InferType"
+    body = container / "Body"
+    body.mkdir(parents=True)
+    payload = {
+        "schema": CONTAINER_SCHEMA_VERSION,
+        "kind": CONTAINER_KIND,
+        "body": "Body",
+        "content_hash": _VALID_HASH,
+    }
+    if body_type is not None:
+        payload["body_type"] = body_type
+    _write_raw_container_marker(container, payload)
+
+    assert read_container_marker(container)["body_type"] == "folder"
+
+
+@pytest.mark.parametrize("content_hash", ["", "a" * 39, "A" * 40, "g" * 40, 123])
+def test_write_container_marker_rejects_invalid_content_hash(tmp_path, content_hash):
+    container = tmp_path / "InvalidHash"
+    body = container / "Body"
+    body.mkdir(parents=True)
+
+    with pytest.raises(ValueError):
+        write_container_marker(container, body.name, content_hash, imported_at="2026-10-05T10:00:00")
+
+    assert not (container / MOD_CONTAINER_MARKER).exists()
+
+
+@pytest.mark.parametrize("content_hash", ["", "a" * 39, "A" * 40, "g" * 40, 123])
+def test_read_container_marker_rejects_invalid_content_hash(tmp_path, content_hash):
+    container = tmp_path / "InvalidHash"
+    body = container / "Body"
+    body.mkdir(parents=True)
+    _write_raw_container_marker(
+        container,
+        _current_marker(body, content_hash=content_hash),
+    )
+
+    with pytest.raises(InvalidManagedMetadataError):
+        read_container_marker(container)
+
+
+@pytest.mark.parametrize(
+    "body_name",
+    [".", "..", "../outside", "nested/Body", "nested\\Body", "C:\\outside"],
+)
+def test_read_container_marker_rejects_non_basename_body(tmp_path, body_name):
+    container = tmp_path / "Traversal"
+    (container / "Body").mkdir(parents=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    _write_raw_container_marker(
+        container,
+        _current_marker(outside, body=body_name),
+    )
+
+    with pytest.raises(InvalidManagedMetadataError):
+        resolve_body_path(container)
+
+
+def test_read_container_marker_rejects_body_link_outside_container(tmp_path):
+    container = tmp_path / "LinkedBody"
+    container.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "mod.ini").write_text("[Key]\n", encoding="utf-8")
+    body = container / "Body"
+    _link_directory(body, outside)
+    _write_raw_container_marker(container, _current_marker(body))
+
+    with pytest.raises(InvalidManagedMetadataError):
+        read_container_marker(container)
+
+
+def test_resolve_body_path_does_not_guess_without_marker(tmp_path):
+    container = tmp_path / "Unmanaged"
+    (container / "OnlyCandidate").mkdir(parents=True)
+
+    assert resolve_body_path(container) is None
+
+
+def test_resolve_body_path_does_not_guess_after_broken_json(tmp_path):
+    container = tmp_path / "Broken"
+    (container / "OnlyCandidate").mkdir(parents=True)
+    (container / MOD_CONTAINER_MARKER).write_text("{broken", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        resolve_body_path(container)
+
+
+def test_read_container_marker_rejects_missing_body(tmp_path):
+    container = tmp_path / "MissingBody"
+    body = container / "MissingBody"
+    _write_raw_container_marker(container, _current_marker(body))
+
+    with pytest.raises(ValueError):
+        read_container_marker(container)
+
+
+@pytest.mark.parametrize(
+    ("body_name", "body_type"),
+    [("FolderBody", "archive"), ("Body.zip", "folder"), ("Body.txt", "archive")],
+)
+def test_read_container_marker_rejects_body_type_mismatch(
+    tmp_path,
+    body_name,
+    body_type,
+):
+    container = tmp_path / "WrongType"
+    body = container / body_name
+    if body_name == "FolderBody":
+        body.mkdir(parents=True)
+    else:
+        container.mkdir(parents=True)
+        body.write_bytes(b"body")
+    _write_raw_container_marker(
+        container,
+        _current_marker(body, body_type=body_type),
+    )
+
+    with pytest.raises(ValueError):
+        read_container_marker(container)
