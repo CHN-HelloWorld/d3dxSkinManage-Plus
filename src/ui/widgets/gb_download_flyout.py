@@ -212,3 +212,136 @@ class _DownloadRow(QFrame):
             self.primary_btn.retheme()
         except Exception:
             pass
+
+    def _compose_subtitle(self) -> str:
+        """格式化速度、已下载和总大小以及剩余时间或任务状态。
+
+        总大小未知时省略大小比值；剩余时间使用分秒或时分秒格式。
+        """
+        d, t = self._task.last_progress
+        state = self._task.state
+        sizes = f"{humanize_size(d)}/{humanize_size(t)}" if t > 0 else ""
+
+        if state == "downloading":
+            spd = _format_speed(getattr(self._task, "speed_bps", 0.0)) or "0 B/s"
+            eta = _format_eta(getattr(self._task, "eta_seconds", -1.0))
+            tail = tr("剩余 {eta}", eta=eta) if eta else tr("下载中")
+            return f"{spd} - {sizes}, {tail}" if sizes else f"{spd}, {tail}"
+        if state == "paused":
+            # 暂停时显示零速度及暂停状态。
+            return tr("0 B/s - {sizes}, 已暂停", sizes=sizes) if sizes else tr("0 B/s, 已暂停")
+        if state == "queued":
+            return tr("排队中")
+        if state == "preparing":
+            # 等待响应头时总长度未知，省略无效的大小比值。
+            return tr("准备中")
+        if state == "done":
+            try:
+                size = self._task.archive_path.stat().st_size if self._task.archive_path.exists() else 0
+            except OSError:
+                size = 0
+            return tr("已完成 · {value}", value=humanize_size(size)) if size else tr("已完成")
+        if state == "failed":
+            return tr("失败")
+        if state == "canceled":
+            return tr("已取消")
+        return state
+
+    def _sync_with_state(self) -> None:
+        """按任务状态重绑定主操作按钮、进度模式和取消入口，避免累积重复的点击连接。"""
+        state = self._task.state
+        d, t = self._task.last_progress
+        pct = int(d * 100 / t) if t > 0 else 0
+        self.sub_label.setText(self._compose_subtitle())
+
+        # 主按钮（环形进度 + 图标）：先断开旧 clicked，避免状态切换后多次连接叠加。
+        if self.primary_btn.isSignalConnected(QMetaMethod.fromSignal(self.primary_btn.clicked)):
+            self.primary_btn.clicked.disconnect()
+
+        # 状态变化时同步不确定进度模式，避免离开准备状态后仍持续旋转。
+        self.primary_btn.set_indeterminate(state == "preparing")
+
+        # 取消按钮仅在「活跃」态显示（preparing/downloading/paused/queued）。已结束的
+        # 任务（done/failed/canceled）不再有取消语义——主按钮才是「打开/重试」。
+        self.cancel_btn.setVisible(state in ("preparing", "downloading", "paused", "queued"))
+
+        if state == "downloading":
+            self.primary_btn.set_icon("actions/pause", "text.primary")
+            self.primary_btn.set_ring_color("accent")
+            self.primary_btn.set_progress(pct)
+            self.primary_btn.setEnabled(True)
+            self.primary_btn.setToolTip(tr("暂停"))
+            self.primary_btn.clicked.connect(self._on_pause)
+        elif state == "preparing":
+            # 准备期间显示不确定进度，仍允许暂停和取消。
+            self.primary_btn.set_icon("actions/pause", "text.primary")
+            self.primary_btn.set_ring_color("accent")
+            self.primary_btn.setEnabled(True)
+            self.primary_btn.setToolTip(tr("暂停"))
+            self.primary_btn.clicked.connect(self._on_pause)
+        elif state == "queued":
+            # 排队时禁用主按钮，保留取消操作。
+            self.primary_btn.set_icon("actions/pause", "text.tertiary")
+            self.primary_btn.set_progress(-1)
+            self.primary_btn.setEnabled(False)
+            self.primary_btn.setToolTip(tr("排队中"))
+        elif state == "paused":
+            self.primary_btn.set_icon("actions/play", "text.primary")
+            self.primary_btn.set_ring_color("text.tertiary")  # 暂停态进度环淡化
+            self.primary_btn.set_progress(pct)
+            self.primary_btn.setEnabled(True)
+            self.primary_btn.setToolTip(tr("继续"))
+            self.primary_btn.clicked.connect(self._on_resume)
+        elif state == "done":
+            self.primary_btn.set_icon("actions/open", "text.primary")
+            self.primary_btn.set_progress(-1)
+            self.primary_btn.setEnabled(self._can_open_mod(self._task))
+            self.primary_btn.setToolTip(tr("打开（进入 Mod 类别）"))
+            self.primary_btn.clicked.connect(self._on_open_mod)
+        else:  # failed / canceled
+            self.primary_btn.set_icon("actions/refresh", "text.primary")
+            self.primary_btn.set_progress(-1)
+            self.primary_btn.setEnabled(True)
+            self.primary_btn.setToolTip(tr("重试"))
+            self.primary_btn.clicked.connect(self._on_retry)
+
+    # 信号回调
+    def _on_progress(self, d: int, t: int) -> None:
+        """更新活动下载的百分比与信息文案，记录行已销毁时忽略迟到信号。"""
+        try:
+            if t > 0 and self._task.state in ("downloading", "paused"):
+                self.primary_btn.set_progress(int(d * 100 / t))
+            self.sub_label.setText(self._compose_subtitle())
+        except RuntimeError:
+            pass
+
+    def _on_state_changed(self, _state: str) -> None:
+        """按最新任务状态刷新行操作，容忍任务信号到达时控件已销毁。"""
+        try:
+            self._sync_with_state()
+        except RuntimeError:
+            pass
+
+    # 操作槽
+    def _on_pause(self) -> None:
+        """向下载管理器请求暂停该文件任务。"""
+        self._manager.pause(self._task.file.file_id)
+
+    def _retain_download_consumer(self) -> None:
+        """以下载界面所有者登记文件占用，供继续或重试任务时保留共享下载产物。"""
+        file = self._task.file
+        self._manager.retain(
+            file.file_id,
+            file.md5_checksum,
+            owner=f"download:{file.file_id}",
+            path=self._task.archive_path,
+        )
+
+    def _on_resume(self) -> None:
+        """重新登记下载文件的使用者后请求继续任务。"""
+        self._retain_download_consumer()
+        self._manager.resume(self._task.file.file_id)
+
+    def _on_cancel(self) -> None:
+        """向下载管理器请求取消该文件任务。"""
+        self._manager.cancel(self._task.file.file_id)
