@@ -178,3 +178,149 @@ class GbBreadcrumbBar(QFrame):
                 picker = self._pickers.get(idx)
                 if picker is not None:
                     picker.set_categories(children)
+
+    def segment_texts(self) -> list[str]:
+        """返回当前路径按钮显示的文字列表。"""
+        return [b.text() for b in self._segments]
+
+    def set_children_error(self, parent_id: int, message: str) -> None:
+        """仅向仍打开且父分类匹配的选择器展示异步请求错误。"""
+        idx = self._open_picker_index
+        if idx is not None and 0 <= idx < len(self._path) and self._path[idx].id == parent_id:
+            picker = self._pickers.get(idx)
+            if picker is not None:
+                picker.set_error(message)
+
+    def segment_has_dropdown(self, index: int) -> bool:
+        """判断指定路径位置是否有效且附有子分类菜单。"""
+        if index < 0 or index >= len(self._segments):
+            return False
+        return self._segments[index].menu() is not None
+
+    def click_segment(self, index: int) -> None:
+        """触发指定层级的路径选择。"""
+        if 0 <= index < len(self._path):
+            self.path_changed.emit(self._path[: index + 1])
+
+    def open_dropdown(self, index: int) -> None:
+        """打开指定层级的分类菜单。"""
+        if index <= 0 or index >= len(self._path):
+            return
+        self.children_requested.emit(self._path[index].id)
+
+    @staticmethod
+    def _segment_label(cat: GbCategory, index: int) -> str:
+        """游戏名称按原文显示，分类名称使用当前语言包翻译。"""
+        if index == 0:
+            return cat.name
+        return localize_category_name(cat.name)
+
+    # 内部布局与菜单管理。
+    def _rebuild(self) -> None:
+        # 同时清理控件和伸缩布局项，防止重复构建时残留空白间距。
+        """移除旧路径控件及选择器，再按当前路径创建分隔符和可展开的子分类按钮。"""
+        while self._layout.count():
+            item = self._layout.takeAt(0)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is not None:
+                w.setParent(None)
+                w.deleteLater()
+            # 伸缩项移出布局后无需调用 deleteLater。
+        self._segments.clear()
+        self._separators.clear()
+        # 重建时清理旧选择器，下一次打开菜单时重新创建。
+        self._pickers.clear()
+        self._open_picker_index = None
+        for i, cat in enumerate(self._path):
+            if i > 0:
+                sep = QLabel("/")
+                sep.setStyleSheet(f"color:{theme.color('text.tertiary')}; padding:0 4px;")
+                self._layout.addWidget(sep)
+                self._separators.append(sep)
+            btn = QToolButton()
+            btn.setAutoRaise(True)
+            label = self._segment_label(cat, i)
+            if i == 0:
+                btn.setText(label)
+                # 首段不带菜单
+            else:
+                btn.setText(label)
+                btn.setObjectName("crumbSeg")
+                menu = QMenu(btn)
+                self._style_category_menu(menu)
+                btn.setMenu(menu)
+                btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+                menu.aboutToShow.connect(lambda b=i: self._populate_menu(b))
+                menu.aboutToHide.connect(lambda b=i: self._on_menu_hide(b))
+                btn.clicked.connect(lambda _, b=i: self.path_changed.emit(self._path[: b + 1]))
+            self._layout.addWidget(btn)
+            self._segments.append(btn)
+        self._layout.addStretch(1)
+
+    def _style_category_menu(self, menu: QMenu) -> None:
+        """构造半透明分类浮层，内部搜索框和列表保持透明。
+
+        首次显示时应用系统模糊，透明背景属性只设置一次，避免重建原生窗口。
+        """
+        menu.setObjectName("catPickerMenu")
+        menu.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+        bg = theme.rgba("bg.card", acrylic_surface_alpha(0.45))
+        menu.setStyleSheet(
+            f"QMenu#catPickerMenu {{ background-color: {bg};"
+            f" border: 1px solid {theme.color('stroke.card')}; border-radius: 8px; padding: 4px; }}"
+            # 内部 UI 全透明，仅外层面板着色
+            "QMenu#catPickerMenu QWidget,"
+            " QMenu#catPickerMenu QLineEdit,"
+            " QMenu#catPickerMenu QListWidget { background: transparent; }"
+            f"QMenu#catPickerMenu QPushButton#categoryRetryButton {{ background-color: {theme.color('control.bg')};"
+            f" border: 1px solid {theme.color('stroke.control')}; border-radius: 4px; padding: 6px 12px; }}"
+            "QMenu#catPickerMenu QPushButton#categoryRetryButton:hover {"
+            f" background-color: {theme.color('control.bg.hover')}; }}"
+            "QMenu#catPickerMenu QPushButton#categoryRetryButton:pressed {"
+            f" background-color: {theme.color('bg.pressed')}; }}"
+        )
+
+    def _populate_menu(self, index: int) -> None:
+        """为路径节点创建可筛选的子分类菜单，优先显示缓存，否则发出加载请求。
+
+        记录当前选择器位置以接收异步结果，并将键盘焦点放入筛选框。
+        """
+        if index <= 0 or index >= len(self._segments):
+            return
+        btn = self._segments[index]
+        menu = btn.menu()
+        menu.clear()
+        parent_id = self._path[index].id
+        # 将可滚动选择器嵌入菜单，避免大量子分类使菜单超出屏幕。
+        picker = _ScrollableCategoryPicker(menu)
+        action = QWidgetAction(menu)
+        action.setDefaultWidget(picker)
+        menu.addAction(action)
+        picker.picked.connect(lambda cat, i=index: self._on_picker_picked(i, cat, menu))
+        picker.retry_requested.connect(lambda: self._retry_children(parent_id, picker))
+        self._pickers[index] = picker
+        self._open_picker_index = index
+        if parent_id in self._children_cache:
+            picker.set_categories(self._children_cache[parent_id])
+        else:
+            picker.set_loading()  # 先显示加载状态，子分类返回后填充列表。
+            self.children_requested.emit(parent_id)
+        picker.focus_search()
+
+    def _retry_children(self, parent_id: int, picker: _ScrollableCategoryPicker) -> None:
+        """将选择器恢复为加载状态并重新请求指定父分类的子项。"""
+        picker.set_loading()
+        self.children_requested.emit(parent_id)
+
+    def _on_menu_hide(self, index: int) -> None:
+        """菜单关闭时清除对应的活动选择器位置。"""
+        if self._open_picker_index == index:
+            self._open_picker_index = None
+
+    def _on_picker_picked(self, index: int, cat: GbCategory, menu: QMenu) -> None:
+        """关闭菜单，将选中分类追加到对应祖先路径并发出路径变化信号。"""
+        menu.hide()
+        new_path = self._path[: index + 1] + [cat]
+        self.path_changed.emit(new_path)
