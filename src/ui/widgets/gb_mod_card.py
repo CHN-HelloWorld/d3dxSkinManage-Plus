@@ -502,3 +502,138 @@ class GbModCard(QFrame):
             return
         self._dl_pending = False
         self.dl_label.setText(str(self.record.download_count))
+
+    # 安装状态实时刷新
+    def set_installed(self, is_installed: bool) -> None:
+        """同步安装徽章，使当前卡片立即反映本地安装状态。"""
+        try:
+            self.installed_badge.setVisible(bool(is_installed))
+        except RuntimeError:
+            # 卡片在派发期间被销毁（例如用户切了分类），静默丢弃
+            pass
+
+    # NSFW 切换
+    def moveEvent(self, event):
+        """非动画位移时记录新的静止几何，供后续悬停缩放使用。"""
+        # 父布局调整位置后更新静止几何，仅在没有缩放动画时记录，
+        # 避免将动画中间状态作为下一次缩放基准。
+        if not self._animating:
+            self._rest_geometry = QRect(self.pos(), self.size())
+        super().moveEvent(event)
+
+    def resizeEvent(self, event):
+        """非动画缩放时更新静止几何，并使有效选中覆盖层始终匹配卡片尺寸。"""
+        if not self._animating:
+            self._rest_geometry = QRect(self.pos(), self.size())
+        # 让选中描边 overlay 跟随卡片当前尺寸（hover 动画期间也保持铺满）
+        try:
+            self._selection_overlay.setGeometry(0, 0, self.width(), self.height())
+        except (AttributeError, RuntimeError):
+            pass
+        super().resizeEvent(event)
+
+    def enterEvent(self, event):
+        """通知资源悬停并提升卡片层级，按配置启动轻微放大动画。"""
+        self.hovered.emit(self.record)
+        self.raise_()
+        if self._hover_scale:
+            self._animate_scale(1.02)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        """按配置将悬停卡片恢复到静止尺寸。"""
+        if self._hover_scale:
+            self._animate_scale(1.0)
+        super().leaveEvent(event)
+
+    def _animate_scale(self, target: float) -> None:
+        """始终以静止几何计算缩放目标，替换已有动画并防止动画中间值污染基准位置。"""
+        # 缩放始终以静止几何为基准，进入时绕中心放大，离开时完整恢复，
+        # 避免基于动画中间位置计算导致累计偏移。
+        if self._rest_geometry is None:
+            self._rest_geometry = QRect(self.pos(), self.size())
+        rest = self._rest_geometry
+        delta_w = int(_CARD_W * (target - 1.0))
+        delta_h = int(_CARD_H * (target - 1.0))
+        # 将扩展后的位置限制在父控件内，避免左侧及顶部卡片的边缘被裁切。
+        nx = rest.x() - delta_w // 2
+        ny = rest.y() - delta_h // 2
+        if nx < 0:
+            nx = 0
+        if ny < 0:
+            ny = 0
+        new = QRect(nx, ny, _CARD_W + delta_w, _CARD_H + delta_h)
+        if self._scale_anim is not None:
+            # 动画结束后 Qt 对象可能已删除，Python 引用仍可能存在。
+            try:
+                self._scale_anim.stop()
+            except RuntimeError:
+                pass
+            self._scale_anim = None
+        anim = QPropertyAnimation(self, b"geometry", self)
+        anim.setDuration(150)
+        anim.setEasingCurve(QEasingCurve.Type.OutQuad)
+        anim.setStartValue(self.geometry())
+        anim.setEndValue(new)
+        # 动画期间屏蔽 moveEvent/resizeEvent 对 _rest_geometry 的写入
+        self._animating = True
+        anim.finished.connect(self._on_anim_finished)
+        anim.start(QPropertyAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._scale_anim = anim
+
+    def _on_anim_finished(self) -> None:
+        """结束动画状态并清除已由 Qt 回收的动画引用。"""
+        self._animating = False
+        # 动画结束时同时清除 Python 引用，避免再次访问已删除的 Qt 对象。
+        self._scale_anim = None
+
+    def _build_context_menu(self) -> QMenu:
+        """为当前资源构建复制链接和浏览器打开入口，缺少页面地址时按资源标识生成。"""
+        menu = QMenu(self)
+        url = self.record.page_url or build_mod_page_url(self.record.model, self.record.mod_id)
+        act_copy = QAction(icons.get_icon("actions/copy"), tr("复制 GameBanana 链接"), menu)
+        act_copy.triggered.connect(lambda _checked=False: self._copy_link(url))
+        menu.addAction(act_copy)
+        act_open = QAction(icons.get_icon("actions/open"), tr("在浏览器中打开"), menu)
+        act_open.triggered.connect(lambda _checked=False: self._open_in_browser(url))
+        menu.addAction(act_open)
+        return menu
+
+    def _on_context_menu(self, pos: QPoint) -> None:
+        """在卡片对应屏幕位置执行菜单，关闭后安排释放并容忍卡片已被刷新销毁。"""
+        menu = self._build_context_menu()
+        try:
+            menu.exec(self.mapToGlobal(pos))
+        finally:
+            try:
+                menu.deleteLater()
+            except RuntimeError:
+                # 全量刷新可能已经删除所属卡片。
+                pass
+
+    def _copy_link(self, url: str | None = None) -> None:
+        """将指定地址或当前资源的页面地址复制到系统剪贴板。"""
+        url = (
+            url
+            or self.record.page_url
+            or build_mod_page_url(
+                self.record.model,
+                self.record.mod_id,
+            )
+        )
+        QApplication.clipboard().setText(url)
+
+    def _open_in_browser(self, url: str | None = None) -> None:
+        """通过系统默认浏览器打开指定地址或当前资源页面。"""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        url = (
+            url
+            or self.record.page_url
+            or build_mod_page_url(
+                self.record.model,
+                self.record.mod_id,
+            )
+        )
+        QDesktopServices.openUrl(QUrl(url))
