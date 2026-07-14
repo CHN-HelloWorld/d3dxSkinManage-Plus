@@ -345,3 +345,111 @@ class _DownloadRow(QFrame):
     def _on_cancel(self) -> None:
         """向下载管理器请求取消该文件任务。"""
         self._manager.cancel(self._task.file.file_id)
+
+    def _on_retry(self) -> None:
+        """重新登记下载文件的使用者后请求重试任务。"""
+        self._retain_download_consumer()
+        self._manager.retry(self._task.file.file_id)
+
+    def _on_open_mod(self) -> None:
+        """核验打开条件后转发站点资源编号和下载任务，条件失效时刷新按钮状态。"""
+        if not self._can_open_mod(self._task):
+            self._sync_with_state()
+            return
+        mod_id = getattr(self._task.profile, "mod_id", 0)
+        if mod_id:
+            self.open_mod_requested.emit(int(mod_id))
+            self.open_file_requested.emit(self._task)
+
+    def _on_show_in_explorer(self) -> None:
+        """请求文件资源管理器定位该任务的归档路径。"""
+        _open_in_explorer(self._task.archive_path)
+
+    def _on_copy_link(self) -> None:
+        """将非空下载地址复制到系统剪贴板。"""
+        url = getattr(self._task.file, "download_url", "") or ""
+        if url:
+            QApplication.clipboard().setText(url)
+
+    def _on_copy_name(self) -> None:
+        """将任务文件名复制到系统剪贴板，缺少名称时使用空字符串。"""
+        QApplication.clipboard().setText(self._task.file.file_name or "")
+
+    def _on_delete_record(self) -> None:
+        """以保留本地文件的方式请求删除任务记录，并通知列表刷新。"""
+        # 仅删除任务记录，保留磁盘文件。
+        self._manager.delete_task(self._task.file.file_id, delete_file=False)
+        self.request_refresh.emit()
+
+    def _on_delete_file_and_record(self) -> None:
+        """请求管理器删除任务记录及对应本地文件，并通知列表刷新。"""
+        # 删除记录并清理对应文件。
+        self._manager.delete_task(self._task.file.file_id, delete_file=True)
+        self.request_refresh.emit()
+
+    # 右键菜单
+    def _build_menu(self) -> QMenu:
+        """按任务状态和完整或部分文件的存在情况构建可用操作菜单。"""
+        menu = QMenu(self)
+        state = self._task.state
+        path = self._task.archive_path
+        # 进行中的任务仅有部分下载文件，删除可用性不能只检查最终归档路径。
+        part = path.with_suffix(path.suffix + ".part")
+        has_product = path.exists()
+        has_file = has_product or part.exists()
+
+        if state in ("downloading", "preparing"):
+            act = QAction(icons.get_icon("actions/pause"), tr("暂停"), menu)
+            act.triggered.connect(self._on_pause)
+            menu.addAction(act)
+            act = QAction(icons.get_icon("actions/dismiss"), tr("取消"), menu)
+            act.triggered.connect(self._on_cancel)
+            menu.addAction(act)
+        elif state == "queued":
+            # 排队任务也允许取消。
+            act = QAction(icons.get_icon("actions/dismiss"), tr("取消"), menu)
+            act.triggered.connect(self._on_cancel)
+            menu.addAction(act)
+        elif state == "paused":
+            act = QAction(icons.get_icon("actions/play"), tr("继续"), menu)
+            act.triggered.connect(self._on_resume)
+            menu.addAction(act)
+            act = QAction(icons.get_icon("actions/dismiss"), tr("取消"), menu)
+            act.triggered.connect(self._on_cancel)
+            menu.addAction(act)
+        elif state in ("failed", "canceled"):
+            act = QAction(icons.get_icon("actions/refresh"), tr("重试"), menu)
+            act.triggered.connect(self._on_retry)
+            menu.addAction(act)
+        elif state == "done":
+            act = QAction(icons.get_icon("actions/open"), tr("打开（进入 Mod 类别）"), menu)
+            act.triggered.connect(self._on_open_mod)
+            act.setEnabled(self._can_open_mod(self._task))
+            menu.addAction(act)
+
+        menu.addSeparator()
+        act = QAction(icons.get_icon("actions/folder-open"), tr("在文件资源管理器中显示"), menu)
+        # 只有完成文件存在时才能在文件资源管理器中定位。
+        act.setEnabled(has_product)
+        act.triggered.connect(self._on_show_in_explorer)
+        menu.addAction(act)
+
+        menu.addSeparator()
+        act = QAction(icons.get_icon("actions/copy"), tr("复制下载链接"), menu)
+        act.setEnabled(bool(getattr(self._task.file, "download_url", "")))
+        act.triggered.connect(self._on_copy_link)
+        menu.addAction(act)
+        act = QAction(icons.get_icon("actions/copy"), tr("复制文件名"), menu)
+        act.triggered.connect(self._on_copy_name)
+        menu.addAction(act)
+
+        menu.addSeparator()
+        act = QAction(icons.get_icon("actions/dismiss"), tr("从列表中删除"), menu)
+        act.triggered.connect(self._on_delete_record)
+        menu.addAction(act)
+        act = QAction(icons.get_icon("actions/remove"), tr("删除（含本地文件）"), menu)
+        act.setEnabled(has_file)
+        act.triggered.connect(self._on_delete_file_and_record)
+        menu.addAction(act)
+
+        return menu
