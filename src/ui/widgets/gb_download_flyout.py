@@ -453,3 +453,183 @@ class _DownloadRow(QFrame):
         menu.addAction(act)
 
         return menu
+
+    def _on_context_menu(self, _pos) -> None:
+        """在当前鼠标屏幕位置打开该记录的操作菜单。"""
+        self._build_menu().exec(QCursor.pos())
+
+    def _show_menu_at_button(self) -> None:
+        """将记录操作菜单定位到更多按钮下方。"""
+        self._build_menu().exec(self.menu_btn.mapToGlobal(self.menu_btn.rect().bottomLeft()))
+
+
+class GbDownloadFlyout(QFrame):
+    """管理下载记录浮层的筛选、显隐和操作转发，实际任务生命周期由下载管理器负责。"""
+
+    mod_open_requested = Signal(int)
+    file_open_requested = Signal(object)
+
+    def __init__(self, manager: GbDownloadManager, parent=None) -> None:
+        """创建保持主窗口焦点的下载浮层，连接任务队列变化并建立按游戏范围清理的操作入口。"""
+        super().__init__(parent)
+        self._manager = manager
+        self.can_open_mod = None
+        # 游戏编号为空时显示全部任务，否则按所属游戏精确筛选。
+        self._game_id_filter: str | None = None
+        # 收起标记防止动画重入，持有动画对象以避免提前回收。
+        self._closing = False
+        self._show_anim: QParallelAnimationGroup | None = None
+        self._hide_anim: QParallelAnimationGroup | None = None
+        self.setObjectName("downloadFlyout")
+        # 顶层窗口仅提供透明画布，边框由内部框架绘制。
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        # 固定浮层宽度，防止长文件名扩张窗口并使按钮超出可视范围。
+        self.setFixedWidth(_FLYOUT_WIDTH)
+        self.setMinimumHeight(320)
+        self.setMaximumHeight(560)
+        # 窗口标志分别用于独立显示、隐藏标题栏和保持主窗口激活状态。
+        # WindowDoesNotAcceptFocus 避免自动显示下载浮窗时转移激活及键盘焦点，
+        # 以便主窗口继续接收下一次点击。
+        # 外部点击由全局过滤器处理，保留锚点按钮本次点击的切换行为。
+        self.setWindowFlags(
+            Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowDoesNotAcceptFocus
+        )
+        # 浮窗不接受键盘焦点，Esc 由全局事件过滤器处理。
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # 透明顶层窗口的 QSS 边框不能可靠绘制，背景、边框和圆角统一交给内部框架。
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+
+        shell = QVBoxLayout(self)
+        shell.setContentsMargins(0, 0, 0, 0)
+        self._inner = QFrame(self)
+        self._inner.setObjectName("downloadFlyoutInner")
+        self._apply_inner_style()
+        shell.addWidget(self._inner)
+
+        outer = QVBoxLayout(self._inner)
+        outer.setContentsMargins(8, 8, 8, 8)
+        outer.setSpacing(6)
+
+        header = QHBoxLayout()
+        title = QLabel(tr("下载管理"))
+        title.setStyleSheet("font-weight:bold; font-size:11pt;")
+        header.addWidget(title, 1)
+        self.btn_clear_done = QPushButton(tr("清除已完成"))
+        # 清理操作使用当前游戏编号，保持作用范围与列表筛选一致。
+        self.btn_clear_done.clicked.connect(lambda: self._manager.clear_completed(game_id=self._game_id_filter))
+        header.addWidget(self.btn_clear_done)
+        self.btn_clear_all = QPushButton(tr("全部清除"))
+        self.btn_clear_all.clicked.connect(
+            lambda: self._manager.clear_all(
+                delete_files=False,
+                game_id=self._game_id_filter,
+            )
+        )
+        header.addWidget(self.btn_clear_all)
+        outer.addLayout(header)
+
+        # 滚动区和行容器按行控件的 sizeHint 计算布局。
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 禁用横向滚动并省略长文件名，保证操作按钮始终位于可见区域。
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._rows_container = QWidget()
+        self._rows_container.setStyleSheet("background: transparent;")
+        self._rows_layout = QVBoxLayout(self._rows_container)
+        self._rows_layout.setContentsMargins(0, 0, 0, 0)
+        self._rows_layout.setSpacing(4)
+        self._rows_layout.addStretch(1)
+        self.scroll.setWidget(self._rows_container)
+        outer.addWidget(self.scroll, 1)
+
+        self.empty_label = QLabel(tr("（暂无下载记录）"))
+        self.empty_label.setStyleSheet(f"color:{theme.color('text.tertiary')}; padding:24px;")
+        self.empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(self.empty_label)
+
+        self._row_widgets: dict[int, _DownloadRow] = {}
+
+        manager.queue_changed.connect(self._refresh)
+        manager.task_added.connect(lambda _t: self._refresh())
+        manager.task_removed.connect(lambda _fid: self._refresh())
+        self._refresh()
+
+        # 点击浮窗和锚点之外的区域时由全局过滤器收起，
+        # 保留目标控件自身的点击事件。
+        self._anchor_widget: QWidget | None = None
+        # 全局监听由 showEvent/hideEvent 管理，隐藏时不进入 Python 回调。
+
+    def show_anchored_to(self, anchor: QWidget) -> None:
+        """设置外部点击检测排除的锚点控件，使按钮能够直接切换浮窗。"""
+        self._anchor_widget = anchor
+
+    def _ensure_acrylic(self) -> None:
+        """窗口显示后，为透明顶层窗口施加亚克力模糊背景和圆角。"""
+        try:
+            from src.ui import win_effects
+
+            win_effects.apply_rounded_corners(self)
+            win_effects.apply_acrylic_blurbehind(self, dark=(theme.current_theme() == "dark"))
+        except Exception:
+            pass
+
+    def showEvent(self, event):
+        """显示前后同步任务行状态，注册外部点击过滤并应用窗口材质。"""
+        super().showEvent(event)
+        for row in self._row_widgets.values():
+            row._sync_with_state()
+        QApplication.instance().installEventFilter(self)
+        self._ensure_acrylic()
+
+    def hideEvent(self, event):
+        """隐藏时解除应用级事件过滤，停止处理浮层以外的交互。"""
+        QApplication.instance().removeEventFilter(self)
+        super().hideEvent(event)
+
+    # 显示和收起动画。
+    def animate_show(self, x: int, y: int) -> None:
+        """通过淡入和位移动画显示浮窗；已显示时仅更新位置及层级。
+
+        显示过程不激活窗口，保持主窗口的焦点与鼠标交互连续。
+        """
+        self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
+        # 取消可能在途的关闭动画（关闭途中又被唤起 → 直接转为显示）。
+        if self._hide_anim is not None:
+            try:
+                self._hide_anim.stop()
+            except Exception:
+                pass
+            self._hide_anim = None
+        self._closing = False
+        if self.isVisible():
+            self.move(x, y)
+            self.setWindowOpacity(1.0)
+            self.raise_()
+            return
+        if not anim.is_enabled():
+            self.move(x, y)
+            self.setWindowOpacity(1.0)
+            self.show()
+            self.raise_()
+            return
+        start = QPoint(x, y - 12)
+        self.move(start)
+        self.setWindowOpacity(0.0)
+        self.show()
+        self.raise_()
+        grp = QParallelAnimationGroup(self)
+        pa = QPropertyAnimation(self, b"pos", grp)
+        pa.setStartValue(start)
+        pa.setEndValue(QPoint(x, y))
+        pa.setDuration(190)
+        pa.setEasingCurve(QEasingCurve.Type.OutCubic)
+        oa = QPropertyAnimation(self, b"windowOpacity", grp)
+        oa.setStartValue(0.0)
+        oa.setEndValue(1.0)
+        oa.setDuration(190)
+        oa.setEasingCurve(QEasingCurve.Type.OutCubic)
+        grp.addAnimation(pa)
+        grp.addAnimation(oa)
+        self._show_anim = grp
+        grp.start()
