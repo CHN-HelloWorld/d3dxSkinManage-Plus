@@ -357,3 +357,148 @@ class GbModCard(QFrame):
         self._selection_overlay = _SelectionOverlay(self)
         self._selection_overlay.setGeometry(0, 0, _CARD_W, _CARD_H)
         self._selection_overlay.raise_()
+
+    def cancel_thumbnail(self) -> None:
+        """标签绑定新记录前撤销旧图片投递。"""
+        cancel = getattr(self._image_loader, "cancel_for", None)
+        if callable(cancel):
+            cancel(self.thumbnail)
+        self._thumb_loaded = False
+
+    def scroll_render_key(self) -> tuple | None:
+        """组合缩略图、文字和徽章状态生成绘制缓存键，预览尚不可缓存时返回 None。"""
+        preview = preview_cache_key(self.thumbnail)
+        if preview is None:
+            return None
+        return (
+            preview,
+            self.title_label.text(),
+            self.author_label.text(),
+            self.view_label.text(),
+            self.like_label.text(),
+            self.dl_label.text(),
+            self.type_badge.text(),
+            self.type_badge.isHidden(),
+            self.nsfw_badge.isHidden(),
+            self.installed_badge.isHidden(),
+            self._selected,
+        )
+
+    def set_record(
+        self,
+        record: GbModRecord,
+        *,
+        nsfw_policy: Literal["remove", "blur", "show"] | None = None,
+        is_installed: bool = False,
+        download_count_pending: bool = False,
+        defer_image: bool = True,
+    ) -> None:
+        """更新已有控件树，信号始终读取当前记录。"""
+        self.cancel_thumbnail()
+        if self._scale_anim is not None:
+            try:
+                self._scale_anim.stop()
+            except RuntimeError:
+                pass
+        self._animating = False
+        if self._rest_geometry is not None:
+            self.setGeometry(self._rest_geometry)
+        self.record = record
+        if nsfw_policy is not None:
+            self._nsfw_policy = nsfw_policy
+        self._defer_image = bool(defer_image)
+        self._dl_pending = bool(download_count_pending) and not record.download_count
+        self.set_selected(False)
+        self.title_label.setText(record.name)
+        self.author_label.setText(record.submitter.name)
+        self.view_label.setText(str(record.view_count))
+        self.like_label.setText(str(record.like_count))
+        self.dl_label.setText("…" if self._dl_pending else str(record.download_count))
+        self.type_badge.setText(localize_category_name(record.model.value))
+        self.type_badge.adjustSize()
+        self.type_badge.move(_CARD_W - self.type_badge.width() - 6, 6)
+        self.type_badge.setVisible(record.model.value != "Mod")
+        self.nsfw_badge.setVisible(record.is_nsfw)
+        self.set_installed(is_installed)
+        # 显示新占位前清除旧的清晰和模糊像素。
+        self.thumbnail.start_loading()
+        self.thumbnail.set_blur(record.is_nsfw and self._nsfw_policy == "blur")
+        if not record.thumbnail_url:
+            self.thumbnail.setPixmap(_build_loading_placeholder())
+        elif not self._restore_cached_thumbnail() and not self._defer_image:
+            self._do_load_thumbnail()
+
+    def sizeHint(self) -> QSize:
+        """为使用绝对定位子控件的卡片提供明确的固定布局尺寸。"""
+        # 子控件采用绝对定位，需显式提供尺寸提示，避免流式布局将卡片按零宽度叠放。
+        return QSize(_CARD_W, _CARD_H)
+
+    def minimumSizeHint(self) -> QSize:
+        """保持卡片的最小建议尺寸与固定缩略图及信息布局一致。"""
+        return QSize(_CARD_W, _CARD_H)
+
+    def mousePressEvent(self, event):
+        """鼠标左键按下时向使用方发送当前资源记录。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self.record)
+        super().mousePressEvent(event)
+
+    # 缩略图延迟加载
+    def _restore_cached_thumbnail(self) -> bool:
+        """尝试同步恢复加载器缓存，命中后标记图片就绪并直接收起加载占位。"""
+        restore = getattr(self._image_loader, "try_cached", None)
+        if not callable(restore) or not restore(
+            self.record.thumbnail_url,
+            self.thumbnail,
+            size=QSize(_CARD_W, _THUMB_H),
+            crop_to_size=True,
+        ):
+            return False
+        self._thumb_loaded = True
+        # 缓存命中时立即显示，复用可见卡片不再重新淡入。
+        anim._cancel_fade(self.thumbnail._shimmer)
+        self.thumbnail._shimmer.hide()
+        return True
+
+    def _do_load_thumbnail(self) -> None:
+        """幂等提交缩略图加载请求。"""
+        if self._thumb_loaded or not self.record.thumbnail_url:
+            return
+        if self._restore_cached_thumbnail():
+            return
+        self._thumb_loaded = True
+        self._image_loader.load(
+            self.record.thumbnail_url,
+            self.thumbnail,
+            size=QSize(_CARD_W, _THUMB_H),
+            crop_to_size=True,
+        )
+
+    def load_thumbnail(self) -> None:
+        """由 GbAdaptiveGrid 在滚动中分批调用，触发缩略图加载（幂等）。"""
+        self._do_load_thumbnail()
+
+    # 选中态
+    def set_selected(self, selected: bool) -> None:
+        """更新选中状态，并在最上层显示边框。"""
+        if self._selected == bool(selected):
+            return
+        self._selected = bool(selected)
+        if self._selected:
+            # 显示前提升覆盖层，避免子控件遮挡选中边框。
+            self._selection_overlay.setGeometry(0, 0, self.width(), self.height())
+            self._selection_overlay.raise_()
+            self._selection_overlay.show()
+            self._selection_overlay.update()
+        else:
+            self._selection_overlay.hide()
+
+    # 下载量回填
+    def update_downloads(self, count: int) -> None:
+        """更新卡片下载量并写回记录，供后续详情或卡片重建复用。"""
+        try:
+            self.record.download_count = int(count)
+        except (TypeError, ValueError):
+            return
+        self._dl_pending = False
+        self.dl_label.setText(str(self.record.download_count))
