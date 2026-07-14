@@ -633,3 +633,154 @@ class GbDownloadFlyout(QFrame):
         grp.addAnimation(oa)
         self._show_anim = grp
         grp.start()
+
+    def animate_hide(self) -> None:
+        """通过上滑和淡出动画隐藏浮窗，动画期间忽略重复关闭请求。"""
+        if not self.isVisible() or self._closing:
+            return
+        if not anim.is_enabled():
+            self.hide()
+            self.setWindowOpacity(1.0)
+            return
+        self._closing = True
+        home = self.pos()
+        grp = QParallelAnimationGroup(self)
+        pa = QPropertyAnimation(self, b"pos", grp)
+        pa.setStartValue(home)
+        pa.setEndValue(QPoint(home.x(), home.y() - 10))
+        pa.setDuration(150)
+        pa.setEasingCurve(QEasingCurve.Type.InCubic)
+        oa = QPropertyAnimation(self, b"windowOpacity", grp)
+        oa.setStartValue(self.windowOpacity())
+        oa.setEndValue(0.0)
+        oa.setDuration(150)
+        oa.setEasingCurve(QEasingCurve.Type.InCubic)
+        grp.addAnimation(pa)
+        grp.addAnimation(oa)
+
+        def _on_done():
+            """动画结束后隐藏浮层，恢复位置和透明度并清除收起状态。"""
+            self.hide()
+            self.setWindowOpacity(1.0)
+            self.move(home)  # 复位，下次 animate_show 定位准确
+            self._closing = False
+            self._hide_anim = None
+
+        grp.finished.connect(_on_done)
+        self._hide_anim = grp
+        grp.start()
+
+    # 点击外部关闭
+    def eventFilter(self, obj, event):
+        """可见时处理无模态窗口的 Esc 和外部点击，保留浮层及锚点按钮的正常交互。"""
+        # 仅在浮窗可见时处理外部点击，其他事件原样传递。
+        if not self.isVisible():
+            return False
+        from PySide6.QtCore import QEvent
+
+        # 通过全局过滤器处理 Esc；存在模态对话框时由对话框优先处理。
+        if event.type() == QEvent.Type.KeyPress and event.key() == Qt.Key.Key_Escape:
+            if QApplication.activeModalWidget() is None:
+                self.animate_hide()
+                return True
+            return False
+        if event.type() == QEvent.Type.MouseButtonPress:
+            try:
+                gpos = event.globalPosition().toPoint()
+            except AttributeError:
+                gpos = event.globalPos()
+            # 浮层内部点击保留给对应控件处理。
+            if self.geometry().contains(gpos):
+                return False
+            # 锚点按钮自行切换浮层状态，避免同一次点击先关闭再打开。
+            if self._anchor_widget is not None:
+                a = self._anchor_widget
+                try:
+                    a_rect = a.rect()
+                    a_global = a.mapToGlobal(a_rect.topLeft())
+                    from PySide6.QtCore import QRect
+
+                    if QRect(a_global, a_rect.size()).contains(gpos):
+                        return False
+                except RuntimeError:
+                    self._anchor_widget = None
+            # 外部点击收起浮窗后继续传递，使目标窗口仍能执行自身操作。
+            self.animate_hide()
+        return False
+
+    def keyPressEvent(self, event):
+        """收到 Esc 时启动收起动画，其他按键交给基类。"""
+        # Esc 启动浮层收起动画。
+        if event.key() == Qt.Key.Key_Escape:
+            self.animate_hide()
+            return
+        super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        """关闭浮层前解除应用事件过滤，避免应用退出后保留接收者。"""
+        # 应用退出时确保解除全局事件过滤器，避免悬挂引用
+        try:
+            QApplication.instance().removeEventFilter(self)
+        except Exception:
+            pass
+        super().closeEvent(event)
+
+    def _apply_inner_style(self) -> None:
+        """为内部面板应用当前主题的半透明底色、边框和圆角。"""
+        # 使用半透明填充保证文字可读；窗口级模糊由 showEvent 中的 apply_acrylic_blurbehind 提供。
+        _inner_bg = theme.rgba("bg.layer", acrylic_surface_alpha(0.66))
+        self._inner.setStyleSheet(
+            f"#downloadFlyoutInner {{ background-color: {_inner_bg};"
+            f" border: 1px solid {theme.color('stroke.card')}; border-radius: 8px; }}"
+        )
+
+    def retheme(self) -> None:
+        """主题变化后更新下载面板及各行的内联样式，图标由统一主题刷新处理。"""
+        try:
+            self._apply_inner_style()
+            self.empty_label.setStyleSheet(f"color:{theme.color('text.tertiary')}; padding:24px;")
+            for row in self._row_widgets.values():
+                try:
+                    row.retheme()
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    def _refresh(self) -> None:
+        """按当前游戏筛选并按任务状态排序记录，重建行控件及信号连接后同步空列表提示。"""
+        # 清空
+        while self._rows_layout.count() > 1:  # 末尾 stretch 保留
+            it = self._rows_layout.takeAt(0)
+            w = it.widget() if it else None
+            if w is not None:
+                w.deleteLater()
+        self._row_widgets.clear()
+
+        # 仅显示当前游戏的任务。
+        tasks = self._manager.active(game_id=self._game_id_filter)
+        # 排序：active(准备中/下载中/排队/暂停) 先，failed/canceled 中间，done 最后
+        order = {"preparing": 0, "downloading": 0, "queued": 1, "paused": 2, "failed": 3, "canceled": 3, "done": 4}
+        tasks.sort(key=lambda t: order.get(t.state, 9))
+
+        for t in tasks:
+            row = _DownloadRow(self._manager, t, parent=self._rows_container, can_open_mod=self.can_open_mod)
+            row.open_mod_requested.connect(self.mod_open_requested.emit)
+            row.open_file_requested.connect(self.file_open_requested.emit)
+            row.request_refresh.connect(self._refresh)
+            # 插到 stretch 之前
+            self._rows_layout.insertWidget(self._rows_layout.count() - 1, row)
+            self._row_widgets[t.file.file_id] = row
+
+        self.empty_label.setVisible(not tasks)
+        self.scroll.setVisible(bool(tasks))
+
+    def set_game_filter(self, game_id: str | None) -> None:
+        """设置任务所属游戏筛选并重建列表。
+
+        None 表示显示全部任务，其他值按游戏编号精确匹配。
+        """
+        if game_id == self._game_id_filter:
+            return
+        self._game_id_filter = game_id
+        self._refresh()
