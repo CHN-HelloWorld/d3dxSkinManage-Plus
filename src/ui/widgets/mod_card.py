@@ -382,3 +382,86 @@ class ModCard(QFrame):
             width,
             Qt.PenStyle.SolidLine,
         )
+
+    def _chrome_style(self) -> tuple[QColor, QColor, float, Qt.PenStyle]:
+        """把标量外观参数转换为绘制所需的颜色、线宽和线型，应用背景透明度。"""
+        fill_color, border_color, alpha, width, pen_style = self._chrome_parameters()
+        fill = QColor(fill_color)
+        if alpha is not None:
+            fill.setAlphaF(alpha)
+        return fill, QColor(border_color), width, pen_style
+
+    def paintEvent(self, event) -> None:
+        """按当前状态绘制圆角背景与边框，并将描边限制在卡片范围内。"""
+        fill, border, width, pen_style = self._chrome_style()
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(fill)
+        painter.setPen(QPen(border, width, pen_style))
+        inset = width / 2
+        radius = max(0.0, theme.radius("card") - inset)
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(inset, inset, -inset, -inset), radius, radius)
+
+    def enterEvent(self, event) -> None:
+        """记录鼠标悬停状态并刷新卡片外观。"""
+        self._hover = True
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """清除鼠标悬停状态并刷新卡片外观。"""
+        self._hover = False
+        self.update()
+        super().leaveEvent(event)
+
+    def set_cut_state(self, is_cut: bool) -> None:
+        """仅在剪切标记变化时请求重绘，使用虚线外观表示待移动的条目。"""
+        if self._cut_state == is_cut:
+            return
+        self._cut_state = is_cut
+        self.update()
+
+    def set_selected(self, selected: bool) -> None:
+        """同步卡片选择标记，实际变化时更新与启用状态共同决定的外观。"""
+        if self._selected == selected:
+            return
+        self._selected = selected
+        self._update_status()
+
+    def show_preview_by_path(
+        self,
+        image_path: str,
+        pixmap: QPixmap | None = None,
+    ) -> bool:
+        """显示指定路径的预览图（用于与右侧预览栏同步切换）。
+
+        记录为覆盖路径：卡片视图重建、延迟/后台重加载都会沿用同一张，
+        避免列表↔卡片视图切换时卡片回退到首图（串图 bug）。
+        """
+        if not self._mod:
+            return False
+        if self._adult_mode == "hide" and self._mod.info.age_rating == AgeRating.X:
+            return False
+        # 空路径或首图清除覆盖设置，恢复主预览。
+        self._preview_override_path = None if not image_path or image_path == self._mod.primary_preview else image_path
+        if image_path and (pixmap is not None or fs.exists(image_path)):
+            loaded = pixmap if pixmap is not None else load_pixmap_file(image_path)
+            if self.set_preview_pixmap(loaded):
+                return True
+        else:
+            self._cached_pixmap = None
+            self._preview_label.setText(tr("无预览"))
+        return False
+
+    def _elide_name(self, text: str) -> None:
+        """根据卡片宽度省略过长的名称"""
+        from PySide6.QtGui import QFontMetrics
+
+        fm = QFontMetrics(self._name_label.font())
+        avail_w = self._card_width - 46  # 预留边距、状态点、分级标识和间距。
+        elided = fm.elidedText(text, Qt.TextElideMode.ElideRight, avail_w)
+        self._name_label.setText(elided)
+        if elided != text:
+            self._name_label.setToolTip(text)
+        else:
+            self._name_label.setToolTip("")
