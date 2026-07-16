@@ -340,3 +340,134 @@ class ModListTable(QTableWidget):
         tooltip = error or (tr("正在启用，可继续浏览其他 Mod；处理完成前请勿重复操作。") if busy else text)
         item.setToolTip(tooltip)
         item.setData(Qt.ItemDataRole.AccessibleTextRole, text)
+
+    def set_deploy_progress(self, mod_id: str, progress: float | None) -> None:
+        """记录限定范围内的进度，未知或非有限进度按等待状态显示，并清除旧完成及错误反馈。"""
+        self._errors.pop(mod_id, None)
+        self._completed.pop(mod_id, None)
+        self._progress[mod_id] = (
+            max(0.0, min(1.0, progress)) if progress is not None and math.isfinite(progress) else None
+        )
+        self._refresh_feedback_row(mod_id)
+        self._sync_feedback_timer()
+
+    def finish_deploy(self, mod_id: str, *, success: bool, error: str = "") -> None:
+        """结束进度记录，显示限时成功反馈或保留错误提示；真实启用状态仍由外层更新。"""
+        self._progress.pop(mod_id, None)
+        if success:
+            self._errors.pop(mod_id, None)
+            if anim.is_enabled():
+                self._completed[mod_id] = monotonic() + self.FINISH_SECONDS
+        else:
+            self._completed.pop(mod_id, None)
+            self._errors[mod_id] = error or tr("无法完成 Mod 部署，请检查压缩包和部署目录后重试。")
+        self._refresh_feedback_row(mod_id)
+        self._sync_feedback_timer()
+
+    def _row_for_mod(self, mod_id: str) -> int | None:
+        """校验缓存行仍绑定目标 Mod，失效时丢弃索引并返回 None。"""
+        row = self._mod_rows.get(mod_id)
+        if row is None:
+            return None
+        item = self.item(row, 0)
+        if item is None or item.data(Qt.ItemDataRole.UserRole) != mod_id:
+            self._mod_rows.pop(mod_id, None)
+            return None
+        return row
+
+    def _row_rect(self, row: int) -> QRect:
+        """返回指定行在视口坐标系中的完整横向区域。"""
+        return QRect(0, self.rowViewportPosition(row), self.viewport().width(), self.rowHeight(row))
+
+    def _refresh_feedback_row(self, mod_id: str) -> None:
+        """为仍可定位的 Mod 同步状态单元格，并仅请求重绘对应行。"""
+        row = self._row_for_mod(mod_id)
+        if row is not None:
+            self.refresh_mod_status(row)
+            self.viewport().update(self._row_rect(row))
+
+    def _sync_feedback_timer(self) -> None:
+        """仅在表格可见且有需要推进的完成或动画反馈时运行共用定时器。"""
+        needed = self.isVisible() and bool(self._completed or (self._progress and anim.is_enabled()))
+        if needed and not self._feedback_timer.isActive():
+            self._feedback_timer.start()
+        elif not needed:
+            self._feedback_timer.stop()
+
+    def _advance_feedback(self) -> None:
+        """清理过期成功提示并刷新视口内的活动行，再按剩余反馈决定定时器状态。"""
+        now = monotonic()
+        for mod_id in self._progress.keys() | self._completed.keys():
+            if mod_id in self._completed and (self._completed[mod_id] <= now or not anim.is_enabled()):
+                self._completed.pop(mod_id)
+            row = self._row_for_mod(mod_id)
+            if row is not None and not self.isRowHidden(row):
+                rect = self._row_rect(row)
+                if rect.intersects(self.viewport().rect()):
+                    self.viewport().update(rect)
+        self._sync_feedback_timer()
+
+    def showEvent(self, event) -> None:
+        """显示时同步可见行及反馈状态，并按动画设置启动逐行揭示。"""
+        super().showEvent(event)
+        self._sync_visible_rows()
+        self._advance_feedback()
+        self.reveal_visible_rows()
+
+    def hideEvent(self, event) -> None:
+        """隐藏时取消揭示效果和反馈定时器，避免不可见表格持续刷新。"""
+        self.cancel_row_reveal()
+        self._feedback_timer.stop()
+        super().hideEvent(event)
+
+    def paintEvent(self, event) -> None:
+        """完成原生表格绘制后叠加可见 Mod 的部署进度、成功淡出或错误标记。"""
+        self._sync_visible_rows()
+        super().paintEvent(event)
+        if not (self._progress or self._completed or self._errors):
+            return
+        painter = QPainter(self.viewport())
+        painter.setClipRegion(event.region())
+        header = self.horizontalHeader()
+        # 按完整表格宽度计进度，横向滚动和拖动列宽时不会跳成另一个百分比。
+        left, width = -header.offset(), header.length()
+        now = monotonic()
+        try:
+            for mod_id in self._progress.keys() | self._completed.keys() | self._errors.keys():
+                row = self._row_for_mod(mod_id)
+                if row is None or self.isRowHidden(row):
+                    continue
+                row_rect = self._row_rect(row)
+                if not row_rect.intersects(self.viewport().rect()):
+                    continue
+                line = QRectF(left, row_rect.bottom() - 1, width, 2)
+                if mod_id in self._progress:
+                    accent = QColor(theme.color("accent"))
+                    track = QColor(accent)
+                    track.setAlpha(35)
+                    painter.fillRect(line, track)
+                    progress = self._progress[mod_id]
+                    if progress is None:
+                        if anim.is_enabled():
+                            segment = width * 0.22
+                            x = left + ((now % 1.6) / 1.6) * (width + segment) - segment
+                            fill = QRectF(x, line.top(), segment, line.height()).intersected(line)
+                        else:
+                            fill = line
+                            accent.setAlpha(150)
+                    else:
+                        fill = QRectF(left, line.top(), width * progress, line.height())
+                    painter.fillRect(fill, accent)
+                elif mod_id in self._completed:
+                    remaining = self._completed[mod_id] - now
+                    if remaining > 0 and anim.is_enabled():
+                        success = QColor(theme.color("success"))
+                        success.setAlphaF(min(1.0, remaining / 0.7))
+                        painter.fillRect(line, success)
+                elif mod_id in self._errors:
+                    painter.fillRect(
+                        QRectF(left, row_rect.top() + 5, 3, max(0, row_rect.height() - 10)),
+                        QColor(theme.color("danger")),
+                    )
+        finally:
+            painter.end()
