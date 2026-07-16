@@ -260,3 +260,125 @@ class ModCard(QFrame):
         self._preview_resolved = True
         self._preview_label.setText(tr("无预览"))
         self._apply_adult_blur()
+
+    def load_pixmap_deferred(self) -> None:
+        """延迟加载预览图（由外部定时器调用）"""
+        if not self._mod:
+            return
+        if self._adult_mode == "hide" and self._mod.info.age_rating == AgeRating.X:
+            return  # 已设置隐藏文字
+        path = self.effective_preview_path()
+        if path and fs.exists(path):
+            pixmap = load_pixmap_file(path)
+            if self.set_preview_pixmap(pixmap):
+                return
+        self._cached_pixmap = None
+        self._preview_label.setText(tr("无预览"))
+
+    def _set_mod_text(self, mod: Mod) -> None:
+        """设置卡片的文字/角标信息（不包含预览图）"""
+        self._elide_name(mod.display_name)
+        self._tag_row.set_tags(tags_for_names(mod.info.tags, self._tag_catalog))
+
+        # 年龄分级角标
+        rating_colors = {
+            AgeRating.G: theme.color("success"),
+            AgeRating.P: theme.color("warning"),
+            AgeRating.R: theme.color("warning"),
+            AgeRating.X: theme.color("danger"),
+        }
+        r_color = rating_colors.get(mod.info.age_rating, theme.color("success"))
+        self._rating_badge.setText(mod.info.age_rating.value)
+        rating_style = (
+            f"font-size: 9px; font-weight: bold; border-radius: 3px; color: white; background-color: {r_color};"
+        )
+        if self._rating_badge.styleSheet() != rating_style:
+            self._rating_badge.setStyleSheet(rating_style)
+
+    def set_tag_catalog(self, catalog: dict[str, TagDefinition]) -> None:
+        """复用页面的规范化名称缓存，不逐卡查询数据库。"""
+        self._tag_catalog = catalog
+        if self._mod:
+            self._tag_row.set_tags(tags_for_names(self._mod.info.tags, catalog))
+
+    def _update_tag_scale(self) -> None:
+        """依据卡片高度控制标签数量和可见性，避免小卡片信息区拥挤。"""
+        self._tag_row.set_limit(2 if self._card_height >= 300 else 1)
+        self._tag_row.setVisible(self._card_height >= 170)
+
+    def _load_mod_pixmap(self, mod: Mod) -> None:
+        """加载预览图到卡片"""
+        path = self.effective_preview_path()
+        if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+            self._cached_pixmap = None
+            self._preview_label.setText(tr("已隐藏"))
+            self._preview_label.setStyleSheet(
+                f"QLabel {{ background-color: {theme.surface_color('bg.card', 'placeholder')}; "
+                f"color: {theme.color('danger')}; font-size: 12px; "
+                f"border-radius: 4px; }}"
+            )
+        elif path and fs.exists(path):
+            pixmap = load_pixmap_file(path)
+            if not self.set_preview_pixmap(pixmap):
+                self._cached_pixmap = None
+                self._preview_label.setText(tr("无预览"))
+        else:
+            self._cached_pixmap = None
+            self._preview_label.setText(tr("无预览"))
+        self._apply_adult_blur()
+
+    def _apply_adult_blur(self) -> None:
+        """blur 模式下给 X 级预览图加模糊（与 Mod 商店 NSFW 模糊一致）；其余模式清除模糊。
+
+        只在确有预览图（_cached_pixmap）时模糊；占位文字/无预览不模糊。
+        """
+        want = (
+            self._adult_mode == "blur"
+            and self._mod is not None
+            and self._mod.info.age_rating == AgeRating.X
+            and self._cached_pixmap is not None
+        )
+        if want:
+            if not isinstance(self._preview_label.graphicsEffect(), QGraphicsBlurEffect):
+                effect = QGraphicsBlurEffect(self._preview_label)
+                effect.setBlurRadius(20)
+                self._preview_label.setGraphicsEffect(effect)
+        elif self._preview_label.graphicsEffect() is not None:
+            self._preview_label.setGraphicsEffect(None)
+
+    def _update_status(self) -> None:
+        """同步已绑定 Mod 的启用指示色并请求重绘卡片边框。"""
+        if not self._mod:
+            return
+        indicator_color = theme.color("success" if self._mod.is_enabled else "stroke.divider")
+        indicator_style = f"background-color: {indicator_color}; border-radius: 3px;"
+        if self._status_indicator.styleSheet() != indicator_style:
+            self._status_indicator.setStyleSheet(indicator_style)
+        self.update()
+
+    def _chrome_parameters(self) -> tuple[str, str, float | None, float, Qt.PenStyle]:
+        """按主题、启用、选择、悬停和剪切状态返回可用于缓存比较的背景与边框参数。"""
+        # 滚动时高频缓存检查仅使用标量，绘制新像素时才创建颜色对象。
+        mode = self.property("_appearanceTheme") or theme.current_theme()
+        background = self.property("_backgroundSurface")
+        if background is None:
+            background = theme.is_background_active()
+        enabled = bool(self._mod and self._mod.is_enabled)
+        border_token = "success" if enabled else "accent" if self._selected or self._hover else "stroke.card"
+        width = 2.0 if enabled else 1.0
+        fill_token, alpha = "bg.card", theme.ACRYLIC["card"]
+        if self._selected:
+            fill_token = "accent.subtle"
+        elif self._hover:
+            # 启用卡片仍保留悬停底色，背景模式使用较强透明层。
+            fill_token = "bg.hover" if background else "bg.subtle"
+            alpha = theme.ACRYLIC["strong"]
+        if self._cut_state:
+            return "#e8a838", theme.color("warning", mode), 0.08, 2.0, Qt.PenStyle.DashLine
+        return (
+            theme.color(fill_token, mode),
+            theme.color(border_token, mode),
+            alpha if background else None,
+            width,
+            Qt.PenStyle.SolidLine,
+        )
