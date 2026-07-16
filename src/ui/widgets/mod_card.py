@@ -465,3 +465,170 @@ class ModCard(QFrame):
             self._name_label.setToolTip(text)
         else:
             self._name_label.setToolTip("")
+
+    def resize_card(self, new_w: int, new_h: int) -> None:
+        """原地调整卡片大小（不重建控件），用缓存 pixmap + FastTransformation"""
+        if self._card_width == new_w and self._card_height == new_h:
+            return
+        self._card_width = new_w
+        self._card_height = new_h
+        # 动态预览图比例
+        preview_ratio = 0.64 if new_h >= 200 else max(0.52, 0.64 - (200 - new_h) * 0.002)
+        self._preview_height = int(new_h * preview_ratio)
+
+        self.setFixedSize(new_w, new_h)
+        self._preview_container.setFixedHeight(self._preview_height)
+        self._preview_label.setFixedHeight(self._preview_height)
+
+        # 更新信息区尺寸和字体
+        info_avail = new_h - self._preview_height - 8 - 4
+        scale_ratio = max(0.4, min(1.0, new_h / 280))
+        indicator_h = max(10, int(22 * scale_ratio))
+        font_size = int(theme.font("size_card_title" if new_h >= 170 else "size_card_title_compact"))
+        name_min_h = font_size + 8
+        name_max_h = name_min_h
+
+        self._info_widget.setMinimumHeight(max(20, info_avail))
+        self._status_indicator.setFixedSize(6, indicator_h)
+        self._name_label.setMinimumHeight(name_min_h)
+        self._name_label.setMaximumHeight(name_max_h)
+        self._name_label.setStyleSheet(f"font-weight: bold; font-size: {font_size}px;")
+        self._update_tag_scale()
+
+        # 重新省略名称
+        if self._mod:
+            self._elide_name(self._mod.display_name)
+
+        # 用缓存的原始 pixmap 快速缩放
+        if self._cached_pixmap and not self._cached_pixmap.isNull():
+            scaled = fill_blur_rounded(
+                self._cached_pixmap,
+                new_w - 8,
+                self._preview_height,
+                radius=8,
+                smooth=False,
+            )
+            self._preview_label.setPixmap(scaled)
+
+        self._type_badge.update_for_card("mod", new_w)
+        # 更新角标随高度分级降级并重新定位（右上角依赖宽度）
+        self._layout_update_badge()
+
+    def resize_card_fast(self, new_w: int, new_h: int) -> None:
+        """仅调整容器尺寸（不重缩放 pixmap），用于滑动条拖动中的即时反馈"""
+        if self._card_width == new_w and self._card_height == new_h:
+            return
+        self._card_width = new_w
+        self._card_height = new_h
+        # 动态预览图比例
+        preview_ratio = 0.64 if new_h >= 200 else max(0.52, 0.64 - (200 - new_h) * 0.002)
+        self._preview_height = int(new_h * preview_ratio)
+
+        self.setFixedSize(new_w, new_h)
+        self._preview_container.setFixedHeight(self._preview_height)
+        self._preview_label.setFixedHeight(self._preview_height)
+
+        info_avail = new_h - self._preview_height - 8 - 4
+        scale_ratio = max(0.4, min(1.0, new_h / 280))
+        indicator_h = max(10, int(22 * scale_ratio))
+        font_size = int(theme.font("size_card_title" if new_h >= 170 else "size_card_title_compact"))
+        name_min_h = font_size + 8
+        name_max_h = name_min_h
+
+        self._info_widget.setMinimumHeight(max(20, info_avail))
+        self._status_indicator.setFixedSize(6, indicator_h)
+        self._name_label.setMinimumHeight(name_min_h)
+        self._name_label.setMaximumHeight(name_max_h)
+        self._name_label.setStyleSheet(f"font-weight: bold; font-size: {font_size}px;")
+        self._update_tag_scale()
+
+        # 重新省略名称
+        if self._mod:
+            self._elide_name(self._mod.display_name)
+
+        self._type_badge.update_for_card("mod", new_w)
+        # 更新角标随高度分级降级并重新定位（右上角依赖宽度）
+        self._layout_update_badge()
+
+    def set_update_available(self, available: bool) -> None:
+        """切换该卡片"有可用更新"角标。"""
+        self._update_available = bool(available)
+        self._layout_update_badge()
+
+    def _layout_update_badge(self) -> None:
+        """按卡片高度将可更新提示显示为文字、图标或圆点，并定位到预览右上角。"""
+        badge = getattr(self, "_update_badge", None)
+        if badge is None:
+            return
+        if not getattr(self, "_update_available", False):
+            badge.hide()
+            return
+        green = theme.color("success")
+        h = self._card_height
+        if h >= 180:
+            badge.setText(tr("可更新"))
+            badge.setFixedSize(58, 18)
+            badge.setStyleSheet(
+                f"font-size: 9px; font-weight: bold; border-radius: 3px; color: white; background-color: {green};"
+            )
+        elif h >= 140:
+            badge.setText("")
+            badge.setPixmap(icons.pixmap("status/update", 14, "text.on_accent"))
+            badge.setFixedSize(18, 18)
+            badge.setStyleSheet(f"border-radius: 3px; background-color: {green};")
+        else:
+            badge.setText("")
+            badge.setFixedSize(8, 8)
+            badge.setStyleSheet(f"border-radius: 4px; background-color: {green};")
+        x = max(4, self._card_width - badge.width() - 8)
+        badge.move(x, 4)
+        badge.show()
+        badge.raise_()
+
+    @property
+    def mod_id(self) -> str:
+        """返回绑定的 Mod 标识，空卡片返回空字符串。"""
+        return self._mod.mod_id if self._mod else ""
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        """点击已绑定卡片时发出选择信号并消费左键事件，避免外层重复处理。"""
+        if event.button() == Qt.MouseButton.LeftButton and self._mod:
+            self.clicked.emit(self._mod.mod_id)
+            event.accept()  # 阻止事件传播到父控件
+            return
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
+        """双击已绑定卡片时发出双击及启停请求，由外层处理实际部署操作。"""
+        if event.button() == Qt.MouseButton.LeftButton and self._mod:
+            self.double_clicked.emit(self._mod.mod_id)
+            self.toggle_requested.emit(self._mod.mod_id)
+        super().mouseDoubleClickEvent(event)
+
+    def contextMenuEvent(self, event) -> None:
+        """收集插件 Mod 菜单项，无可用扩展时不显示菜单。"""
+        if self._mod is None:
+            super().contextMenuEvent(event)
+            return
+        from src.ui import plugin_menu
+
+        actions = plugin_menu.menu_actions("mod-context", self._mod.mod_id)
+        if not actions:
+            super().contextMenuEvent(event)
+            return
+        from PySide6.QtWidgets import QMenu
+
+        menu = QMenu(self)
+        for title, callback in actions:
+            act = menu.addAction(title)
+            act.triggered.connect(lambda _=False, cb=callback: cb())
+        # 原生窗口由全局弹层过滤器在绑定顶层所有者后创建，避免卡片及其兄弟控件原生化。
+        try:
+            menu.exec(event.globalPos())
+        finally:
+            try:
+                menu.deleteLater()
+            except RuntimeError:
+                # 插件回调可能已销毁所属卡片及菜单。
+                pass
+        event.accept()
