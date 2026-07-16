@@ -762,3 +762,183 @@ class GbModDetailView(QFrame):
         h.addWidget(btn)
         h.setAlignment(btn, Qt.AlignmentFlag.AlignVCenter)
         return row
+
+    def _apply_file_button_state(self, file: GbModFile) -> None:
+        """根据下载状态和本地文件计算按钮文案、可用性及操作。
+
+        每次重新绑定前断开旧点击信号，防止一次点击触发重复下载。
+        """
+        btn = self._file_buttons.get(file.file_id)
+        if btn is None:
+            return
+        if btn.isSignalConnected(QMetaMethod.fromSignal(btn.clicked)):
+            btn.clicked.disconnect()
+        state = self._file_states.get(file.file_id, "idle")
+        btn.setIconSize(QSize(16, 16))
+        btn.setText("")  # 图标按钮：文字描述移到 tooltip
+        if state == "downloading":
+            pct = self._file_progress.get(file.file_id, 0)
+            btn.setToolTip(tr("下载中 {pct}%", pct=pct) if pct else tr("下载中…"))
+            icons.apply_icon(btn, "meta/downloads", "text.disabled")
+            btn.setEnabled(False)
+            return
+        is_local = self._has_local_md5(file.md5_checksum)
+        # 按具体文件判断安装状态，同一在线 Mod 的文件可独立安装。
+        file_installed = False
+        if self._profile is not None:
+            try:
+                file_installed = bool(
+                    self._is_file_installed(
+                        int(getattr(self._profile, "mod_id", 0) or 0),
+                        int(file.file_id or 0),
+                        file.md5_checksum or "",
+                    )
+                )
+            except Exception:
+                file_installed = False
+        btn.setEnabled(True)
+        if file_installed:
+            # 已安装文件的按钮仅显示状态，不连接安装操作。
+            btn.setToolTip(tr("已安装"))
+            icons.apply_icon(btn, "status/installed", "success")
+        elif state == "failed":
+            btn.setToolTip(tr("下载失败，点击重试"))
+            icons.apply_icon(btn, "actions/refresh", "danger")
+            btn.clicked.connect(lambda _, f=file: self.file_download_requested.emit(f))
+        elif is_local or state == "done":
+            # 用「导入」图标而非对钩：对钩是「已安装」的专属符号，两者同图标时用户
+            # 会把「已下载待安装」看成已安装。
+            btn.setToolTip(tr("已下载，点击安装"))
+            icons.apply_icon(btn, "actions/import", "success")
+            btn.clicked.connect(lambda _, f=file: self.file_install_requested.emit(f))
+        else:
+            btn.setToolTip(tr("下载"))
+            icons.apply_icon(btn, "meta/downloads")
+            btn.clicked.connect(lambda _, f=file: self.file_download_requested.emit(f))
+
+    def refresh_file_buttons(self) -> None:
+        """在缓存或安装状态改变后，重新计算按钮文案和操作回调。
+
+        本地 Mod 删除等操作通过商店页转发到此处，同步已打开详情页的状态。
+        """
+        if self._profile is None:
+            return
+        # 移除可能失效的完成状态，再依据当前本地文件重新计算按钮。
+        stale = [fid for fid, s in self._file_states.items() if s == "done"]
+        for fid in stale:
+            self._file_states.pop(fid, None)
+        for f in self._profile.files:
+            self._apply_file_button_state(f)
+
+    def set_file_state(
+        self,
+        file_id: int,
+        state: str,
+        *,
+        progress: int | None = None,
+    ) -> None:
+        """记录文件下载状态及百分比进度，并刷新当前详情中的对应按钮。
+
+        即使该文件暂不在当前详情中也保留状态，供切回时恢复。
+        """
+        self._file_states[file_id] = state
+        if progress is not None:
+            self._file_progress[file_id] = progress
+        if self._profile is None:
+            return
+        for f in self._profile.files:
+            if f.file_id == file_id:
+                self._apply_file_button_state(f)
+                return
+
+    def _on_open_in_gamebanana(self) -> None:
+        """使用默认浏览器打开当前 Mod 的 GameBanana 页面。
+
+        详情缺失时按钮禁用；打开失败不影响详情浏览。
+        """
+        if self._profile is None:
+            return
+        url = (self._profile.page_url or "").strip()
+        if not url:
+            return
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        QDesktopServices.openUrl(QUrl(url))
+
+    def _on_overview_splitter_moved(self, pos: int, index: int) -> None:
+        """保存预览与文件区域的分栏高度。"""
+        sizes = self.overview_splitter.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            from src.core.config import Config as _Cfg
+
+            _Cfg.instance().set("ui.store_detail_split", [int(sizes[0]), int(sizes[1])])
+
+    def eventFilter(self, obj, event):
+        """标签几何或可见性变化时直接重定位下划线。"""
+        tb = getattr(self, "_tab_indicator", None)
+        if (
+            tb is not None
+            and obj is self.tabs.tabBar()
+            and event.type()
+            in (
+                QEvent.Type.Resize,
+                QEvent.Type.Show,
+                QEvent.Type.LayoutRequest,
+            )
+        ):
+            self._update_tab_indicator(animate=False)
+        return super().eventFilter(obj, event)
+
+    def _update_tab_indicator(self, animate: bool = True) -> None:
+        """将下划线移到当前标签底部。
+
+        首次直接定位，后续切换使用几何动画；没有有效当前标签时隐藏。
+        """
+        ind = getattr(self, "_tab_indicator", None)
+        if ind is None:
+            return
+        bar = self.tabs.tabBar()
+        idx = self.tabs.currentIndex()
+        if idx < 0 or not bar.isTabVisible(idx):
+            ind.hide()
+            return
+        rect = bar.tabRect(idx)
+        if rect.width() <= 0 or rect.height() <= 0:
+            ind.hide()
+            return
+        # 下划线位于标签底部中央，宽度约为标签的 64%，高度为两像素。
+        bar_w = max(16, int(rect.width() * 0.64))
+        x = rect.x() + (rect.width() - bar_w) // 2
+        y = rect.bottom() - 2
+        target = QRect(x, y, bar_w, 2)
+        if not ind.isVisible():
+            ind.setGeometry(target)
+            ind.show()
+            ind.raise_()
+            return
+        if animate:
+            anim.animate_geometry(ind, target)
+        else:
+            ind.setGeometry(target)
+        ind.raise_()
+
+    def _on_tab_changed(self, idx: int) -> None:
+        """首次访问时填充描述或更新 HTML，缺少更新内容时发起一次受在途状态保护的补充请求。"""
+        if self._profile is None:
+            return
+        if idx == 1 and not self._desc_loaded:
+            self._html_desc.set_html(self._profile.description_html)
+            self._desc_loaded = True
+        elif idx == self._updates_tab_index and not self._updates_loaded:
+            # ProfilePage 仅提供更新标志和数量；首次显示更新页时通过 Updates 端点获取完整记录。
+
+            # 请求期间先渲染已有更新记录，完成后替换内容。
+            self._html_updates.set_html(self._render_updates_html(self._profile.updates))
+            self._updates_loaded = True
+            if not self._profile.updates and self._updates_fetcher is not None and not self._updates_fetch_inflight:
+                self._updates_fetch_inflight = True
+                try:
+                    self._updates_fetcher(self._profile)
+                except Exception:
+                    self._updates_fetch_inflight = False
