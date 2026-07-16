@@ -209,3 +209,134 @@ class ModListTable(QTableWidget):
             self._name_cells.pop(row)
         # 单次元数据更新后可能没有立即重绘。
         self.viewport().update()
+
+    def _sync_visible_rows(self) -> None:
+        """只构造视口附近的行和名称控件，移出视口后仍保留具有焦点或打开标签浮层的控件。"""
+        if self._syncing_rows or not self.isVisible() or not self.rowCount():
+            return
+        self._syncing_rows = True
+        try:
+            first = self.rowAt(0)
+            if first < 0:
+                return
+            last = self.rowAt(max(0, self.viewport().height() - 1))
+            if last < 0:
+                last = self.rowCount() - 1
+            visible = {
+                row for row in range(max(0, first - 1), min(self.rowCount(), last + 2)) if not self.isRowHidden(row)
+            }
+            for row, cell in tuple(self._name_cells.items()):
+                popup = cell._tags._popup
+                focus = QApplication.focusWidget()
+                if (
+                    row not in visible
+                    and not (popup is not None and popup.isVisible())
+                    and not (focus is not None and (focus is cell or cell.isAncestorOf(focus)))
+                ):
+                    self.removeCellWidget(row, 1)
+                    self._name_cells.pop(row)
+            for row in sorted(visible):
+                self._populate_row(row)
+                if row in self._name_cells or row not in self._name_data:
+                    continue
+                name, tags, updatable = self._name_data[row]
+                cell = TagNameCell(name, tags, updatable=updatable)
+                cell.tag_clicked.connect(self.tag_clicked)
+                self.setCellWidget(row, 1, cell)
+                self._name_cells[row] = cell
+        finally:
+            self._syncing_rows = False
+
+    def scrollContentsBy(self, dx: int, dy: int) -> None:
+        """滚动前取消逐行揭示效果，滚动后同步新进入视口的行内容。"""
+        self.cancel_row_reveal()
+        super().scrollContentsBy(dx, dy)
+        self._sync_visible_rows()
+
+    def reveal_visible_rows(self) -> None:
+        """在动画启用且表格可见时，为当前未隐藏的可见行创建逐行揭示效果。"""
+        self.cancel_row_reveal()
+        if not anim.is_enabled() or not self.isVisible() or not self.rowCount():
+            return
+        first = self.rowAt(0)
+        if first < 0:
+            return
+        last = self.rowAt(max(0, self.viewport().height() - 1))
+        if last < 0:
+            last = self.rowCount() - 1
+        rows = [row for row in range(first, last + 1) if not self.isRowHidden(row)]
+        if rows:
+            self._row_reveal_effect = _RowRevealEffect(self, rows)
+            self.viewport().setGraphicsEffect(self._row_reveal_effect)
+
+    def cancel_row_reveal(self) -> None:
+        """停止逐行显示定时器，并仅移除由本表格安装的揭示效果。"""
+        effect = getattr(self, "_row_reveal_effect", None)
+        if effect is not None:
+            self._row_reveal_effect = None
+            effect._timer.stop()
+            if self.viewport().graphicsEffect() is effect:
+                self.viewport().setGraphicsEffect(None)
+
+    def mousePressEvent(self, event) -> None:
+        """鼠标操作前结束揭示动画，再按普通表格行为处理选择。"""
+        self.cancel_row_reveal()
+        super().mousePressEvent(event)
+
+    def keyPressEvent(self, event) -> None:
+        """键盘操作前结束揭示动画，确保用户可以立即访问完整表格。"""
+        self.cancel_row_reveal()
+        super().keyPressEvent(event)
+
+    def is_deploying(self, mod_id: str) -> bool:
+        """判断指定 Mod 是否仍有待完成的部署进度记录。"""
+        return mod_id in self._progress
+
+    def deploy_error(self, mod_id: str) -> str:
+        """返回指定 Mod 最近记录的部署错误，未记录时返回空字符串。"""
+        return self._errors.get(mod_id, "")
+
+    def status_text(self, mod_id: str, enabled: bool) -> str:
+        """优先表达部署进度和错误，再依据真实启用状态返回显示文案。"""
+        if mod_id in self._progress:
+            progress = self._progress[mod_id]
+            if progress is None:
+                return tr("启用中…")
+            if progress >= 1:
+                return tr("正在完成…")
+            return tr("启用中 {value}%", value=int(progress * 100))
+        if mod_id in self._errors:
+            return tr("启用失败")
+        return tr("已启用") if enabled else tr("已禁用")
+
+    def refresh_mod_status(self, row: int) -> None:
+        """校验行类型后同步 Mod 索引、状态文字、图标及无障碍提示，避免重复写入相同文案。"""
+        type_item = self.item(row, 0)
+        if not type_item or type_item.data(Qt.ItemDataRole.UserRole + 1) != "mod":
+            return
+        mod_id = type_item.data(Qt.ItemDataRole.UserRole)
+        self._mod_rows[mod_id] = row
+        enabled = bool(type_item.data(self.ROLE_ENABLED))
+        if enabled:
+            self._errors.pop(mod_id, None)
+        busy = self.is_deploying(mod_id)
+        error = self.deploy_error(mod_id)
+        text = self.status_text(mod_id, enabled)
+        item = self.item(row, self.STATUS_COLUMN)
+        if item is None:
+            item = QTableWidgetItem()
+            self.setItem(row, self.STATUS_COLUMN, item)
+        # 进度信号可能比整数百分比更密；避免每帧改模型和触发无关选区信号。
+        if item.text() != text:
+            item.setText(text)
+        token = "accent" if busy else "danger" if error else "success" if enabled else "text.tertiary"
+        item.setForeground(QColor(theme.color(token)))
+        item.setBackground(QBrush())
+        icon_name = "status/error" if error else "status/enabled" if enabled else "status/disabled"
+        icon_key = f"{icon_name}:{theme.color(token)}"
+        if item.data(Qt.ItemDataRole.UserRole + 5) != icon_key:
+            item.setIcon(icons.get_icon(icon_name, token))
+            item.setData(Qt.ItemDataRole.UserRole + 5, icon_key)
+        tooltip = error or (tr("正在启用，可继续浏览其他 Mod；处理完成前请勿重复操作。") if busy else text)
+        item.setToolTip(tooltip)
+        item.setData(Qt.ItemDataRole.AccessibleTextRole, text)
