@@ -300,3 +300,174 @@ class GbModDetailView(QFrame):
         """详情面板尺寸变化后重新定位加载覆盖层。"""
         super().resizeEvent(event)
         self._reposition_loading_overlay()
+
+    def showEvent(self, event):
+        """首次布局完成后同步可见加载提示及标签下划线的位置。"""
+        super().showEvent(event)
+        # 首次显示完成布局后，重新定位可见的加载覆盖层。
+        if self._loading_overlay.isVisible():
+            self._reposition_loading_overlay()
+        # 首次布局完成后直接定位标签下划线。
+        self._update_tab_indicator(animate=False)
+
+    def _reposition_loading_overlay(self) -> None:
+        """将加载覆盖层限制在标签内容区域内，保留标签栏的交互能力。"""
+        # 尺寸尚未就绪时延迟定位，等待布局完成后再显示覆盖层。
+        if self.width() <= 0 or self.height() <= 0:
+            return
+        try:
+            content = self.tabs.currentWidget()
+            if content is not None and content.width() > 0:
+                tl = content.mapTo(self, content.rect().topLeft())
+                self._loading_overlay.setGeometry(
+                    tl.x(),
+                    tl.y(),
+                    content.width(),
+                    content.height(),
+                )
+                return
+            # 无法获取内容区域时使用整个面板作为覆盖范围。
+            top = self.tabs.geometry().top()
+            self._loading_overlay.setGeometry(
+                0,
+                top,
+                self.width(),
+                max(0, self.height() - top),
+            )
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _show_connecting(self) -> None:
+        """设置连接提示文案并进入覆盖层定位与显示流程。"""
+        self._loading_overlay.set_text(tr("正在连接 GameBanana…"))
+        self._position_and_show_loading()
+
+    def _position_and_show_loading(self) -> None:
+        """等待面板获得可见尺寸后显示并启动加载指示器，布局未就绪时延后重试。"""
+        # 首次显示前尺寸可能尚未确定，将覆盖层定位延迟至本轮布局完成。
+        if not self.isVisible() or self.width() <= 0 or self.height() <= 0:
+            call_later(0, self, self._position_and_show_loading)
+            return
+        self._reposition_loading_overlay()
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        # 重新加载时显式启动指示器，避免复用已显示的失败覆盖层而不触发 showEvent。
+        try:
+            self._loading_overlay.spinner.start()
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _hide_connecting(self) -> None:
+        """隐藏详情连接或加载状态覆盖层。"""
+        self._loading_overlay.hide()
+
+    def show_load_failed(self) -> None:
+        """将详情加载状态替换为失败提示。"""
+        self._loading_overlay.set_text(tr("连接失败，请检查网络后重新点击该 Mod"))
+        self._reposition_loading_overlay()
+        self._loading_overlay.show()
+        self._loading_overlay.raise_()
+        try:
+            self._loading_overlay.spinner.stop()
+        except (AttributeError, RuntimeError):
+            pass
+
+    def _build_overview(self) -> QWidget:
+        """为预览和文件分别建立滚动区，恢复分隔比例并提供站点页面入口。"""
+        # 预览和文件列表使用独立滚动区，由分隔条调整高度，
+        # 防止异步图片加载改变文件列表和下载按钮的位置。
+        self.overview_splitter = QSplitter(Qt.Orientation.Vertical)
+        self.overview_splitter.setObjectName("gbOvSplitter")
+        self.overview_splitter.setStyleSheet("#gbOvSplitter { background: transparent; }")
+        self.overview_splitter.setChildrenCollapsible(False)
+        self.overview_splitter.setHandleWidth(6)
+
+        # 上：图片预览滚动区
+        self.preview_scroll_area = QScrollArea()
+        self.preview_scroll_area.setWidgetResizable(True)
+        self.preview_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 始终保留垂直滚动条，避免其显隐改变视口宽度，
+        # 继而反复触发图片高度计算与滚动条状态变化。
+        self.preview_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOn)
+        # 滚动区域透明显示外层面板背景。
+        self.preview_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.previews_container = QWidget()
+        self.previews_container.setObjectName("gbOvPreviews")
+        # 在滚动区自身设置带控件标识的透明样式，以覆盖全局底色规则。
+        self.previews_container.setStyleSheet("#gbOvPreviews { background: transparent; }")
+        self.previews_layout = QVBoxLayout(self.previews_container)
+        self.previews_layout.setContentsMargins(8, 8, 8, 8)
+        self.previews_layout.setSpacing(8)
+        # 内容加载时添加末尾伸缩项，清空预览时一并移除。
+        self.preview_scroll_area.setWidget(self.previews_container)
+        # 视口透明规则使用控件标识提高优先级，避免被全局底色覆盖。
+        _pv = self.preview_scroll_area.viewport()
+        _pv.setObjectName("gbPrevVp")
+        _pv.setAutoFillBackground(False)
+        _pv.setStyleSheet("#gbPrevVp { background: transparent; }")
+        self.preview_scroll_area.setMinimumHeight(120)
+        # 滚动位置通过指数缓动更新。
+        from src.ui.smooth_scroll import SmoothScroller
+
+        SmoothScroller.attach(self.preview_scroll_area)
+        self.overview_splitter.addWidget(self.preview_scroll_area)
+
+        # 下：「可下载文件」标题 + 文件滚动区
+        files_wrap = QWidget()
+        files_wrap.setObjectName("gbOvFilesWrap")
+        files_wrap.setStyleSheet("#gbOvFilesWrap { background: transparent; }")
+        files_outer = QVBoxLayout(files_wrap)
+        files_outer.setContentsMargins(0, 0, 0, 0)
+        files_outer.setSpacing(0)
+
+        self.separator_label = QLabel(tr("可下载文件"))
+        self.separator_label.setStyleSheet("font-weight:bold; padding:6px 8px;")
+        files_outer.addWidget(self.separator_label)
+
+        self.files_scroll_area = QScrollArea()
+        self.files_scroll_area.setWidgetResizable(True)
+        self.files_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 文件滚动区保持透明，显示外层面板背景。
+        self.files_scroll_area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.files_container = QWidget()
+        self.files_container.setObjectName("gbOvFiles")
+        self.files_container.setStyleSheet("#gbOvFiles { background: transparent; }")
+        self.files_layout = QVBoxLayout(self.files_container)
+        self.files_layout.setContentsMargins(8, 4, 8, 8)
+        self.files_layout.setSpacing(4)
+        self.files_scroll_area.setWidget(self.files_container)
+        # 在视口自身声明透明规则，并限定到控件标识。
+        _fv = self.files_scroll_area.viewport()
+        _fv.setObjectName("gbFilesVp")
+        _fv.setAutoFillBackground(False)
+        _fv.setStyleSheet("#gbFilesVp { background: transparent; }")
+        SmoothScroller.attach(self.files_scroll_area)
+        files_outer.addWidget(self.files_scroll_area, 1)
+
+        # 详情加载后启用站点链接，供用户查看完整页面及评论。
+        self.gb_open_btn = QPushButton(tr("在 GameBanana 中查看"))
+        self.gb_open_btn.setEnabled(False)
+        self.gb_open_btn.clicked.connect(self._on_open_in_gamebanana)
+        # 按钮居中，并与文件区域保留间距。
+        gb_open_wrap = QHBoxLayout()
+        gb_open_wrap.setContentsMargins(8, 6, 8, 8)
+        gb_open_wrap.addStretch(1)
+        gb_open_wrap.addWidget(self.gb_open_btn)
+        gb_open_wrap.addStretch(1)
+        files_outer.addLayout(gb_open_wrap)
+
+        files_wrap.setMinimumHeight(100)
+        self.overview_splitter.addWidget(files_wrap)
+
+        # 预览和文件区域初始按 6:4 分配，之后保留用户调整的比例。
+        self.overview_splitter.setStretchFactor(0, 6)
+        self.overview_splitter.setStretchFactor(1, 4)
+        # 保存预览与文件区域的像素高度，并按比例恢复。
+        from src.core.config import Config as _Cfg
+
+        _s = _Cfg.instance().get("ui.store_detail_split", [360, 240])
+        self.overview_splitter.setSizes(
+            [int(_s[0]), int(_s[1])] if isinstance(_s, list) and len(_s) == 2 else [360, 240]
+        )
+        self.overview_splitter.splitterMoved.connect(self._on_overview_splitter_moved)
+        return self.overview_splitter
