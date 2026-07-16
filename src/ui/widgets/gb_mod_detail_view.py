@@ -471,3 +471,160 @@ class GbModDetailView(QFrame):
         )
         self.overview_splitter.splitterMoved.connect(self._on_overview_splitter_moved)
         return self.overview_splitter
+
+    def _build_description(self) -> QWidget:
+        """创建使用共用图片加载器及主题材质的描述 HTML 视图，并启用平滑滚动。"""
+        from src.ui.widgets.gb_html_view import GbHtmlView
+
+        self._html_desc = GbHtmlView(
+            image_loader=self._image_loader,
+            theme=theme.current_theme(),
+        )
+        self._apply_html_acrylic(self._html_desc)
+        from src.ui.smooth_scroll import SmoothScroller
+
+        SmoothScroller.attach(self._html_desc)
+        return self._html_desc
+
+    def _build_updates(self) -> QWidget:
+        """创建更新记录 HTML 视图，沿用图片加载、主题材质和平滑滚动配置。"""
+        from src.ui.widgets.gb_html_view import GbHtmlView
+
+        self._html_updates = GbHtmlView(
+            image_loader=self._image_loader,
+            theme=theme.current_theme(),
+        )
+        self._apply_html_acrylic(self._html_updates)
+        from src.ui.smooth_scroll import SmoothScroller
+
+        SmoothScroller.attach(self._html_updates)
+        return self._html_updates
+
+    # 详情面板的模糊背景绘制。
+    def set_backdrop(self, pixmap) -> None:
+        """接收纯色主题所需的网格模糊快照并重绘；None 表示使用基础底色。"""
+        self._backdrop = pixmap
+        self.update()
+
+    def paintEvent(self, event):
+        """绘制圆角背景和边框。
+
+        背景图主题使用半透明叠色；纯色主题使用网格模糊快照，
+        快照尚未就绪时使用接近不透明的底色，避免短暂显示清晰的底层内容。
+        """
+        try:
+            p = QPainter(self)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, True)
+            radius = float(theme.radius("card"))
+            rect = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            path = QPainterPath()
+            path.addRoundedRect(rect, radius, radius)
+            if theme.is_background_active():
+                fill = QColor(theme.color("bg.layer"))
+                fill.setAlphaF(0.90)
+                p.fillPath(path, fill)
+            elif self._backdrop is not None and not self._backdrop.isNull():
+                p.save()
+                p.setClipPath(path)
+                # 模糊快照填满面板，再叠加半透明底色以保证文字可读。
+                p.drawPixmap(self.rect(), self._backdrop)
+                tint = QColor(theme.color("bg.layer"))
+                tint.setAlphaF(0.78)  # 叠色透明度兼顾模糊背景与长文本可读性。
+                p.fillRect(self.rect(), tint)
+                p.restore()
+            else:
+                # 快照未就绪时使用基础底色。
+                fill = QColor(theme.color("bg.layer"))
+                fill.setAlphaF(0.97)
+                p.fillPath(path, fill)
+            pen = QPen(QColor(theme.color("stroke.card")))
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.drawPath(path)
+            p.end()
+        except Exception:
+            pass
+
+    @staticmethod
+    def _apply_html_acrylic(view) -> None:
+        """按主题设置描述和更新区域的阅读底色。
+
+        背景图主题提高不透明度，纯色主题保留更多面板模糊背景。
+        """
+        if theme.is_background_active():
+            fill = theme.rgba("bg.card", 0.90)
+        else:
+            fill = theme.rgba("bg.card", 0.45)
+        view.setStyleSheet(f"QTextBrowser {{ background-color: {fill}; border: none; }}")
+
+    # 公开操作接口。
+    def show_loading_for(self, record: GbModRecord) -> None:
+        """选择 Mod 后立即填充标题、清空旧详情并取消旧图像请求。
+
+        记录当前目标编号，使后续回调可以拒绝过期详情响应。
+        """
+        self._profile = None
+        self._pending_mod_id = int(record.mod_id or 0)
+        self.title_label.setText(record.name)
+        self.author_label.setText(f"by {record.submitter.name}")
+        self._clear_previews()
+        self._clear_files()
+        self._html_desc.set_html("")
+        self._html_updates.set_html("")
+        self._desc_loaded = False
+        self._updates_loaded = False
+        self._updates_fetch_inflight = False
+        self.tabs.setCurrentIndex(0)
+        # 默认隐藏更新标签，收到详情后按更新元数据决定是否显示，避免加载期间闪烁。
+        self._set_updates_tab_visible(False)
+        # GB 跳转按钮等到 profile 加载好才有 page_url，先禁用
+        self.gb_open_btn.setEnabled(False)
+        # 详情到达前显示连接状态。
+        self._show_connecting()
+
+    def load_profile(self, profile: GbModProfile) -> None:
+        """拒绝与当前目标不符的详情响应，重建预览和文件列表后显示当前标签内容。"""
+        # 拒绝与当前目标编号不符的详情响应，避免快速切换后被较早请求覆盖。
+        incoming = int(getattr(profile, "mod_id", 0) or 0)
+        if self._pending_mod_id and incoming and incoming != self._pending_mod_id:
+            return
+        self._profile = profile
+        self.title_label.setText(profile.name)
+        self.author_label.setText(f"by {profile.submitter.name}")
+        # 获取 profile 后，page_url 有效，启用「在 GameBanana 中查看」按钮
+        self.gb_open_btn.setEnabled(bool(profile.page_url))
+        # 根据更新标志、更新数量或已加载记录决定更新标签是否可见。
+        has_updates = (
+            bool(getattr(profile, "has_updates", False))
+            or int(getattr(profile, "updates_count", 0) or 0) > 0
+            or bool(profile.updates)
+        )
+        self._set_updates_tab_visible(has_updates)
+        self._clear_previews()
+        for url in profile.preview_images:
+            thumb = _AspectRatioImage()
+            thumb.setStyleSheet(f"background:{theme.surface_color('bg.subtle', 'placeholder')};")
+            # 图片加载期间显示骨架占位，setPixmap 设置图片后自动隐藏。
+            thumb.start_loading()
+            self._image_loader.load(
+                url,
+                thumb,
+                size=QSize(self.PREVIEW_FETCH_MAX, self.PREVIEW_FETCH_MAX),
+            )
+            thumb.mousePressEvent = lambda _e, u=url: self.preview_clicked.emit(u)
+            self.previews_layout.addWidget(thumb)
+        # 末尾伸缩项使图片靠顶部排列，避免少量图片被布局拉伸到整个视口高度。
+        self.previews_layout.addStretch(1)
+        self._clear_files()
+        for f in profile.files:
+            row = self._make_file_row(f)
+            self.files_layout.addWidget(row)
+            self._file_rows.append(row)
+        self.files_layout.addStretch(1)
+        self._desc_loaded = False
+        self._updates_loaded = False
+        # 内容就绪后隐藏加载覆盖层。
+        self._hide_connecting()
+        # 当前标签可能在请求完成前已被选中，须主动加载内容，不能只依赖标签切换信号。
+        self._on_tab_changed(self.tabs.currentIndex())
