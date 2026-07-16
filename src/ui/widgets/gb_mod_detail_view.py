@@ -628,3 +628,137 @@ class GbModDetailView(QFrame):
         self._hide_connecting()
         # 当前标签可能在请求完成前已被选中，须主动加载内容，不能只依赖标签切换信号。
         self._on_tab_changed(self.tabs.currentIndex())
+
+    def refresh_updates_view(self) -> None:
+        """更新记录到达后重新渲染更新标签页，供下次切换时直接显示。"""
+        if self._profile is None:
+            return
+        # 收到更新内容后显示更新页签，即使初始元数据未标记存在更新。
+        if self._profile.updates and not self._is_updates_tab_visible():
+            self._set_updates_tab_visible(True)
+        html = self._render_updates_html(self._profile.updates)
+        self._html_updates.set_html(html)
+        self._updates_loaded = True
+        self._updates_fetch_inflight = False
+
+    @staticmethod
+    def _render_updates_html(updates: list[GbModUpdateEntry]) -> str:
+        """将更新记录渲染为包含标题、时间、影响文件和正文的 HTML。
+
+        时间使用本地时区，零时间戳不显示；较多文件名合并为简短摘要。
+        """
+        from datetime import datetime
+
+        if not updates:
+            return ""
+        parts: list[str] = []
+        for u in updates:
+            title = _html_escape(u.title or tr("更新"))
+            ver = _html_escape(u.version or "")
+            ver_html = f' <span style="color:#888; font-weight:normal; font-size:0.85em;">{ver}</span>' if ver else ""
+            parts.append(f"<h3>{title}{ver_html}</h3>")
+            meta_bits: list[str] = []
+            ts = int(u.date_added_ts or 0)
+            if ts > 0:
+                try:
+                    meta_bits.append(datetime.fromtimestamp(ts).strftime("%Y-%m-%d %H:%M"))
+                except (OSError, ValueError, OverflowError):
+                    pass
+            if u.affected_files:
+                names = u.affected_files
+                if len(names) > 3:
+                    head = " / ".join(_html_escape(n) for n in names[:3])
+                    affected_str = tr("{head} 等 {count} 个", head=head, count=len(names))
+                else:
+                    affected_str = " / ".join(_html_escape(n) for n in names)
+                meta_bits.append(tr("影响文件：") + affected_str)
+            if meta_bits:
+                parts.append(
+                    '<div style="color:#888; font-size:0.9em; margin:4px 0 8px;">' + " · ".join(meta_bits) + "</div>"
+                )
+            # 更新正文由 GbHtmlView 按 HTML 白名单清理后显示。
+            parts.append(u.description_html or "")
+            parts.append("<hr>")
+        return "\n".join(parts)
+
+    # 更新标签可见性。
+    def _set_updates_tab_visible(self, visible: bool) -> None:
+        """同步隐藏标签和内容，再重新定位指示条。"""
+        self.tabs.setTabVisible(self._updates_tab_index, bool(visible))
+        # 标签可见性变化后重新定位下划线。
+        self._update_tab_indicator(animate=False)
+
+    def _is_updates_tab_visible(self) -> bool:
+        """返回更新记录标签当前是否对用户可见。"""
+        return self.tabs.isTabVisible(self._updates_tab_index)
+
+    # 内容及文件行管理。
+    def _clear_previews(self) -> None:
+        """先尝试取消每张预览的异步请求，再移除布局项并延后销毁图片控件。"""
+        # 删除缩略图控件前取消对应请求，防止延迟结果写入正在销毁的对象。
+        cancel = getattr(self._image_loader, "cancel_for", None)
+        for i in reversed(range(self.previews_layout.count())):
+            it = self.previews_layout.takeAt(i)
+            w = it.widget() if it else None
+            if w is not None:
+                if callable(cancel):
+                    try:
+                        cancel(w)
+                    except Exception:
+                        pass
+                w.deleteLater()
+
+    def _clear_files(self) -> None:
+        """移除文件行及按钮引用，保留下载状态和进度以便重新进入详情时恢复。"""
+        for i in reversed(range(self.files_layout.count())):
+            it = self.files_layout.takeAt(i)
+            if it and it.widget() is not None:
+                it.widget().deleteLater()
+        self._file_rows.clear()
+        # 清除旧按钮引用，但保留下载状态与进度，供重新进入详情时恢复。
+        self._file_buttons.clear()
+
+    def _make_file_row(self, file: GbModFile) -> QFrame:
+        """组合文件名、大小及下载量，登记操作按钮并按现有下载或安装状态初始化。"""
+        row = QFrame()
+        row.setObjectName("gbFileRow")
+        # 在行容器局部声明透明背景，使文件列表显示面板模糊底色。
+        row.setStyleSheet("#gbFileRow, #gbFileRow QLabel { background: transparent; }")
+        h = QHBoxLayout(row)
+        h.setContentsMargins(2, 4, 8, 4)  # 右侧留白，下载按钮不贴边
+        h.setSpacing(8)
+        # 左侧文本块：文件名（上，可换行）+ 元信息行（下：大小 · 下载量），二者
+        # 紧贴在一起、靠近文件名；下载按钮在最右、与整个文本块垂直居中。
+        text_box = QVBoxLayout()
+        text_box.setSpacing(2)
+        name = QLabel(file.file_name)
+        name.setWordWrap(True)
+        name.setMinimumWidth(0)
+        name.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        text_box.addWidget(name)
+
+        meta = QHBoxLayout()
+        meta.setSpacing(4)
+        size_lbl = QLabel(humanize_size(file.size_bytes))
+        size_lbl.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 9pt;")
+        meta.addWidget(size_lbl)
+        dl_count = int(getattr(file, "download_count", 0) or 0)
+        if dl_count:
+            dl_icon = QLabel()
+            icons.apply_pixmap(dl_icon, "meta/downloads", 12, "text.tertiary")
+            dl_icon.setStyleSheet("background: transparent;")
+            meta.addWidget(dl_icon)
+            dl_num = QLabel(_format_count(dl_count))
+            dl_num.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 9pt;")
+            meta.addWidget(dl_num)
+        meta.addStretch(1)
+        text_box.addLayout(meta)
+        h.addLayout(text_box, 1)
+
+        btn = QPushButton()
+        btn.setFixedSize(38, 30)
+        self._file_buttons[file.file_id] = btn
+        self._apply_file_button_state(file)
+        h.addWidget(btn)
+        h.setAlignment(btn, Qt.AlignmentFlag.AlignVCenter)
+        return row
