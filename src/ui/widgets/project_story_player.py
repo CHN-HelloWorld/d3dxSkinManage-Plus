@@ -268,3 +268,149 @@ class ProjectStoryPlayer(QWidget):
         playing = state == QMediaPlayer.PlaybackState.PlayingState
         self.play_button.setAccessibleName(tr("暂停") if playing else tr("播放"))
         self.play_button.setIcon(icons.get_icon("actions/pause" if playing else "actions/play"))
+
+    def _muted_changed(self, muted: bool) -> None:
+        """按静音状态更新音量图标、按钮提示和无障碍名称。"""
+        self.mute_button.setIcon(
+            self._standard_icon(
+                QStyle.StandardPixmap.SP_MediaVolumeMuted if muted else QStyle.StandardPixmap.SP_MediaVolume
+            )
+        )
+        self.mute_button.setToolTip(tr("取消静音") if muted else tr("静音"))
+        self.mute_button.setAccessibleName(self.mute_button.toolTip())
+
+    def _duration_changed(self, duration: int) -> None:
+        """更新进度条范围并刷新时间显示，阻止范围变化触发跳转播放。"""
+        with QSignalBlocker(self.seek_slider):
+            self.seek_slider.setRange(0, max(0, duration))
+        self._position_changed(self.player.position())
+
+    def _position_changed(self, position: int) -> None:
+        """同步媒体位置与时间文案，用户拖动进度条期间保留其选择。"""
+        if self.seek_slider.isSliderDown():
+            return
+        with QSignalBlocker(self.seek_slider):
+            self.seek_slider.setValue(position)
+        self.time_label.setText(f"{_clock(position)} / {_clock(self.player.duration())}")
+
+    def _seek_changed(self, position: int) -> None:
+        """实时显示选中的时间；非拖动操作立即跳转，拖动操作由释放事件提交。"""
+        self.time_label.setText(f"{_clock(position)} / {_clock(self.player.duration())}")
+        if not self.seek_slider.isSliderDown():
+            self.player.setPosition(position)
+
+    def _media_status_changed(self, status) -> None:
+        """在媒体可播放或结束时隐藏加载提示，无效媒体转入错误显示。"""
+        if status in (
+            QMediaPlayer.MediaStatus.LoadedMedia,
+            QMediaPlayer.MediaStatus.BufferedMedia,
+            QMediaPlayer.MediaStatus.EndOfMedia,
+        ):
+            self.status_label.hide()
+        elif status == QMediaPlayer.MediaStatus.InvalidMedia:
+            self._playback_error()
+
+    def _show_error(self, message: str) -> None:
+        """显示播放错误并禁用播放和进度控制，避免继续操作无效媒体。"""
+        self.status_label.setText(message)
+        self.status_label.show()
+        self.play_button.setEnabled(False)
+        self.seek_slider.setEnabled(False)
+
+    def _playback_error(self, *_args) -> None:
+        """将媒体后端错误转换为统一的用户可见播放失败提示。"""
+        self._show_error(tr("无法播放这段短片，请稍后重试。"))
+
+    def _toggle_fullscreen(self) -> None:
+        """借用宿主窗口全屏显示播放器，保存原父对象、布局位置和窗口状态以便恢复。"""
+        if self._released:
+            return
+        if self._fullscreen:
+            self._leave_fullscreen()
+            return
+        self.changing_presentation = True
+        self._fullscreen = True
+        self._home = self.parentWidget()
+        self._host = self.window()
+        self._host_state = self._host.windowState()
+        self._host_geometry = self._host.geometry()
+        self._placeholder = QWidget(self._home)
+        self._placeholder.setFixedHeight(self.height())
+        self._home.layout().replaceWidget(self, self._placeholder)
+        # 更换父对象前将焦点交给稳定宿主，避免隐藏时导航列表自动切换页面。
+        self._host.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.setParent(self._host)
+        self.setMinimumHeight(0)
+        self.setMaximumHeight(16777215)
+        self._host.installEventFilter(self)
+        self._host.showFullScreen()
+        self.setGeometry(self._host.rect())
+        self.show()
+        self.raise_()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.fullscreen_button.setIcon(icons.get_icon("actions/fullscreen-exit"))
+        self.changing_presentation = False
+
+    def _leave_fullscreen(self) -> None:
+        """把播放器放回原页面并删除占位控件，恢复宿主窗口状态、几何及焦点。"""
+        if not self._fullscreen:
+            return
+        self.changing_presentation = True
+        self._fullscreen = False
+        self._host.removeEventFilter(self)
+        self._host.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.setParent(self._home)
+        self._home.layout().replaceWidget(self._placeholder, self)
+        self._placeholder.deleteLater()
+        self._placeholder = None
+        self._host.setWindowState(self._host_state)
+        if not self._host_state & (Qt.WindowState.WindowMaximized | Qt.WindowState.WindowFullScreen):
+            self._host.setGeometry(self._host_geometry)
+        self.show()
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.fullscreen_button.setIcon(icons.get_icon("actions/fullscreen"))
+        self._host = self._home = None
+        self.changing_presentation = False
+
+    def eventFilter(self, watched, event) -> bool:
+        """随视频区域或全屏宿主尺寸变化调整状态提示及播放器几何。"""
+        if watched is self.video and event.type() == QEvent.Type.Resize:
+            self.status_label.setGeometry(self.video.rect().adjusted(24, 16, -24, -16))
+        elif watched is self._host and self._fullscreen and event.type() == QEvent.Type.Resize:
+            self.setGeometry(self._host.rect())
+        return super().eventFilter(watched, event)
+
+    def _escape(self) -> None:
+        """优先退出全屏；处于页内模式时向页面发出收起短片请求。"""
+        if self._fullscreen:
+            self._leave_fullscreen()
+        else:
+            self.close_requested.emit()
+
+    def event(self, event) -> bool:
+        """让播放器优先接收 Esc，避免退出播放操作同时触发主窗口导航。"""
+        # 播放器内优先接收退出键，再由自身按键处理，避免触发主窗口导航。
+        if event.type() == QEvent.Type.ShortcutOverride and event.key() == Qt.Key.Key_Escape:
+            event.accept()
+            return True
+        return super().event(event)
+
+    def keyPressEvent(self, event) -> None:
+        """消费 Esc 并执行退出操作，其余按键沿用控件默认处理。"""
+        if event.key() == Qt.Key.Key_Escape:
+            self._escape()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def release_media(self) -> None:
+        """幂等停止播放并清除媒体源、输出和当前图像，同时退出全屏以恢复页面结构。"""
+        if self._released:
+            return
+        self._released = True
+        self.player.stop()
+        self.player.setSource(QUrl())
+        self.player.setVideoOutput(None)
+        self.player.setAudioOutput(None)
+        self.video.image = QImage()
+        self._leave_fullscreen()
