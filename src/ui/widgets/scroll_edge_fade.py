@@ -250,3 +250,180 @@ class ScrollEdgeFade(QObject):
     def _on_scroll_range_changed(self, _minimum: int, _maximum: int) -> None:
         """内容滚动范围变化后更新上下边缘是否需要渐隐。"""
         self.refresh()
+
+    def eventFilter(self, obj, event):
+        """将视口显示和尺寸变化合并为下一轮事件循环的渐隐刷新。"""
+        if obj is self._viewport and event.type() in (
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        ):
+            self._refresh_timer.start()
+        return False
+
+    @property
+    def top_active(self) -> bool:
+        """判断视口上方是否还有可滚动内容，滚动控件已销毁时返回 False。"""
+        try:
+            bar = self._scroll_area.verticalScrollBar()
+            return bar.maximum() > bar.minimum() and bar.value() > bar.minimum()
+        except RuntimeError:
+            return False
+
+    @property
+    def bottom_active(self) -> bool:
+        """判断视口下方是否还有可滚动内容，滚动控件已销毁时返回 False。"""
+        try:
+            bar = self._scroll_area.verticalScrollBar()
+            return bar.maximum() > bar.minimum() and bar.value() < bar.maximum()
+        except RuntimeError:
+            return False
+
+    def _cards(self) -> list[QWidget]:
+        """优先向提供器获取卡片，否则枚举内容区直接子控件；对象失效时返回空列表。"""
+        if self._card_provider is not None:
+            try:
+                return [card for card in self._card_provider() if card is not None]
+            except (RuntimeError, TypeError):
+                return []
+        try:
+            content = self._scroll_area.widget()
+        except RuntimeError:
+            return []
+        if content is None:
+            return []
+        return content.findChildren(
+            QWidget,
+            options=Qt.FindChildOption.FindDirectChildrenOnly,
+        )
+
+    def refresh_later(self) -> None:
+        """卡片入场 opacity 动画结束后补装边缘遮罩。"""
+        self._retry_timer.start()
+
+    def set_resizing(self, resizing: bool, *, deferred: bool = False) -> None:
+        """几何变化期间复用卡片已有表面。"""
+        if self._resizing == resizing and not self._resize_finish_queue:
+            return
+        if not resizing and not self._resizing and deferred:
+            return
+        self._resizing = resizing
+        self._resize_finish_timer.stop()
+        # 被替换或回收的效果可能已不在提供者列表中。
+        for effect in self._resize_finish_queue:
+            try:
+                if not resizing:
+                    effect.set_resizing(False)
+                else:
+                    effect._resize_finishing = False
+            except RuntimeError:
+                pass
+        self._resize_finish_queue.clear()
+        for card in self._cards():
+            effect = card.graphicsEffect()
+            if effect is not None and effect is getattr(card, "_scroll_edge_fade_effect", None):
+                if deferred and not resizing and effect._resizing and not card.isHidden():
+                    effect._resize_finishing = True
+                    self._resize_finish_queue.append(effect)
+                else:
+                    effect.set_resizing(resizing)
+        if self._resize_finish_queue:
+            self._resize_finish_timer.start()
+
+    def _finish_resize_batch(self) -> None:
+        """每轮最多恢复八张卡片的真实绘制，分散尺寸调整结束后的重绘开销。"""
+        # 释放拖动时不同时重绘整个视口，避免将卡顿集中到鼠标松开。
+        for _ in range(min(8, len(self._resize_finish_queue))):
+            effect = self._resize_finish_queue.pop(0)
+            try:
+                if effect._resize_finishing:
+                    effect.set_resizing(False)
+            except RuntimeError:
+                pass
+        if not self._resize_finish_queue:
+            self._resize_finish_timer.stop()
+
+    def prepare_card(self, card: QWidget) -> _CardEdgeFadeEffect | None:
+        """显示前安装缓存效果，保持尚未开始的显示动画隐藏。"""
+        current = card.graphicsEffect()
+        ours = getattr(card, "_scroll_edge_fade_effect", None)
+        if current is not None and current is not ours:
+            return None
+        fade = min(self._fade_height, max(1, self._viewport.height() // 3))
+        if current is None:
+            key_provider = self._cache_key_provider
+            if key_provider is None and callable(getattr(card, "scroll_render_key", None)):
+                key_provider = _card_render_key
+            ours = _CardEdgeFadeEffect(card, self._scroll_area, fade, key_provider)
+            card._scroll_edge_fade_effect = ours
+            card.setGraphicsEffect(ours)
+        ours._fade_height = float(fade)
+        ours.set_resizing(self._resizing)
+        ours.setEnabled(True)
+        return ours
+
+    @Slot()
+    def refresh(self) -> None:
+        """按可见卡片和滚动位置安装或更新渐隐效果，遇到其他图形动画时延后重试。"""
+        viewport = self._viewport
+        try:
+            viewport_h = viewport.height()
+        except RuntimeError:
+            return
+        if viewport_h <= 0:
+            return
+
+        top_active = self.top_active
+        bottom_active = self.bottom_active
+        fade = min(self._fade_height, max(1, viewport_h // 3))
+        blocked_by_animation = False
+
+        for card in self._cards():
+            try:
+                card_top = card.mapTo(viewport, QPoint(0, 0)).y()
+                card_bottom = card_top + card.height()
+                intersects = not card.isHidden() and (
+                    (top_active and card_bottom > 0 and card_top < fade)
+                    or (bottom_active and card_bottom > viewport_h - fade and card_top < viewport_h)
+                )
+
+                current = card.graphicsEffect()
+                ours = getattr(card, "_scroll_edge_fade_effect", None)
+                if ours is not None and current is not ours:
+                    # stagger_reveal 等入场动画替换过 effect，旧 wrapper 已失效。
+                    card._scroll_edge_fade_effect = None  # type: ignore[attr-defined]
+                    ours = None
+
+                supports_cache = self._cache_key_provider is not None or callable(
+                    getattr(card, "scroll_render_key", None)
+                )
+                revealing = ours is not None and ours.reveal_opacity < 1.0
+                if intersects or ((supports_cache or revealing) and not card.isHidden()):
+                    if current is None:
+                        effect = self.prepare_card(card)
+                        effect._had_edge_mask = intersects
+                    elif ours is not None and current is ours:
+                        ours._fade_height = float(fade)
+                        if not ours._resize_finishing:
+                            ours.set_resizing(self._resizing)
+                        if not ours.isEnabled():
+                            ours.setEnabled(True)
+                        if intersects or ours._had_edge_mask != intersects:
+                            ours.update()
+                        ours._had_edge_mask = intersects
+                    else:
+                        # 不抢占卡片正在进行的淡入动画；结束后自动重试。
+                        blocked_by_animation = True
+                elif ours is not None and current is ours:
+                    # 禁用效果时正常绘制，保留对象供下次跨越边界使用。
+                    if ours.isEnabled():
+                        ours.setEnabled(False)
+            except RuntimeError:
+                continue
+
+        if blocked_by_animation:
+            self._retry_timer.start()
+
+
+def _card_render_key(card: QWidget) -> object:
+    """读取卡片公开的滚动绘制缓存键，供局部源图缓存判定复用条件。"""
+    return card.scroll_render_key()
