@@ -258,3 +258,195 @@ class SettingsCard(QFrame):
         self.rows.setSpacing(0)
         self.outer.addLayout(self.rows)
         self._footer_layout = None
+
+    def add_footer(self, note: str, button: QPushButton, feedback: QLabel | None = None):
+        """在卡片底部添加说明、可选反馈标签与右侧操作按钮。"""
+        footer = QWidget()
+        footer.setObjectName("settingsCardFooter")
+        self._footer_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, footer)
+        self._footer_layout.setContentsMargins(18, 8, 18, 8)
+        self._footer_layout.setSpacing(12)
+        self._footer_layout.addWidget(text_label(note, "smallHelp", wrap=True), 1)
+        if feedback is not None:
+            self._footer_layout.addWidget(feedback)
+        self._footer_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignRight)
+        self.outer.addWidget(footer)
+
+    def resizeEvent(self, event):
+        """卡片宽度不足时将底部说明和操作按钮改为纵向排列。"""
+        super().resizeEvent(event)
+        if self._footer_layout is not None:
+            self._footer_layout.setDirection(
+                QBoxLayout.Direction.TopToBottom if self.width() < 540 else QBoxLayout.Direction.LeftToRight
+            )
+
+
+class CacheSplit(QWidget):
+    """用量与控件共用响应式排列边界。"""
+
+    def __init__(self, summary: QWidget, controls: QWidget):
+        """将缓存用量摘要与额度控制组成可响应宽度变化的分栏容器。"""
+        super().__init__()
+        self.summary = summary
+        self.controls = controls
+        self.setProperty("settingsPlain", True)
+        controls.setMaximumWidth(710)
+        self._layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, self)
+        self._layout.setContentsMargins(20, 14, 20, 14)
+        self._layout.setSpacing(22)
+        self._layout.addWidget(summary)
+        self._layout.addWidget(controls, 1)
+        self._layout.addStretch(0)
+        self._stacked = False
+        self.retheme()
+
+    def retheme(self):
+        """按当前横向或纵向排列，为摘要区更新右侧或底部主题分隔线。"""
+        edge = "bottom" if self._stacked else "right"
+        self.summary.setObjectName("settingsUsagePane")
+        self.summary.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.summary.setStyleSheet(
+            f"#settingsUsagePane {{ background: transparent; border: none; border-{edge}: 1px solid {stroke()}; }}"
+        )
+
+    def resizeEvent(self, event):
+        """窄窗口中将摘要与控制区上下排列，宽窗口中按尺寸分配摘要栏宽度和边距。"""
+        super().resizeEvent(event)
+        stacked = self.width() < 540
+        self._layout.setDirection(QBoxLayout.Direction.TopToBottom if stacked else QBoxLayout.Direction.LeftToRight)
+        if stacked:
+            self.summary.setMinimumWidth(0)
+            self.summary.setMaximumWidth(16777215)
+            self.summary.layout().setContentsMargins(0, 0, 0, 14)
+        else:
+            self.summary.setFixedWidth(170 if self.width() < 780 else 205)
+            self.summary.layout().setContentsMargins(0, 0, 20, 0)
+        if stacked != self._stacked:
+            self._stacked = stacked
+            self.retheme()
+
+
+class ChoiceSegments(QWidget):
+    """基于已有下拉模型提供分段选择控件。"""
+
+    def __init__(self, combo: QComboBox, labels: list[str] | None = None):
+        """将组合框选项映射为互斥分段按钮，保留隐藏组合框作为状态与信号来源。"""
+        super().__init__()
+        self.setObjectName("settingsSegments")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.combo = combo
+        combo.setParent(self)
+        combo.hide()
+        self.buttons = []
+        self._group = QButtonGroup(self)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(3, 3, 3, 3)
+        layout.setSpacing(2)
+        for index in range(combo.count()):
+            button = QPushButton(labels[index] if labels else combo.itemText(index))
+            button.setObjectName("settingsSegment")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked, i=index: combo.setCurrentIndex(i))
+            self._group.addButton(button, index)
+            self.buttons.append(button)
+            layout.addWidget(button)
+        combo.currentIndexChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self, *_args):
+        """将分段按钮的选中状态同步到组合框当前索引。"""
+        for index, button in enumerate(self.buttons):
+            button.setChecked(index == self.combo.currentIndex())
+
+    def showEvent(self, event):
+        """显示分段选择器前同步可能在隐藏期间变化的组合框状态。"""
+        self.refresh()
+        super().showEvent(event)
+
+
+class _ThemePreview(QWidget):
+    """绘制浅色、深色或左右组合的系统主题缩略预览。"""
+
+    def __init__(self, mode: str):
+        """记录预览主题模式，设置固定高度并让鼠标事件传递给选择按钮。"""
+        super().__init__()
+        self.mode = mode
+        self.setFixedHeight(65)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+
+    def paintEvent(self, _event):
+        """绘制模拟侧栏和内容卡片的主题缩略图，跟随系统模式以左右两半展示明暗外观。"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        modes = ("light", "dark") if self.mode == "system" else (self.mode,)
+        for index, mode in enumerate(modes):
+            painter.save()
+            if len(modes) == 2:
+                painter.setClipRect(index * self.width() // 2, 0, self.width() // 2 + 1, self.height())
+
+            def c(key):
+                """读取当前预览主题中的设置颜色并转换为 QColor。"""
+                return QColor(theme.color(f"settings.{key}", mode))
+
+            painter.setPen(QPen(c("line"), 1))
+            painter.setBrush(c("canvas"))
+            painter.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1, self.height() - 1), 4, 4)
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(c("control"))
+            painter.drawRoundedRect(QRectF(7, 7, 21, 51), 2, 2)
+            painter.setBrush(c("surface"))
+            painter.drawRoundedRect(QRectF(35, 7, self.width() - 42, 18), 2, 2)
+            painter.drawRoundedRect(QRectF(35, 32, self.width() - 42, 18), 2, 2)
+            painter.restore()
+
+
+class ThemeChoices(QWidget):
+    """以带缩略预览的互斥按钮呈现主题组合框选项。"""
+
+    def __init__(self, combo: QComboBox):
+        """创建浅色、深色与跟随系统预览按钮，并将选择双向同步到隐藏组合框。"""
+        super().__init__()
+        self.setObjectName("settingsThemeChoices")
+        self.setProperty("settingsPlain", True)
+        self.combo = combo
+        combo.setParent(self)
+        combo.hide()
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(10)
+        self.buttons = {}
+        self._group = QButtonGroup(self)
+        for mode, title in (("light", tr("浅色")), ("dark", tr("深色")), ("system", tr("跟随系统"))):
+            button = QPushButton()
+            button.setAccessibleName(title)
+            button.setObjectName("settingsThemeChoice")
+            button.setCheckable(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setFixedWidth(135)
+            button.setMinimumHeight(104)
+            body = QVBoxLayout(button)
+            body.setContentsMargins(7, 7, 7, 8)
+            body.setSpacing(7)
+            body.addWidget(_ThemePreview(mode))
+            text = text_label(title, "smallHelp")
+            text.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            body.addWidget(text)
+            self._group.addButton(button)
+            self.buttons[mode] = button
+            button.clicked.connect(lambda _checked, value=mode: combo.setCurrentIndex(combo.findData(value)))
+            layout.addWidget(button)
+        layout.addStretch(1)
+        combo.currentIndexChanged.connect(self.refresh)
+        self.refresh()
+
+    def refresh(self, *_args):
+        """按组合框当前主题键刷新三个预览按钮的选中状态。"""
+        for mode, button in self.buttons.items():
+            button.setChecked(mode == self.combo.currentData())
+
+    def showEvent(self, event):
+        """主题选择器显示时重新同步组合框状态。"""
+        self.refresh()
+        super().showEvent(event)
