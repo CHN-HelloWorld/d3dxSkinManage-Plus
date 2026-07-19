@@ -191,3 +191,29 @@ Migration rejects unsafe situations such as nested source and destination folder
 
 Clearing **3DMigoto** also warns that variant state tracking will be affected. The deployment path and loader path are separate fields; clearing either is not a substitute for disabling Mods.
 
+### 2.6 Deleting a game deletes its data
+
+**Deleting a game permanently deletes that game and its data.** The Recycle Bin option under **Mod management → Deletion method** does not apply.
+
+Choose **Delete** in the details panel or context menu. The application scans the resources involved and shows the deletion scope. You can cancel during the scan. Before confirmation, it shows the full resource path and counts of Mods, categories, presets, and deployment copies.
+
+![Confirming the scope of game deletion](../images/guide-en/20-删除游戏.webp)
+
+Deletion includes:
+
+- The entire game resource folder and its contents, including the Mod library and other files added manually.
+- The game's managed deployment data.
+- The game's configuration, Mod presets, key or variant preferences, and update records.
+
+Export or back up anything you want to keep to a location outside the deletion scope first. If you delete the current game, its activation state is also cleared.
+
+If some files are in use, **Game data cleanup results** lists the full paths that could not be cleaned up. Keep this report, release the files, and address the remaining items according to the report. A game card disappearing does not mean that every file has been removed.
+
+### 2.7 Search, views, and ordering
+
+The Games page supports searching by name and switching between card and list views. In card view, you can adjust card size and drag games to reorder them. If search filtering is active, clear it before reordering the complete list.
+
+The default `Ctrl+1` returns to the Games page; the default `Ctrl+F` focuses the current page's search box. If launch paths are missing, fill them in and save before using the navigation buttons or `F6` and `F7`.
+
+---
+
