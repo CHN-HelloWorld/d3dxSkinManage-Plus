@@ -59,3 +59,44 @@ On the **Games** page:
 
 You still need to activate a game after adding it. If you have unsaved configuration changes or a deployment task is running when you switch, handle the corresponding prompt first.
 
+### 1.4 Task center and progress
+
+Imports, folder discovery, and library refreshes appear in the task center at the bottom-right. Expand it to see individual item states, completion counts, and reasons for failures.
+
+Imports started inside the application support pausing, resuming, and stopping. When stopping, you may see choices such as **Keep imported Mods**, **Cancel all imports**, and **Resume import**:
+
+| Choice | Result |
+| --- | --- |
+| Keep completed items | Successfully imported items remain in the library; unfinished items stop |
+| Cancel all | Attempts to roll back the completed imports from this operation; check the report for any recovery failures |
+| Resume | Returns to the current task |
+
+Tasks that add automatically discovered files to the library do not offer exactly the same controls as manual imports. Use the buttons available in the current task popup. A stop request may need to wait until the current file operation reaches a safe stopping point.
+
+Export, batch deletion, Mod preset switching, and updates each have their own progress interface. Wait for tasks to finish before moving the affected folders to avoid overlapping operations on the same files.
+
+Brief notifications also appear in the top-right, for example when a theme is applied or a variant is saved. To look up a specific error later, open **Tools → View Logs**.
+
+### 1.5 Common shortcuts
+
+Manager shortcuts are handled only within the application window; they are not system-wide hotkeys. Change them in **Settings → Shortcuts → Key bindings**.
+
+| Default key | Action |
+| --- | --- |
+| `Ctrl+I` | Import into the current category |
+| `F5` | Refresh the current game's Mod library |
+| `Ctrl+F` | Focus the current page's search box, if the page supports search |
+| `Ctrl+K` | Open Settings and search all settings |
+| `Ctrl+,` | Open Settings |
+| `Ctrl+1` / `Ctrl+2` / `Ctrl+3` / `Ctrl+4` | Games / Category Overview / Gallery / Online Mods |
+| `Alt+Left` | Go to the parent category, or close Online Mods details |
+| `Ctrl+Shift+N` | Create a category at the current level |
+| `F2` | Edit the single selected item in the overview |
+| `Space` | Enable or disable the single selected Mod in the overview |
+| `Ctrl+Shift+E` | Export the selected items in the overview |
+| `F6` / `F7` | Launch the Mod loader / game |
+
+Lists and text fields also support copying, cutting, pasting, selecting all, deleting, and other actions. See Appendix A for the complete table. Text fields, input methods, key recording, and modal dialogs handle their own input first; pressing Space in a text field does not toggle a Mod.
+
+`Esc` handles context-specific actions such as ending key recording, closing some popups, or canceling a cut operation in the overview. 3DMigoto's in-game F10 reload key is configured by the loader, not in the manager's shortcuts.
+
