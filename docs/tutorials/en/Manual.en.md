@@ -100,3 +100,23 @@ Lists and text fields also support copying, cutting, pasting, selecting all, del
 
 `Esc` handles context-specific actions such as ending key recording, closing some popups, or canceling a cut operation in the overview. 3DMigoto's in-game F10 reload key is configured by the loader, not in the manager's shortcuts.
 
+### 1.6 Navigating Settings
+
+The Settings page has six sections across the top, each with its own subnavigation on the left. This tutorial gives complete paths such as **Settings → General → Images and cache**.
+
+![Settings and section navigation](../images/guide-en/11-设置常规.webp)
+
+*Use the top row to switch sections and the left side to switch subpages. The search box in the top-right can take you directly to a setting.*
+
+Type a term such as “cache,” “proxy,” “variant,” or a command name in the Settings search box, then click a result to jump to it. Shortcut commands and registered plugin commands also appear in Settings search.
+
+Settings usually save immediately. Text inputs such as proxy addresses are submitted when editing finishes; some sliders preview changes while dragging and save when released. Game configuration still requires clicking **Save**, so keep that distinction in mind.
+
+### 1.7 Theme, language, and background
+
+Open **Settings → Personalization → Appearance** to choose Dark, Light, or Follow System. **Follow System uses the Windows app theme.** The same page lets you choose a font and language and refresh the list of language packs.
+
+**Personalization → Window background** supports Off, Image, Video, and WE scenes. Videos and scenes have options such as frame rate and playback controls; WE scenes require Wallpaper Engine installed locally. See Chapter 6 for full configuration details.
+
+---
+
