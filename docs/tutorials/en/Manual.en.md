@@ -217,3 +217,5 @@ The default `Ctrl+1` returns to the Games page; the default `Ctrl+F` focuses the
 
 ---
 
+## Chapter 3: Category Overview and Mod management
+
