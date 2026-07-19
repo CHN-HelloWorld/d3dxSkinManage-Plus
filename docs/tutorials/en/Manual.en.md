@@ -140,3 +140,28 @@ If **English name** is blank, the resource folder name falls back to **Game name
 
 The preview area lets you click, drop, or replace a single game image. Preview changes for an already saved game are persisted separately. If writing fails, a message appears and the change remains unsaved. Other fields require **Save**.
 
+### 2.2 Library and deployment folder
+
+| Location | What it stores | Common example |
+| --- | --- | --- |
+| Game resource folder | The current game's Mod library, preview cache, and runtime preferences | `<data root>/data/Sample Game/` |
+| Library root | Category folders and complete Mod containers | `mods/` inside the folder above |
+| **Mod folder** | Enabled copies, parked copies, and management markers read by the loader | `D:/ModLoader/Mods/` |
+| **3DMigoto** | Loader program, main configuration, and user configuration | `D:/ModLoader/` |
+
+Importing adds a Mod to the library; enabling publishes its contents to the deployment folder. Do not use the library itself as the deployment folder, or treat the game's installation root as a dedicated Mod folder.
+
+The application does not automatically derive the deployment folder from the loader path. Check `d3dx.ini`, then enter **Mod folder** explicitly.
+
+The data root is normally the application's folder. If the release folder is not writable, a Windows user data folder may be used instead. Confirm the actual location before backing up; see Chapter 8.
+
+### 2.3 Activating and switching games
+
+![An active game](../images/guide-en/02-游戏配置.webp)
+
+Click once to view the configuration; double-click to activate. The active game's card shows **Current**. You can also click **Activate this game environment** in the details panel.
+
+After activation, the overview, gallery, and Online Mods switch to that game and use its loader and deployment paths. Each game has its own categories, Mods, and Mod presets.
+
+Double-click the current game again to deactivate it. The application only restores a valid previously active game; it does not automatically activate the first newly added game.
+
