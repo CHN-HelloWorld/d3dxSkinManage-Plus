@@ -358,3 +358,34 @@ There are three kinds of tag operations:
 
 You can reuse tags, choose preset colors, or enter custom colors. Click tag chips to filter by them. Deleting an entire shared tag is different from removing one tag from the current Mod.
 
+### 3.9 Search, tag filters, and sorting
+
+The search box searches names, authors, and tags. With a search term entered, it finds matches throughout the current category's subtree. Clearing the search returns to browsing the current level.
+
+Click **Tags** to expand the tags used in the current game. Two combination modes are available:
+
+| Mode | Example: selecting both `配色` (Color scheme) and `日常` (Everyday) |
+| --- | --- |
+| **Match all** | Shows only Mods with both tags |
+| **Match any** | Matches Mods with either tag |
+
+Selected conditions appear as chips. Remove them individually, or click **Clear** to clear only the tags. Tag filtering is temporarily unavailable when the type filter is set to categories or characters/objects; switch back to all types or Mods to use it again.
+
+Search text, type, age rating, and tags can all affect results at the same time. If there are no results, check the conditions before rebuilding the index.
+
+Sorting supports name, import time, author, age rating, enabled state, and other criteria. Chinese names are sorted by pinyin.
+
+The NSFW dropdown controls whether local X-rated preview images are shown normally, hidden, or blurred. It does not automatically delete or disable Mods. The local overview and gallery share this display preference; the online page has its own NSFW policy.
+
+### 3.10 Adding, removing, and deleting preview images
+
+Drag in an image, click **Add preview image**, or paste an image from the clipboard into a supported preview area. Mods support multiple images; categories and games each use a single cover image.
+
+Use the arrows to browse multiple images. Changing the displayed image affects the card preview. The image viewer supports zooming in and out and dragging to pan; follow the window's hints for its controls.
+
+- **Remove / do not use**: removes the reference and keeps the corresponding file.
+- **Delete**: deletes the corresponding image file. The relevant interface explains the scope before the operation.
+- **Delete all preview images**: affects multiple images for this Mod. Check the target before confirming.
+
+Manually added Mod previews are normally copied into the container's `.d3dxmeta/previews/`. Previews inside the archive may be extracted to the cache. When backing up a Mod, keep the complete container, not just cached images.
+
