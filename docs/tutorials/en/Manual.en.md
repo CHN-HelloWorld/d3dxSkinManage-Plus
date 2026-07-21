@@ -320,3 +320,41 @@ If another Mod is already enabled under a character/object, the application asks
 
 Related write operations may be temporarily unavailable during deployment, preset switching, or file recovery. Let the current task finish before continuing, rather than repeatedly clicking Enable or Delete.
 
+### 3.7 Details panel: information, keys, and variants
+
+![Mod details](../images/guide-en/04-Mod信息.webp)
+
+*The example Mod uses a geometric placeholder cover. Separate details tabs appear beneath it.*
+
+| Tab | Contents |
+| --- | --- |
+| **Information** | Available information such as author, version, age rating, tags, description, source, and path |
+| **Keys: N** | Bindings detected in INI files, grouped by file; record a key or enter it manually |
+| **Variants: N** | The Mod's default configuration and saved named appearances, with controls to switch and manage them |
+
+If there are no keys or variants, the corresponding empty state appears. This does not mean the Mod is unusable. The variant count reflects saved named configurations, and support also depends on whether the Mod declares variables that can be saved.
+
+Selecting a category shows category information and actions. Selecting multiple items shows the selection count instead of combining fields from several Mods for editing.
+
+### 3.8 Editing Mods and tags
+
+Select a single Mod and click **Edit**, or use the default `F2`.
+
+![Edit Mod](../images/guide-en/09-编辑Mod.webp)
+
+You can edit the display name, author, version, source URL, description, age rating, and tags. Expand **File Info** to see the path, SHA-1, and import time, and to copy the path or hash.
+
+**Also rename the Mod file or folder** controls whether the name on disk changes too. If unchecked, only the display name changes. If checked, the application handles name conflicts and related paths; check the result after saving.
+
+**Click Save changes to commit the information and tag edits from this session.** The dialog also supports `Ctrl+Enter` to save. If you close it with changes, you can choose to continue editing or discard them.
+
+There are three kinds of tag operations:
+
+| Operation | Effect |
+| --- | --- |
+| Add or remove tags on the current Mod | Changes the association between the current Mod and those tags |
+| Edit a shared tag's name or color | After saving, every Mod referencing that tag in the same game displays the change |
+| Delete a tag and all its references | Removes it from the current game's tag library and all Mods referencing it; after confirmation, the change still needs to be saved through the main edit dialog |
+
+You can reuse tags, choose preset colors, or enter custom colors. Click tag chips to filter by them. Deleting an entire shared tag is different from removing one tag from the current Mod.
+
