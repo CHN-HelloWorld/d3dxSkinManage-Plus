@@ -389,3 +389,30 @@ Use the arrows to browse multiple images. Changing the displayed image affects t
 
 Manually added Mod previews are normally copied into the container's `.d3dxmeta/previews/`. Previews inside the archive may be extracted to the cache. When backing up a Mod, keep the complete container, not just cached images.
 
+### 3.11 Moving items and selecting in bulk
+
+| Action | Default method |
+| --- | --- |
+| Add to / remove from selection | `Ctrl` + click |
+| Select a range | `Shift` + click |
+| Select the entire current list | `Ctrl+A` |
+| Cut selected items | `Ctrl+X` |
+| Move to the target category | Enter the target category, then press `Ctrl+V` |
+| Cancel cutting | `Esc` |
+| Delete | `Delete` or the context menu |
+| Export | `Ctrl+Shift+E` or **Export** in the context menu |
+
+Cut items are marked in orange while awaiting a move. Pasting at the original level does not move them, and you cannot paste a parent category into its own subtree. The edit dialog has no category field for moving an item; use the move operations above to change its category.
+
+### 3.12 Deletion and the Recycle Bin
+
+Disabling only withdraws the copy used by the game; the Mod remains in the library. Deleting handles the source container and its associated deployment data.
+
+**Settings → General → Mod management → Deletion method** offers **Recycle Bin (recoverable)** and **Permanent deletion (unrecoverable)**. Permanent deletion is the default. This setting applies to deleting individual Mods or Mods in bulk. **Category deletion and game deletion do not use this Recycle Bin setting.**
+
+Deleting a category affects its subcategories and Mods. With multiple items selected, the confirmation summarizes the scope. A batch task may also ask whether to keep enabled Mods.
+
+If the system Recycle Bin does not support the current location or path, the application asks again whether to delete permanently instead. If you decline, check the interface for which items remain unfinished; do not assume they reached the Recycle Bin.
+
+When files are in use or a disk is offline, deletion may retain cleanup records and retry. Release the files or reconnect the disk, then check the result. Canceling a batch task stops only subsequent processing; it cannot restore files already deleted permanently.
+
