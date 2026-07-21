@@ -289,3 +289,34 @@ Distinguish between not using a preview and deleting it: the former only deselec
 
 After clicking **Confirm Import**, use the task center at the bottom-right to check progress, duplicates, and failures. Importing normally preserves the source files. When files are discovered directly inside the library, however, adding them to management may organize them in place; these are not identical copying workflows.
 
+### 3.5 Placing files directly in the library
+
+You can also use File Explorer to place archives or folders awaiting organization into an existing category folder, such as `外观` (Appearance):
+
+```text
+<data root>/data/Sample Game/mods/外观/
+```
+
+Folder monitoring, entering the relevant category, switching games, and manual refreshes discover changes that need processing. The default `F5` requests a refresh of the current game's library, with progress in the task center. Large folders and archives that are still being written may take time.
+
+Discovered content is identified, verified, and brought under management to form complete Mod containers. The application reports duplicates, invalid containers, files in use, and interrupted items. If leftover items are found, inspect the original files first, then choose an available action such as keeping them, moving them to the Recycle Bin, or deleting them.
+
+**Do not edit or remove a container's identity marker.** The application uses these markers to identify Mods and checks the related files. Keep each container complete; see Chapter 4.
+
+### 3.6 Enabling, disabling, and conflicts
+
+Any of these actions can toggle a single Mod:
+
+- Double-click its card or list row.
+- Click **Enable** / **Disable** in the details panel on the right.
+- Choose **Enable** / **Disable** from its context menu.
+- Select a single Mod in the overview list and press the default `Space`.
+
+After a Mod is enabled successfully, its status changes and the card shows a green marker. The first activation may require extraction; wait for that item's progress to finish. A parked copy that meets the requirements can be restored more quickly when enabled again.
+
+If another Mod is already enabled under a character/object, the application asks whether to disable the conflicting item and enable the new one. If you choose not to be prompted again, similar conflicts will follow that preference.
+
+**Disable All** applies to the current folder and its subfolders. At the root level, it covers the current game. An active search does not mean that only search results will be disabled; read the confirmation carefully.
+
+Related write operations may be temporarily unavailable during deployment, preset switching, or file recovery. Let the current task finish before continuing, rather than repeatedly clicking Enable or Delete.
+
