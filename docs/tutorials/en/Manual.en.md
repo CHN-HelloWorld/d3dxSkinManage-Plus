@@ -456,3 +456,34 @@ Return to **Category Overview** for categories, tags, sorting, editing, or batch
 
 Create categories and import Mods first, then save frequently used combinations as Mod presets. If one Mod has several internal appearances, also save named variants for your presets to reference.
 
+### 4.2 Mod containers and stable identity
+
+Each Mod in the library has a complete container folder. This example uses the `外观` (Appearance) category and `示例 Mod A` (Sample Mod A):
+
+```text
+<data root>/data/Sample Game/mods/外观/示例 Mod A/
+├── .d3dxmod
+├── 示例 Mod A.zip
+└── .d3dxmeta/
+    ├── info.json
+    ├── previews/
+    ├── ini_overrides/
+    └── variants/
+        └── <variant_id>.json
+```
+
+| Content | Purpose |
+| --- | --- |
+| `.d3dxmod` | Records the stable `mod_id`, resource location, and content verification information |
+| ZIP / 7z / RAR archive | The original resource archive |
+| `info.json` | Metadata such as name, author, tags, age rating, and source |
+| `previews/` | Manually added preview images |
+| `ini_overrides/` | Editable INI overrides |
+| `variants/` | Separately saved named variants |
+
+**A stable `mod_id` identifies the Mod; content hashes are used for verification.** Two folders sharing a name are not necessarily the same Mod, and external changes are not trusted based on filenames alone.
+
+When backing up or moving a Mod out of the library, copy the entire container. Taking only the resource archive leaves behind its accompanying metadata, key changes, and named variants.
+
+Prefer renaming, moving, and exporting through the application. After manually moving a complete container, refresh and check its category. Do not delete markers, forge identities, or replace only the archive to “fix” a verification failure.
+
