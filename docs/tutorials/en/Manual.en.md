@@ -518,3 +518,34 @@ Disabling first captures the required runtime configuration and synchronizes the
 
 Do not enable a parked copy by renaming its prefix in File Explorer. Use Enable or Apply Preset in the application so that the actual files remain consistent with the records.
 
+### 4.5 Deployment folder and external changes
+
+**Mod folder** must match the location read by the loader. It is configured separately from **3DMigoto**; actual Mod deployment is unavailable if it is not set.
+
+The application monitors managed source files and deployment folders for changes. If a deployment folder is moved externally, a source container changes, a disk goes offline, or identity markers conflict, address the report in the interface before resuming operations.
+
+Use the migration workflow on the Games page to change the deployment location. If the application reports changed files, uncertain ownership, or unfinished recovery, do not delete the database, transaction records, or markers to force it to continue. They may contain information needed for rollback and recovery.
+
+### 4.6 Creating and using Mod presets
+
+Click the current preset name in the overview toolbar to open the preset list:
+
+![Mod preset management](../images/guide-en/08-组合预设.webp)
+
+*Click once to select a preset for management. Only **Apply** on the right switches the setup. The preset in use has a status marker.*
+
+| Action | How to use it |
+| --- | --- |
+| Create | Click **New Preset** to create an empty setup, then name it |
+| Apply | Click **Apply** on the target row and wait for deployment to finish |
+| Rename | Select a preset and click **Rename**, or double-click its name |
+| Copy | Select a preset and click **Copy**, or use the default `Ctrl+C` and `Ctrl+V` |
+| Select multiple | Use `Ctrl` to add selections or `Shift` to select a range; you can also select all within the list |
+| Delete | Select presets and click **Delete**, then confirm the scope |
+
+Each game has its own default preset, which is retained and cannot be deleted. When deleting a user preset that is currently in use, the application switches to the default preset before completing deletion. Check the dialog and task results.
+
+**A new preset starts empty.** To keep an existing setup and make small changes, copy that preset before applying it. Applying an empty preset means that Mods from other presets will no longer be enabled.
+
+The current preset updates its selections as you enable or disable Mods. When you save or switch a named variant for an individual Mod, the current preset also records the selected variant reference.
+
