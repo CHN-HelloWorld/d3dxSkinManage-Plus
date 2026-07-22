@@ -626,3 +626,15 @@ Multiple presets can reference the same named variant. Copying a preset preserve
 
 After restoring a variant, reload through the loader if the game is running. A successful save in the application means the configuration has been written; it does not mean the running game has already refreshed its appearance.
 
+### 4.11 Sharing variants with others
+
+Named configurations are stored in the Mod container's `.d3dxmeta/variants/`. For sharing, use **Export** with **Include metadata and previews** enabled. You can also back up the entire container.
+
+Import checks the variant format and whether its variables can be matched to the Mod. Mismatched content, duplicate identities, damaged files, and similar issues may be rejected. You cannot apply an arbitrary variant JSON from another Mod directly.
+
+A game's private working state records serve a different purpose from named variants. For a full backup on your machine, retain `config/`, `data/`, and external resources. An export package is sufficient for sharing a single Mod.
+
+---
+
+## Chapter 5: Online mods and updates
+
