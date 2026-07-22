@@ -487,3 +487,34 @@ When backing up or moving a Mod out of the library, copy the entire container. T
 
 Prefer renaming, moving, and exporting through the application. After manually moving a complete container, refresh and check its category. Do not delete markers, forge identities, or replace only the archive to “fix” a verification failure.
 
+### 4.3 Library formats and import rules
+
+Resources are kept in the library as ZIP, 7z, or RAR archives. Importing a folder compresses it into the format selected under **Mod import format**.
+
+When importing an existing archive:
+
+| **Always use the import format** | Behavior |
+| --- | --- |
+| Off | Keeps the incoming archive's original format to reduce repeated compression |
+| On | Extracts archives in other formats and repackages them in the selected format |
+
+Support for reading ZIP, 7z, and RAR is included with the application. **Creating RAR archives requires WinRAR's compression tool.** Without it, the relevant output options are unavailable. Importing an existing RAR archive and saving resources as a new RAR archive are different operations.
+
+Deployment always uses extracted copies. Progress that does not change continuously does not necessarily mean a task has stalled; archive format, file count, and disk performance all affect the processing stages.
+
+### 4.4 Enabling, parking, and disabling
+
+Enabling first checks the source container, metadata, deployment location, and operations in progress. It then prepares resources, applies the effective INI content and configuration, and publishes the finished copy to the deployment folder.
+
+Temporary preparation folders may start with `DISABLED_` and include `.partial`. They are not exposed to the loader as normal enabled copies before completion. After a failure, cancellation, or unexpected application exit, recovery may still need to process these folders.
+
+Disabling first captures the required runtime configuration and synchronizes the INI, then removes the copy currently used by the game:
+
+- A deployment still referenced by other Mod presets may be parked as `DISABLED_...` for faster restoration next time.
+- Copies that no longer need to be retained may be cleaned up.
+- The source container remains in the library.
+
+3DMigoto normally excludes parked folders using `exclude_recursive = DISABLED*`. If you changed the loader configuration yourself, make sure these folders are still excluded.
+
+Do not enable a parked copy by renaming its prefix in File Explorer. Use Enable or Apply Preset in the application so that the actual files remain consistent with the records.
+
