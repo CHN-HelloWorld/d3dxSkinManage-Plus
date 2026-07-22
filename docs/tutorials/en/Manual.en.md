@@ -549,3 +549,38 @@ Each game has its own default preset, which is retained and cannot be deleted. W
 
 The current preset updates its selections as you enable or disable Mods. When you save or switch a named variant for an individual Mod, the current preset also records the selected variant reference.
 
+### 4.7 How switching presets affects files
+
+Switching is based on the differences between the two presets:
+
+| Difference | Handling |
+| --- | --- |
+| A Mod is no longer used by the target preset | Parks or removes its deployment |
+| The target needs a Mod with a usable parked copy | Verifies and restores the copy |
+| The target needs a Mod with no usable copy | Extracts and deploys it for the first time |
+| Both presets use the same Mod | Keeps reusable deployment files and handles configuration according to the target preset |
+| The same Mod references different variants | Applies the target variant's configuration; INI and user configuration files may still be written |
+
+Sharing a Mod therefore does not guarantee that no file operations will occur. It also depends on the variants, overrides, and whether the deployment is still valid.
+
+Switching shows progress and a cancel action, while restricting conflicting operations such as enabling/disabling, deletion, and switching games. Cancellation or failure attempts to roll back completed steps; unfinished rollbacks retain records for recovery. Wait for the task to finish handling its result before modifying resources again.
+
+### 4.8 Editing a Mod's in-game keys
+
+Select the Mod and open the **Keys** tab in the details panel:
+
+![INI key bindings](../images/guide-en/06-按键设置.webp)
+
+Keys are grouped by INI file. Some bindings provide both a forward and a backward key. Names come from the Mod's own section definitions.
+
+There are two editing methods:
+
+- Click a key field and press the key or Ctrl / Alt / Shift combination you want to use. `Esc` cancels recording.
+- Open **Manual input** and enter 3DMigoto key tokens as instructed. Special keys and controller tokens depend on loader support.
+
+**Key changes save directly; no additional overall Save button is needed.** Changes are written to the container's INI override layer. For an enabled Mod, they are also synchronized to its deployed copy. If the game is running, reload as required by the loader for the changes to take effect.
+
+An option to open the source INI appears where supported. If saving is rejected because the file changed externally, reselect the Mod, check the latest contents, and then edit again.
+
+These settings change the Mod's in-game keys. **Settings → Shortcuts** changes the manager's controls; the two are saved separately.
+
