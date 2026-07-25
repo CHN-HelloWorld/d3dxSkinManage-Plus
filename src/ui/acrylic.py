@@ -424,3 +424,181 @@ class _DialogAcrylicSurface(QObject):
         self._effect_theme = theme.current_theme()
         self._animate = animate
         dialog.installEventFilter(self)
+
+    def eventFilter(self, obj, event):
+        """随绘制、主题、显示和句柄变化更新对话框材质，并维护动画状态。"""
+        et = event.type()
+        if et == QEvent.Type.Paint:
+            self._paint_surface(obj)
+        elif et == QEvent.Type.WinIdChange:
+            self._effects_applied = False
+        elif et in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
+            current = theme.current_theme()
+            if self._effect_theme != current:
+                self._effect_theme = current
+                self._effects_applied = False
+                if obj.isVisible():
+                    self._apply_window_effects(obj)
+                    self._effects_applied = True
+                obj.update()
+        elif et == QEvent.Type.Show:
+            # 复位关窗动画标志：支持同一对话框实例被多次 exec（重开后仍可关）。
+            obj.setProperty("_acrylic_closing", False)
+            obj.setProperty("_acrylic_done", False)
+            if not self._effects_applied:
+                self._effects_applied = True
+                self._apply_window_effects(obj)
+            if self._animate and not event.spontaneous():
+                self._play_entrance(obj)
+        return False
+
+    def _apply_window_effects(self, dialog: QWidget) -> None:
+        """根据圆角尺寸应用对话框原生模糊效果。"""
+        _apply_window_acrylic_effects(dialog, small=(self._radius <= 6))
+
+    def _play_entrance(self, dialog: QWidget) -> None:
+        """通过几何位移显示对话框，保留原生模糊背景。
+
+        窗口透明度动画会启用统一透明度分层，影响 ACCENT 合成。
+        位移动画在首帧前设置起始几何，避免窗口先显示在终点再发生跳变。
+        """
+        try:
+            from src.ui import anim
+
+            dialog._dialog_resting_geometry = dialog.geometry()
+            anim.slide_in(dialog, dy=16, duration=150)
+        except Exception:
+            pass
+
+    def _paint_surface(self, dialog):
+        """以源覆盖模式绘制圆角叠色和细边框，保留对话框外侧透明区域。"""
+        try:
+            p = QPainter(dialog)
+            p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            # 重叠透明子控件可能请求多次父背景绘制，直接替换像素以避免底色累积。
+            p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
+            rect = QRectF(dialog.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+            path = QPainterPath()
+            path.addRoundedRect(rect, float(self._radius), float(self._radius))
+            # 每次重绘读当前主题色，自然跟随明暗切换。
+            tint = QColor(theme.color("bg.layer"))
+            tint.setAlphaF(acrylic_surface_alpha(self._alpha))
+            p.fillPath(path, tint)
+            pen = QPen(QColor(theme.color("stroke.card")))
+            pen.setWidthF(1.0)
+            p.setPen(pen)
+            p.drawPath(path)
+            p.end()
+        except Exception:
+            pass
+
+
+def apply_dialog_acrylic(
+    dialog: QWidget, *, small: bool = False, tint_alpha: float = 0.5, animate: bool = True
+) -> None:
+    """在首次显示前为顶层对话框准备半透明背景及系统模糊。
+
+    重复调用复用已有设置。small 控制圆角尺寸，tint_alpha 控制背景不透明度。
+    """
+    if dialog.property(_DIALOG_MARK):
+        return
+    dialog.setProperty(_DIALOG_MARK, True)
+    try:
+        # 透明属性须在原生窗口创建前设置。
+        dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
+    except Exception:
+        return
+    # 禁用 windowOpacity 入场淡入：它会启用统一 alpha 分层（LWA_ALPHA），
+    # 使 DWM 的 ACCENT 模糊背景在淡入期间无法合成。
+    _disable_window_opacity_fade(dialog)
+    # 构造结束时预留标题栏，再创建原生窗口，避免可见分层窗口重新调整尺寸。
+    from PySide6.QtWidgets import QDialog
+
+    if isinstance(dialog, QDialog) and not dialog.property("customDialogFrame"):
+        from src.ui.dialog_chrome import decorate_dialog
+
+        decorate_dialog(dialog)
+    radius_px = theme.radius("control") if small else theme.radius("card")
+    # 绘制控制器 parent 到对话框，随窗口销毁，不增加遮挡内容的子控件。
+    surface = _DialogAcrylicSurface(dialog, radius_px, tint_alpha, animate)
+    dialog.update()
+    # 显示前创建原生窗口并施加 ACCENT 效果，使 DWM 能在首帧合成磨砂。
+    # 仅在窗口句柄或主题变化时重新配置，避免首显时重复处理同一句柄。
+    try:
+        # 创建原生窗口前完成无边框属性，之后修改会销毁已准备的表面。
+        dialog.ensurePolished()
+        dialog.winId()
+        _apply_window_acrylic_effects(dialog, small=small)
+        surface._effects_applied = True
+    except Exception:
+        pass
+    # 关闭前播放位移动画，结束后完成对话框结果提交。
+    if animate:
+        _install_close_animation(dialog)
+
+
+def _install_close_animation(dialog: QWidget) -> None:
+    """统一处理对话框关闭路径，位移动画结束后调用原始 done。
+
+    确认、取消、Esc 和关闭按钮均通过 done 返回模态结果。
+    仅延迟实际关闭，不改变返回值；重复调用不会重复提交，重新显示时重置关闭状态。
+    """
+    if getattr(dialog, "_acrylic_close_wrapped", False):
+        return
+    dialog._acrylic_close_wrapped = True  # type: ignore[attr-defined]
+    orig_done = dialog.done
+
+    def _finish(r: int) -> None:
+        # 实际关闭只执行一次，避免动画完成和重复关闭同时触发。
+        """只提交一次对话框结果，并恢复静止几何；对话框重新显示时重置关闭标记。"""
+        if dialog.property("_acrylic_done"):
+            return
+        dialog.setProperty("_acrylic_done", True)
+        orig_done(r)
+        if shiboken6.isValid(dialog):
+            resting = getattr(dialog, "_dialog_resting_geometry", None)
+            if resting is not None:
+                dialog.setGeometry(resting)
+            if dialog.isVisible():
+                # 工作或确认进行中时，对话框可以拒绝关闭。
+                dialog.setProperty("_acrylic_closing", False)
+                dialog.setProperty("_acrylic_done", False)
+
+    def wrapper(r: int) -> None:
+        # 动画期间再次请求关闭时立即结束，不再安排新动画。
+        """启动退出滑动动画后提交结果，重复关闭或动画异常时直接完成关闭。"""
+        if dialog.property("_acrylic_closing"):
+            _finish(r)
+            return
+        dialog.setProperty("_acrylic_closing", True)
+        try:
+            from src.ui import anim
+
+            # 关闭时使用加速上滑，使窗口在位移结束后消失。
+            # slide_out 在动画完成或直接结束时均调用一次收尾回调。
+            anim.slide_out(dialog, dy=40, duration=110, on_finished=lambda: _finish(r))
+        except Exception:
+            _finish(r)
+
+    dialog.done = wrapper  # type: ignore[assignment]
+
+
+def _disable_window_opacity_fade(dialog: QWidget) -> None:
+    """移除一次性窗口淡入过滤器，并恢复完全不透明。
+
+    窗口透明度动画会影响亚克力合成；没有过滤器时无需处理。
+    """
+    filt = getattr(dialog, "_intro_fade_filter", None)
+    if filt is not None:
+        try:
+            dialog.removeEventFilter(filt)
+        except Exception:
+            pass
+        try:
+            del dialog._intro_fade_filter  # type: ignore[attr-defined]
+        except Exception:
+            pass
+    try:
+        dialog.setWindowOpacity(1.0)
+    except Exception:
+        pass
