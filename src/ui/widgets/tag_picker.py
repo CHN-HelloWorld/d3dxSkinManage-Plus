@@ -903,3 +903,170 @@ class TagPicker(QWidget):
         self.error_label.setText(message)
         self.error_label.setVisible(bool(message))
         self.input.setAccessibleDescription(message)
+
+    def validate(self) -> bool:
+        """检查模态交互、组词、未提交输入及草稿错误，失败时定位对应控件，全部有效才允许保存。"""
+        if self.has_active_modal:
+            return False
+        if self.is_composing:
+            self._show_error(tr("请先完成输入法组词，再保存。"))
+            return False
+        if self.input.text().strip():
+            self._show_error(tr("请先按 Enter 添加，或清空正在输入的标签。"))
+            self.show_popup()
+            self.input.setFocus()
+            return False
+        for tag_id in self._name_errors.keys() | self._hex_errors.keys():
+            if tag_id and tag_id not in self.draft.deleted_ids:
+                self.open_editor(tag_id)
+                (self.name_input if tag_id in self._name_errors else self.hex_input).setFocus()
+                return False
+        try:
+            self.draft.validate()
+        except ValueError as exc:
+            self._show_error(str(exc))
+            self.show_popup()
+            return False
+        self._show_error("")
+        return True
+
+    def show_popup(self):
+        """在控件可见且无模态交互时刷新待办候选，将浮层绑定到当前宿主并定位显示。"""
+        if not self.isVisible() or self.has_active_modal:
+            return
+        if self._candidates_dirty:
+            self._refresh_candidates(force=True)
+        owner = self.window()
+        if self.popup.parentWidget() is not owner:
+            self.popup.setParent(owner)
+        if owner is self:
+            self.popup.setWindowFlags(Qt.WindowType.Tool | Qt.WindowType.FramelessWindowHint)
+            self.popup.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        if not self._position_popup():
+            return
+        self.popup.show()
+        self.popup.raise_()
+
+    def hide_popup(self):
+        """停止焦点检查和编辑器显露定时器，隐藏浮层并取消待删除标签选择。"""
+        self._focus_check_timer.stop()
+        self._reveal_timer.stop()
+        self.popup.hide()
+        self._armed_tag_id = None
+
+    def _hide_if_focus_outside(self):
+        """仅在焦点确实离开编辑器、浮层及保留区域后收起浮层，忽略模态切换中的临时焦点。"""
+        if not self.popup.isVisible() or self.has_active_modal:
+            return
+        focused = QApplication.focusWidget()
+        # 子对话框关闭时，焦点可能暂留在已隐藏控件上；等待可见目标后再判断是否离开。
+        if focused is None or not focused.isVisible():
+            return
+        inside = (
+            focused is self or self.isAncestorOf(focused) or focused is self.popup or self.popup.isAncestorOf(focused)
+        )
+        boundary = self._popup_boundary
+        saving = boundary is not None and (focused is boundary or boundary.isAncestorOf(focused))
+        if not inside and not saving:
+            self.hide_popup()
+
+    def _position_popup(self):
+        """按屏幕、宿主、滚动视口和表单边界定位浮层并分配编辑空间，锚点不可见时返回 False。"""
+        if not self._ready or not self.isVisible():
+            return False
+        owner = self.window()
+        anchor = QRect(self._field.mapToGlobal(QPoint()), self._field.size())
+        screen = self.screen().availableGeometry().adjusted(8, 8, -8, -8)
+        if not self.popup.isWindow():
+            owner_rect = QRect(owner.mapToGlobal(QPoint()), owner.size()).adjusted(8, 8, -8, -8)
+            screen = screen.intersected(owner_rect)
+        ancestor = self.parentWidget()
+        while ancestor and ancestor is not owner:
+            if isinstance(ancestor, QScrollArea):
+                viewport = ancestor.viewport()
+                visible = QRect(viewport.mapToGlobal(QPoint()), viewport.size())
+                if not visible.intersects(anchor):
+                    self.hide_popup()
+                    return False
+            ancestor = ancestor.parentWidget()
+        bottom = screen.bottom()
+        if self._popup_boundary and self._popup_boundary.isVisible():
+            bottom = min(bottom, self._popup_boundary.mapToGlobal(QPoint()).y() - 6)
+        footer_height = self._footer.sizeHint().height() if not self._footer.isHidden() else 0
+        fixed = self._heading.parentWidget().sizeHint().height() + footer_height + 2
+        below, above = bottom - anchor.bottom() - 5, anchor.top() - screen.top() - 5
+        if self._inline_editor:
+            width = max(1, min(anchor.width(), screen.width()))
+            self.popup.setFixedWidth(width)
+            # 按锚点可用空间选择展开方向，编辑器在浮层内滚动。
+            opens_below = below >= fixed + 42 or below >= above
+            room = max(1, min(420, below if opens_below else above))
+            overlay = False
+            self._size_inline_candidates(height_limit=room - fixed)
+            height = fixed + self._candidate_scroll.height()
+        else:
+            width = min(max(412, anchor.width()), screen.width())
+            self.popup.setFixedWidth(max(180, width))
+            self._editor_container.setFixedWidth(max(1, width - 2))
+            self._editor_container.layout().activate()
+            editor_height = self._editor_container.sizeHint().height() if not self._editor_scroll.isHidden() else 0
+            required = min(420, fixed + editor_height + 84)
+            opens_below = below >= required or below >= above
+            room = below if opens_below else above
+            overlay = room < fixed + editor_height + 42
+            if overlay:
+                room = bottom - screen.top() + 1
+            room = max(80, min(420, room))
+            editor_room = min(editor_height, max(0, room - fixed - 42))
+            self._editor_scroll.setFixedHeight(editor_room)
+            rows_height = min(210, max(42, self._candidate_content.sizeHint().height()))
+            candidate_height = max(25, min(rows_height, room - fixed - editor_room))
+            self._candidate_scroll.setMinimumHeight(min(42, candidate_height))
+            self._candidate_scroll.setFixedHeight(candidate_height)
+            height = fixed + candidate_height + editor_room
+        self.popup.setFixedHeight(height)
+        left = max(screen.left(), min(anchor.left(), screen.right() - width + 1))
+        top = anchor.bottom() + 5 if opens_below and not overlay else anchor.top() - height - 5
+        top = max(screen.top(), min(top, bottom - height + 1))
+        position = QPoint(left, top)
+        self.popup.move(position if self.popup.isWindow() else owner.mapFromGlobal(position))
+        return True
+
+    def _size_inline_candidates(self, *, height_limit=None):
+        """在有界候选列表中将编辑器放在对应行下方。"""
+        self.layout().activate()
+        self._panel_layout.activate()
+        self._candidate_layout.activate()
+        self._editor_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # 按实际视口宽度计算编辑区域，避免边距造成右侧裁剪。
+        width = max(1, self._editor_scroll.viewport().width())
+        self._editor_container.setFixedWidth(width)
+        editor_layout = self._editor_container.layout()
+        editor_layout.activate()
+        editor_height = max(
+            self._editor_container.sizeHint().height(),
+            editor_layout.totalHeightForWidth(width),
+        )
+        self._editor_scroll.setFixedHeight(editor_height)
+        self._candidate_layout.activate()
+        editor_room = editor_height if not self._editor_scroll.isHidden() else 0
+        height = min(144 + editor_room, max(42, self._candidate_content.sizeHint().height()))
+        if height_limit is not None:
+            height = min(height, max(1, height_limit))
+        self._candidate_scroll.setMinimumHeight(min(42, height))
+        self._candidate_scroll.setFixedHeight(height)
+        self._panel_layout.activate()
+        self.popup.updateGeometry()
+        self.updateGeometry()
+
+    def _reveal_inline_editor(self):
+        """逐层滚动包含编辑器的滚动区域，使编辑卡片及其关联候选行可见。"""
+        if not self.isVisible() or not self.popup.isVisible():
+            return
+        ancestor = self._editor.parentWidget()
+        while ancestor is not None:
+            if isinstance(ancestor, QScrollArea):
+                ancestor.ensureWidgetVisible(self._editor, 0, 10)
+                if self._editor_anchor is not None and ancestor.isAncestorOf(self._editor_anchor):
+                    ancestor.ensureWidgetVisible(self._editor_anchor, 0, 10)
+            ancestor = ancestor.parentWidget()
