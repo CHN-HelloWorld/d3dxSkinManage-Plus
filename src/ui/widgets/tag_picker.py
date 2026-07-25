@@ -334,3 +334,145 @@ class TagPicker(QWidget):
             or self._hex_errors
             or self.is_composing
         )
+
+    @property
+    def is_composing(self):
+        """判断搜索、名称或颜色输入框是否仍在输入法组词。"""
+        return self.input.composing or self.name_input.composing or self.hex_input.composing
+
+    @property
+    def has_active_modal(self):
+        """判断标签删除确认或颜色选择窗口是否正在显示。"""
+        return bool(
+            (self.removal_dialog and self.removal_dialog.isVisible())
+            or (self._editor.color_dialog and self._editor.color_dialog.isVisible())
+        )
+
+    def set_popup_boundary(self, widget: QWidget) -> None:
+        """设置浮层下边界及焦点保留区域，避免遮挡表单底部操作。"""
+        self._popup_boundary = widget
+
+    def set_next_focus_widget(self, widget: QWidget) -> None:
+        """将浮层中的制表键导航交回原表单。"""
+        self._next_focus_widget = widget
+        self._link_tab_order()
+
+    def set_draft(self, draft: TagDraft) -> None:
+        """显示编辑窗口前配置当前标签目录。"""
+        self.hide_popup()
+        self._reveal_timer.stop()
+        for owner, name in ((self, "removal_dialog"), (self._editor, "color_dialog")):
+            dialog = getattr(owner, name, None)
+            if dialog is not None:
+                dialog.reject()
+                dialog.deleteLater()
+                setattr(owner, name, None)
+        self._draft = draft
+        self._active_tag_id = self._armed_tag_id = None
+        self._active_choice = -1
+        self._new_color = None
+        for values in (self._name_values, self._name_errors, self._hex_values, self._hex_errors):
+            values.clear()
+        self._updating = True
+        self.input.clear()
+        self._updating = False
+        self._show_error("")
+        self._refresh_chips()
+        self._refresh_candidates()
+        if self._selected_scroll is not None:
+            self._selected_scroll.verticalScrollBar().setValue(0)
+
+    def _build_popup(self):
+        """建立归宿主窗口所有的候选浮层，按配置将共用编辑器放在候选行内或独立区域。"""
+        self.popup = _TagPopup(self.window())
+        self.popup.setObjectName("tag-picker-popup")
+        self.popup.setAttribute(Qt.WidgetAttribute.WA_NoMousePropagation)
+        self.popup.hide()
+        self.popup.setMinimumWidth(0)
+        self._panel_layout = QVBoxLayout(self.popup)
+        self._panel_layout.setContentsMargins(1, 1, 1, 1)
+        self._panel_layout.setSpacing(0)
+        heading = QWidget()
+        heading.setObjectName("tag-picker-heading")
+        head_layout = QHBoxLayout(heading)
+        head_layout.setContentsMargins(12, 8, 12, 7)
+        self._heading = plain_label(tr("可用标签"))
+        self._caption = plain_label()
+        head_layout.addWidget(self._heading)
+        head_layout.addStretch()
+        head_layout.addWidget(self._caption)
+        self._panel_layout.addWidget(heading)
+        self._candidate_scroll = QScrollArea()
+        self._candidate_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._candidate_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._candidate_scroll.setWidgetResizable(True)
+        self._candidate_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._candidate_scroll.setMinimumHeight(42)
+        self._candidate_content = QWidget()
+        self._candidate_layout = QVBoxLayout(self._candidate_content)
+        self._candidate_layout.setContentsMargins(6, 0, 6, 4)
+        self._candidate_layout.setSpacing(0)
+        self._candidate_scroll.setWidget(self._candidate_content)
+        self._panel_layout.addWidget(self._candidate_scroll, 1)
+        self._editor_scroll = QScrollArea()
+        self._editor_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._editor_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._editor_scroll.setWidgetResizable(True)
+        self._editor_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._editor_container = QWidget()
+        editor_layout = QVBoxLayout(self._editor_container)
+        if self._inline_editor:
+            editor_layout.setContentsMargins(0, 3, 0, 7)
+        else:
+            editor_layout.setContentsMargins(9, 9, 9, 9)
+        self._editor = TagEditorCard(compact=self._inline_editor)
+        editor_layout.addWidget(self._editor)
+        self._editor_scroll.setWidget(self._editor_container)
+        self._editor_scroll.hide()
+        if self._inline_editor:
+            self._candidate_layout.addWidget(self._editor_scroll)
+        else:
+            self._panel_layout.addWidget(self._editor_scroll)
+        self._footer = plain_label(
+            tr("Enter 添加 · Esc 收起") if self._inline_editor else tr("↑ ↓ 选择     Enter 添加     Esc 收起")
+        )
+        self._footer.setContentsMargins(12, 7, 12, 7)
+        self._footer.setVisible(self._show_hints)
+        self._panel_layout.addWidget(self._footer)
+
+    def _retheme(self):
+        """仅在样式变化时刷新输入区域、候选浮层和编辑卡片，避免调色板事件反复更新后代。"""
+        # 仅样式实际变化时更新，避免调色板事件反复处理所有后代。
+        field_style = (
+            f"QFrame#tag-control {{ background: {theme.color('control.bg')}; "
+            f"border: 1px solid {theme.color('stroke.control')}; border-radius: 4px; }}"
+            "QScrollArea#tag-selected-scroll, QScrollArea#tag-selected-scroll > QWidget > QWidget "
+            "{ background: transparent; border: 0; }"
+        )
+        if self._field.styleSheet() != field_style:
+            self._field.setStyleSheet(field_style)
+        error_style = f"color: {theme.color('danger')}; font-size: {theme.font('size_secondary')}px;"
+        if self.error_label.styleSheet() != error_style:
+            self.error_label.setStyleSheet(error_style)
+        popup_style = (
+            "QFrame#tag-picker-popup { background: transparent; border: none; }"
+            "QWidget#tag-picker-heading, QFrame#tag-picker-popup QScrollArea, "
+            "QFrame#tag-picker-popup QScrollArea > QWidget, "
+            "QFrame#tag-picker-popup QScrollArea > QWidget > QWidget "
+            "{ background: transparent; border: 0; }"
+            f"QFrame#tag-candidate-row {{ border: 0; border-radius: 6px; background: transparent; }}"
+            f"QFrame#tag-candidate-row[highlighted='true'] {{ background: {theme.color('bg.hover')}; }}"
+            f"QFrame#tag-candidate-row[editing='true'] {{ background: {theme.color('accent.subtle')}; }}"
+            f"QFrame#tag-candidate-row QPushButton {{ font-size: {theme.font('size_secondary')}px; "
+            f"color: {theme.color('text.secondary')}; "
+            "background: transparent; border: 0; padding: 3px 5px; }"
+            f"QFrame#tag-candidate-row QPushButton:hover {{ background: {theme.color('bg.base')}; }}"
+            f"QPushButton#tag-remove-action:hover {{ color: {theme.color('danger')}; }}"
+        )
+        if self.popup.styleSheet() != popup_style:
+            self.popup.setStyleSheet(popup_style)
+        label_style = f"color: {theme.color('text.secondary')}; font-size: {theme.font('size_secondary')}px;"
+        for label in (self._heading, self._caption, self._footer, self._count_label, self._input_hint):
+            if label.styleSheet() != label_style:
+                label.setStyleSheet(label_style)
+        self._editor.retheme()
