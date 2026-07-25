@@ -793,3 +793,113 @@ class TagPicker(QWidget):
         self._refresh_candidates()
         self.input.setFocus()
         self.changed.emit()
+
+    def open_editor(self, tag_id, *, from_candidate=False):
+        """展开有效标签的编辑卡片并聚焦名称，候选入口会先清除未提交的新建状态。"""
+        if tag_id in self.draft.deleted_ids or tag_id not in self.draft.definitions:
+            return
+        if from_candidate:
+            self._updating = True
+            self.input.clear()
+            self._updating = False
+            self._new_color = None
+            self._hex_values.pop("", None)
+            self._hex_errors.pop("", None)
+            self._show_error("")
+        self._active_tag_id = tag_id
+        self._armed_tag_id = None
+        self._active_choice = -1
+        self._refresh_chips()
+        self._refresh_candidates()
+        self.show_popup()
+        row = self._rows.get(tag_id)
+        if row:
+            self._candidate_scroll.ensureWidgetVisible(row)
+        self.name_input.setFocus()
+        self.name_input.selectAll()
+        if self._inline_editor:
+            self._reveal_timer.start(0)
+
+    def collapse_editor(self):
+        """结束当前标签编辑展示，刷新候选并把焦点交回添加输入框。"""
+        self._active_tag_id = None
+        self._refresh_candidates()
+        self.input.setFocus()
+
+    def _name_changed(self, raw):
+        """保留原始名称输入并尝试更新草稿，记录校验错误后刷新预览和候选。"""
+        if self._updating or not self._active_tag_id or self.name_input.composing or self.name_input.handling_ime:
+            return
+        tag_id = self._active_tag_id
+        self._name_values[tag_id] = raw
+        try:
+            self.draft.rename(tag_id, raw)
+        except ValueError as exc:
+            self._name_errors[tag_id] = str(exc)
+        else:
+            self._name_errors.pop(tag_id, None)
+        self._refresh_chips()
+        self._refresh_candidates()
+        self.changed.emit()
+
+    def _hex_changed(self, raw):
+        """校验完整 HEX 输入，保留错误文本并定位提示，有效时同步标签或新建预览颜色。"""
+        if self._updating or self.hex_input.composing or self.hex_input.handling_ime:
+            return
+        tag_id = self._active_tag_id or ""
+        self._hex_values[tag_id] = raw
+        try:
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", raw):
+                raise ValueError(tr("请输入完整的 #RRGGBB 色值。"))
+            color = normalize_tag_color(raw)
+        except ValueError as exc:
+            self._hex_errors[tag_id] = str(exc)
+            self._update_editor()
+            self._position_popup()
+        else:
+            self._set_color(color, preserve_raw=True)
+        self.changed.emit()
+
+    def _set_color(self, color, *, preserve_raw=False):
+        """清除颜色校验错误并更新草稿或新建颜色，按需保留原始 HEX 输入。"""
+        tag_id = self._active_tag_id or ""
+        self._hex_errors.pop(tag_id, None)
+        if not preserve_raw:
+            self._hex_values.pop(tag_id, None)
+        if tag_id:
+            self.draft.set_color(tag_id, color)
+        else:
+            self._new_color = color
+        self._refresh_chips()
+        self._refresh_candidates()
+        self.changed.emit()
+
+    def open_removal(self, tag_id):
+        """为未删除的候选标签非阻塞打开全游戏引用删除确认，已有模态窗口时忽略请求。"""
+        if self.has_active_modal or tag_id in self.draft.deleted_ids:
+            return
+        self.removal_dialog = TagRemovalDialog(self.draft.definitions[tag_id], self.draft.usage(tag_id), self.window())
+        confirmation = self.removal_dialog
+
+        def finished(result):
+            """接受确认后在草稿标记标签及引用删除并清除编辑缓存，随后恢复候选浮层和输入焦点。"""
+            if result == QDialog.DialogCode.Accepted:
+                self.draft.remove_candidate(tag_id)
+                for values in (self._name_values, self._name_errors, self._hex_values, self._hex_errors):
+                    values.pop(tag_id, None)
+                if self._active_tag_id == tag_id:
+                    self._active_tag_id = None
+                self._refresh_chips()
+                self.changed.emit()
+            self._refresh_candidates()
+            self.show_popup()
+            self.input.setFocus()
+
+        confirmation.finished.connect(finished)
+        confirmation.open()
+
+    def _show_error(self, message):
+        """同步输入错误文案、可见性和无障碍描述。"""
+        self.error_label.setText(message)
+        self.error_label.setVisible(bool(message))
+        self.input.setAccessibleDescription(message)
