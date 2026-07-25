@@ -476,3 +476,242 @@ class TagPicker(QWidget):
             if label.styleSheet() != label_style:
                 label.setStyleSheet(label_style)
         self._editor.retheme()
+
+    def _refresh_chips(self):
+        """依据草稿重建已选标签与移除入口，保留输入框并更新数量及滚动区高度。"""
+        self._flow.removeWidget(self.input)
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        for tag_id in self.draft.selected_ids:
+            if tag_id in self.draft.deleted_ids:
+                continue
+            chip = TagChip(
+                self.draft.definitions[tag_id],
+                height=28,
+                font_size=int(theme.font("size_secondary")),
+                removable=True,
+            )
+            chip.setObjectName(f"selected-tag-{tag_id}")
+            chip.setAccessibleName(tr("编辑标签 {name}", name=chip.tag.name))
+            chip.setCheckable(True)
+            chip.setChecked(tag_id == self._armed_tag_id)
+            chip.clicked_tag.connect(self.open_editor)
+            chip.removed.connect(self._detach)
+            self._flow.addWidget(chip)
+            chip.show()
+        if self._selected_scroll is None:
+            self._flow.addWidget(self.input)
+        else:
+            self._selection_resize_timer.start(0)
+        self._count_label.setText(f"{len(self.draft.selected_ids)} / {MAX_TAGS}")
+        self._field.updateGeometry()
+        self.updateGeometry()
+
+    def _update_selected_height(self):
+        """按流式布局和高度上限调整已选标签区，必要时滚动显示待删除的标签。"""
+        if self._selected_scroll is None:
+            return
+        height = self._flow.heightForWidth(max(1, self._selected_scroll.viewport().width()))
+        self._selected_content.setMinimumHeight(height)
+        self._selected_scroll.setFixedHeight(min(self._selected_height_limit, height))
+        self._selected_scroll.setVisible(self._flow.count() > 0)
+        if self._armed_tag_id:
+            self._flow.activate()
+            for index in range(self._flow.count()):
+                chip = self._flow.itemAt(index).widget()
+                if isinstance(chip, TagChip) and chip.tag.id == self._armed_tag_id:
+                    self._selected_scroll.ensureWidgetVisible(chip, 0, 3)
+                    break
+
+    def _new_preview(self):
+        """为有效且尚不存在的输入名称创建临时标签预览，名称无效或重复时返回 None。"""
+        raw = self.input.text()
+        key = tag_key(raw)
+        if not key or any(
+            tag.normalized_name == key
+            for tag in self.draft.definitions.values()
+            if tag.id not in self.draft.deleted_ids
+        ):
+            return None
+        try:
+            name = validate_tag_name(raw)
+        except ValueError:
+            return None
+        return TagDefinition("", self.draft.game_id, name, key, self._new_color or default_tag_color(name))
+
+    def _refresh_candidates(self, *, reset=False, force=False):
+        """刷新候选及新建预览，保留编辑器、滚动位置和键盘选择；隐藏时延后重建到下次展开。"""
+        if not force and not self.popup.isVisible():
+            self._candidates_dirty = True
+            self._candidate_reset_pending |= reset
+            return
+        reset |= self._candidate_reset_pending
+        self._candidates_dirty = self._candidate_reset_pending = False
+        old_scroll = self._candidate_scroll.verticalScrollBar().value()
+        active_index = next((index for index, tag_id in enumerate(self._rows) if tag_id == self._active_tag_id), None)
+        if self._inline_editor:
+            # 重建相邻候选行时保留编辑器和焦点。
+            self._candidate_layout.removeWidget(self._editor_scroll)
+        self._editor_anchor = None
+        while self._candidate_layout.count():
+            item = self._candidate_layout.takeAt(0)
+            if item.widget():
+                item.widget().hide()
+                item.widget().deleteLater()
+        self._choices, self._rows = [], {}
+        query = self.input.text()
+        candidates = self.draft.candidates(query)
+        if self._inline_editor and self._active_tag_id:
+            active_tag = self.draft.definitions.get(self._active_tag_id)
+            if active_tag is not None and active_tag.id not in self.draft.deleted_ids:
+                candidates = [tag for tag in candidates if tag.id != active_tag.id]
+                # 名称修改时保留正在编辑标签的位置。
+                candidates.insert(min(active_index or 0, len(candidates)), active_tag)
+        self._heading.setText(tr("搜索标签") if tag_key(query) else tr("可用标签"))
+        self._caption.setText(
+            tr("{count} 个", count=len(candidates))
+            if self._inline_editor
+            else tr("{count} 个 · 点击气泡添加", count=len(candidates))
+        )
+        self._caption.setToolTip(tr("点击标签添加到当前 Mod"))
+        for tag in candidates:
+            selected = tag.id in self.draft.selected_ids
+            row = _CandidateRow(tag, selected=selected, compact=self._inline_editor)
+            row.chip.clicked_tag.connect(self._attach)
+            if row.edit_button is not None:
+                row.edit_button.clicked.connect(
+                    lambda checked=False, tid=tag.id: self.open_editor(tid, from_candidate=True)
+                )
+                row.remove_button.clicked.connect(lambda checked=False, tid=tag.id: self.open_removal(tid))
+            row.setProperty("editing", tag.id == self._active_tag_id)
+            self._candidate_layout.addWidget(row)
+            if self._inline_editor and tag.id == self._active_tag_id:
+                self._editor_anchor = row
+                self._candidate_layout.addWidget(self._editor_scroll)
+            self._rows[tag.id] = row
+            if not selected:
+                self._choices.append((tag.id, row))
+        preview = self._new_preview()
+        if preview:
+            row = _CandidateRow(preview, prefix=tr("新建"), compact=self._inline_editor)
+            row.chip.clicked_tag.connect(lambda _: self._commit_input())
+            self._candidate_layout.addWidget(row)
+            if self._inline_editor and not self._active_tag_id:
+                self._editor_anchor = row
+                self._candidate_layout.addWidget(self._editor_scroll)
+            self._choices.append((None, row))
+        if not candidates and not preview:
+            text = tr("输入新名称，开始添加标签。")
+            if tag_key(query):
+                try:
+                    validate_tag_name(query)
+                    text = tr("没有匹配的标签，输入新名称即可创建。")
+                except ValueError as exc:
+                    text = str(exc)
+            empty = plain_label(text)
+            empty.setWordWrap(True)
+            empty.setContentsMargins(12, 12, 12, 12)
+            self._candidate_layout.addWidget(empty)
+        self._candidate_layout.addStretch()
+        # 先显示新子控件并确定实际行高，再测量和定位浮层。
+        for index in range(self._candidate_layout.count()):
+            widget = self._candidate_layout.itemAt(index).widget()
+            if widget is not None:
+                widget.show()
+        self._candidate_layout.activate()
+        if reset:
+            self._active_choice = 0 if query and self._choices else -1
+        elif self._active_choice >= len(self._choices):
+            self._active_choice = -1
+        self._update_editor()
+        self._link_tab_order()
+        self._candidate_scroll.verticalScrollBar().setValue(old_scroll)
+        self._highlight_choice()
+        if self.popup.isVisible():
+            self._position_popup()
+
+    def _link_tab_order(self):
+        """按候选行和编辑器的实际排列连接 Tab 顺序，末尾可返回外层表单控件。"""
+        controls = [self.input]
+        if self._add_button is not None:
+            controls.append(self._add_button)
+        editor_controls = list(self._editor.swatches.values())
+        editor_controls.extend((self._editor.custom_button, self.hex_input))
+        if self._inline_editor:
+            editor_controls.insert(0, self.name_input)
+        else:
+            editor_controls.append(self.name_input)
+        editor_controls.append(self._editor.collapse_button)
+        editor_linked = False
+        for tag_id, row in self._rows.items():
+            if row.edit_button is not None:
+                controls.extend((row.edit_button, row.remove_button))
+            if self._inline_editor and tag_id == self._active_tag_id:
+                controls.extend(editor_controls)
+                editor_linked = True
+        if not editor_linked:
+            controls.extend(editor_controls)
+        if self._next_focus_widget is not None:
+            controls.append(self._next_focus_widget)
+        for first, second in zip(controls, controls[1:]):
+            QWidget.setTabOrder(first, second)
+
+    def _update_editor(self):
+        """显示当前标签或新建预览的编辑字段，保留原始输入和校验错误，并提示草稿修改的影响。"""
+        tag = self.draft.definitions.get(self._active_tag_id) if self._active_tag_id else self._new_preview()
+        if tag is None or tag.id in self.draft.deleted_ids:
+            self._editor_scroll.hide()
+            return
+        creating = not self._active_tag_id
+        self._editor_scroll.show()
+        self._editor.title_label.setText(tr("新标签颜色") if creating else tr("编辑标签"))
+        self._editor.collapse_button.setVisible(not creating)
+        self._editor.name_row.setVisible(not creating)
+        self._updating = True
+        raw = self._name_values.get(tag.id, tag.name)
+        if self.name_input.text() != raw:
+            self.name_input.setText(raw)
+        preview = copy.copy(tag)
+        preview.name = normalize_tag_name(raw) or tr("未命名标签")
+        self._editor.preview.set_tag(preview)
+        self._editor.show_color(
+            tag.color, automatic=creating and not self._new_color, raw_hex=self._hex_values.get(tag.id)
+        )
+        self._updating = False
+        self._editor.name_error.setText(self._name_errors.get(tag.id, ""))
+        self._editor.name_error.setVisible(bool(self._name_errors.get(tag.id)))
+        self._editor.color_error.setText(self._hex_errors.get(tag.id, ""))
+        self._editor.color_error.setVisible(bool(self._hex_errors.get(tag.id)))
+        self.name_input.setAccessibleDescription(self._name_errors.get(tag.id, ""))
+        self.hex_input.setAccessibleDescription(self._hex_errors.get(tag.id, ""))
+        if creating:
+            note = tr("新标签自动成为候选，保存后可在其他 Mod 中使用。")
+        else:
+            count = self.draft.usage(tag.id)
+            note = (
+                tr("名称与颜色将应用于 {count} 个 Mod，随本次保存生效。", count=count)
+                if count
+                else tr("名称与颜色随本次保存生效。")
+            )
+        self._editor.note.setText(note)
+
+    def _input_changed(self, _text, *, allow_commit=True):
+        """重置当前编辑选择，按分隔符决定提交或刷新候选，输入法处理期间延后操作。"""
+        if self._updating or self.input.composing or self.input.handling_ime:
+            return
+        self._active_tag_id = self._armed_tag_id = None
+        self._show_error("")
+        if not self.input.text():
+            self._new_color = None
+            self._hex_values.pop("", None)
+            self._hex_errors.pop("", None)
+        if allow_commit and re.search(r"[,，\r\n]", self.input.text()):
+            self._commit_input()
+        else:
+            self._refresh_chips()
+            self._refresh_candidates(reset=True)
+            self.show_popup()
+        self.changed.emit()
