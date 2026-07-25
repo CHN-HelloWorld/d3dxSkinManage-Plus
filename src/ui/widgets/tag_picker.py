@@ -715,3 +715,81 @@ class TagPicker(QWidget):
             self._refresh_candidates(reset=True)
             self.show_popup()
         self.changed.emit()
+
+    def _composition_finished(self):
+        """在组词结束后刷新输入状态和候选，分隔符提交仍等待明确的确认操作。"""
+        # 使用与普通输入相同的编辑状态重置，分隔符提交等待用户按下确认键。
+        self._input_changed(self.input.text(), allow_commit=False)
+
+    def _commit_input(self):
+        """将分隔符拆分后的名称添加到草稿，校验失败时保留输入并提示原因，成功时返回 True。"""
+        if self.is_composing:
+            return False
+        names = [raw for raw in re.split(r"[,，\r\n]+", self.input.text()) if normalize_tag_name(raw)]
+        if not names:
+            return False
+        if "" in self._hex_errors:
+            self._show_error(self._hex_errors[""])
+            self.show_popup()
+            self.hex_input.setFocus()
+            return False
+        already_selected = {
+            self.draft.definitions[tag_id].normalized_name
+            for tag_id in self.draft.selected_ids
+            if tag_id not in self.draft.deleted_ids
+        }
+        if all(tag_key(name) in already_selected for name in names):
+            self._show_error(tr("该标签已经在当前 Mod 中，无需重复添加。"))
+            return False
+        try:
+            self.draft.add_names(names, color=self._new_color if len(names) == 1 else None)
+        except ValueError as exc:
+            self._show_error(tr("{exc} 输入已保留。", exc=exc))
+            self._refresh_candidates(reset=True)
+            self.show_popup()
+            return False
+        self._after_add()
+        return True
+
+    def _add_from_button(self):
+        """把焦点交还输入框并尝试添加当前文本，未成功时保留候选浮层。"""
+        self.input.setFocus()
+        if not self._commit_input():
+            self.show_popup()
+
+    def _attach(self, tag_id):
+        """将已有候选标签关联到当前 Mod 草稿，失败时显示校验原因。"""
+        try:
+            self.draft.attach(tag_id)
+        except ValueError as exc:
+            self._show_error(str(exc))
+            return
+        self._after_add()
+
+    def _after_add(self):
+        """成功添加后清空临时输入和新建颜色状态，刷新标签及候选并通知草稿变化。"""
+        self._active_tag_id = self._armed_tag_id = None
+        self._new_color = None
+        self._updating = True
+        self.input.clear()
+        self._updating = False
+        self._hex_values.pop("", None)
+        self._hex_errors.pop("", None)
+        self._show_error("")
+        self._active_choice = -1
+        self._refresh_chips()
+        self._refresh_candidates()
+        self.show_popup()
+        self.input.setFocus()
+        self.changed.emit()
+
+    def _detach(self, tag_id):
+        """从当前 Mod 草稿解除标签关联，清除相关选择状态并刷新界面。"""
+        self.draft.detach(tag_id)
+        self._armed_tag_id = None
+        if self._active_tag_id == tag_id:
+            self._active_tag_id = None
+        self._refresh_chips()
+        self._refresh_candidates()
+        self.input.setFocus()
+        self.changed.emit()
