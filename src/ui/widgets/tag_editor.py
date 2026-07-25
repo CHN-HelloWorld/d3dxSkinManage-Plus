@@ -215,3 +215,115 @@ class TagEditorCard(QFrame):
         self.note.setWordWrap(True)
         layout.addWidget(self.note)
         self.retheme()
+
+    def retheme(self):
+        """更新编辑卡片及错误提示的主题样式，样式相同时避免重复设置。"""
+        dark = theme.current_theme() == "dark"
+        surface, border = ("#252C32", "#39444C") if dark else ("#F2F7FB", "#D6E2EB")
+        style = (
+            f"QFrame#tag-editor-card {{ background: {surface}; border: 1px solid {border}; border-radius: 8px; }}"
+            "QFrame#tag-editor-card QLabel { border: 0; background: transparent; "
+            f"color: {theme.color('text.secondary')}; font-size: {theme.font('size_secondary')}px; }}"
+            "QFrame#tag-editor-card QLabel#tag-name-error, "
+            f"QFrame#tag-editor-card QLabel#tag-color-error {{ color: {theme.color('danger')}; }}"
+        )
+        if self.styleSheet() != style:
+            self.setStyleSheet(style)
+
+    def _step_color(self, index, step):
+        """按方向循环选择相邻预设颜色，并把键盘焦点移动到对应色块。"""
+        key = tuple(TAG_PRESETS)[(index + step) % len(TAG_PRESETS)]
+        self.color_chosen.emit(key)
+        self.swatches[key].setFocus()
+
+    def show_color(self, color, *, automatic=False, raw_hex=None):
+        """同步色块选择、HEX 输入和颜色说明，更新输入框时阻止反向触发编辑信号。"""
+        self._color_group.setExclusive(False)
+        for key, swatch in self.swatches.items():
+            selected = key == color
+            swatch.setChecked(selected)
+        self._color_group.setExclusive(True)
+        hex_value = raw_hex if raw_hex is not None else TAG_PRESETS.get(color, color)
+        if self.hex_input.text() != hex_value:
+            previous = self.hex_input.blockSignals(True)
+            self.hex_input.setText(hex_value)
+            self.hex_input.blockSignals(previous)
+        self.color_caption.setText(tr(TAG_PRESET_NAMES.get(color, color)) + (tr(" · 自动") if automatic else ""))
+
+    def _choose_custom_color(self):
+        """复用可见的颜色窗口，或创建归顶层窗口所有的非阻塞选择器并发送选定色值。"""
+        if self.color_dialog is not None and self.color_dialog.isVisible():
+            self.color_dialog.raise_()
+            return
+        color = QColor(self.hex_input.text())
+        if not color.isValid():
+            color = QColor(TAG_PRESETS["blue"])
+        # 颜色对话框归顶层所有，避免原生窗口处理影响标签面板和滚动区域的命中判断。
+        self.color_dialog = QColorDialog(color, self.window())
+        self.color_dialog.setWindowTitle(tr("自定义标签颜色"))
+        self.color_dialog.setOption(QColorDialog.ColorDialogOption.DontUseNativeDialog)
+        self.color_dialog.setWindowModality(Qt.WindowModality.WindowModal)
+        self.color_dialog.colorSelected.connect(lambda value: self.color_chosen.emit(value.name().upper()))
+        # 仅对外壳应用磨砂，颜色预览保留准确的不透明颜色。
+        acrylic.apply_dialog_acrylic(self.color_dialog, tint_alpha=0.70)
+        self.color_dialog.open()
+
+
+class TagRemovalDialog(QDialog):
+    """确认游戏范围内的标签删除，接受后仅由所有者修改草稿。"""
+
+    def __init__(self, tag, usage, parent=None):
+        """展示标签引用数量及删除影响，将确认结果交由调用方修改草稿，默认选择取消。"""
+        super().__init__(parent)
+        self.setWindowTitle(tr("删除标签及所有引用？"))
+        self.setWindowModality(Qt.WindowModality.WindowModal)
+        self.setMinimumWidth(380)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
+        summary = QHBoxLayout()
+        summary.addWidget(TagChip(tag))
+        self.usage_label = plain_label(tr("{usage} 个 Mod 引用", usage=usage))
+        summary.addWidget(self.usage_label)
+        summary.addStretch()
+        layout.addLayout(summary)
+        self.description_label = plain_label(
+            tr("将从标签库删除此标签，并从当前游戏内引用它的 {usage} 个 Mod 中同步移除。", usage=usage)
+        )
+        self.description_label.setWordWrap(True)
+        layout.addWidget(self.description_label)
+        layout.addWidget(plain_label(tr("点击原编辑窗口的“保存”后生效。")))
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self.cancel_button = QPushButton(tr("取消"))
+        self.cancel_button.setDefault(True)
+        self.cancel_button.clicked.connect(self.reject)
+        buttons.addWidget(self.cancel_button)
+        self.confirm_button = QPushButton(tr("删除并同步移除"))
+        self.confirm_button.setAutoDefault(False)
+        self.confirm_button.clicked.connect(self.accept)
+        buttons.addWidget(self.confirm_button)
+        layout.addLayout(buttons)
+
+    def resizeEvent(self, event) -> None:
+        """按当前宽度重新计算最小高度，确保标题栏和换行说明完整显示。"""
+        super().resizeEvent(event)
+        layout = self.layout()
+        if layout is not None:
+            # 高度包含标题栏和实际换行文字，避免显示时裁剪内容。
+            self.setMinimumHeight(layout.totalMinimumHeightForWidth(event.size().width()))
+
+    def showEvent(self, event) -> None:
+        """显示确认窗口时将焦点置于取消按钮。"""
+        super().showEvent(event)
+        self.cancel_button.setFocus()
+
+    def keyPressEvent(self, event) -> None:
+        """消费 Ctrl+Enter，避免标签删除确认响应外层编辑器的保存快捷键。"""
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            event.accept()
+            return
+        super().keyPressEvent(event)
