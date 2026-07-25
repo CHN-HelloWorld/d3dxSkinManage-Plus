@@ -147,3 +147,190 @@ class _CandidateRow(QFrame):
             self.remove_button.setObjectName("tag-remove-action")
             layout.addWidget(self.edit_button)
             layout.addWidget(self.remove_button)
+
+    @staticmethod
+    def _action(text, icon, accessible_name, *, compact=False):
+        """创建带图标和无障碍名称的候选操作按钮，紧凑模式只显示图标。"""
+        button = QPushButton("" if compact else text)
+        button.setAutoDefault(False)
+        button.setFixedHeight(27)
+        button.setIconSize(QSize(13, 13))
+        icons.apply_icon(button, icon, "text.secondary")
+        button.setAccessibleName(accessible_name)
+        button.setToolTip(accessible_name)
+        if compact:
+            button.setFixedWidth(25)
+        return button
+
+
+class TagPicker(QWidget):
+    """全部修改只作用于草稿，控件不访问持久化存储。"""
+
+    changed = Signal()
+    save_requested = Signal()
+
+    def __init__(
+        self,
+        draft: TagDraft,
+        parent=None,
+        *,
+        selected_height_limit: int | None = None,
+        inline_editor=False,
+        show_hints=True,
+    ):
+        """绑定标签草稿并建立输入、候选浮层和编辑控件，初始化校验状态及延后布局定时器。"""
+        super().__init__(parent)
+        self._draft = draft
+        self._ready = False
+        self._updating = False
+        self._inline_editor = inline_editor
+        self._show_hints = show_hints
+        self._forwarding_wheel = False
+        self._popup_boundary = None
+        self._next_focus_widget = None
+        self._active_tag_id = None
+        self._armed_tag_id = None
+        self._active_choice = -1
+        self._choices = []
+        self._rows = {}
+        self._candidates_dirty = False
+        self._candidate_reset_pending = False
+        self._editor_anchor = None
+        self._name_values = {}
+        self._name_errors = {}
+        self._hex_values = {}
+        self._hex_errors = {}
+        self._new_color = None
+        self.removal_dialog = None
+        self._selected_height_limit = selected_height_limit
+        self._selected_scroll = None
+        self._selected_content = None
+        self._add_button = None
+        self._selection_resize_timer = QTimer(self)
+        self._selection_resize_timer.setSingleShot(True)
+        self._selection_resize_timer.timeout.connect(self._update_selected_height)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        self._field = QFrame(self)
+        self._field.setObjectName("tag-control")
+        if selected_height_limit is None:
+            self._flow = TagFlowLayout(self._field, margin=6, spacing=5)
+        else:
+            # 输入框独立于标签滚动区，避免已选标签挤出搜索、校验和操作按钮。
+            field_layout = QVBoxLayout(self._field)
+            field_layout.setContentsMargins(6, 6, 6, 4)
+            field_layout.setSpacing(3)
+            self._selected_scroll = QScrollArea(self._field)
+            self._selected_scroll.setObjectName("tag-selected-scroll")
+            self._selected_scroll.setFrameShape(QFrame.Shape.NoFrame)
+            self._selected_scroll.setWidgetResizable(True)
+            self._selected_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            self._selected_scroll.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            self._selected_scroll.viewport().setAutoFillBackground(False)
+            self._selected_content = QWidget()
+            self._selected_content.setMinimumWidth(0)
+            self._flow = TagFlowLayout(self._selected_content, margin=0, spacing=5)
+            self._selected_scroll.setWidget(self._selected_content)
+            field_layout.addWidget(self._selected_scroll)
+        self.input = _TagInput(self._field)
+        self.input.setObjectName("tag-input")
+        self.input.setPlaceholderText(tr("搜索或添加标签…"))
+        self.input.setAccessibleName(tr("搜索或添加标签"))
+        self.input.setMinimumWidth(110)
+        self.input.setFixedHeight(26)
+        self.input.setStyleSheet("QLineEdit { border: 0; background: transparent; padding: 0 3px; }")
+        if self._selected_scroll is None:
+            self._flow.addWidget(self.input)
+        else:
+            input_row = QHBoxLayout()
+            input_row.setSpacing(3)
+            input_row.addWidget(self.input, 1)
+            self._add_button = QToolButton()
+            self._add_button.setObjectName("tag-add")
+            self._add_button.setAccessibleName(tr("添加输入的标签"))
+            self._add_button.setToolTip(tr("添加输入的标签"))
+            self._add_button.setFixedSize(25, 25)
+            self._add_button.setIconSize(QSize(14, 14))
+            self._add_button.setStyleSheet(
+                "QToolButton { border: 0; background: transparent; padding: 0; border-radius: 4px; }"
+                f"QToolButton:hover {{ background: {theme.color('bg.hover')}; }}"
+            )
+            icons.apply_icon(self._add_button, "actions/add", "accent")
+            self._add_button.clicked.connect(self._add_from_button)
+            input_row.addWidget(self._add_button)
+            field_layout.addLayout(input_row)
+        layout.addWidget(self._field)
+        help_row = QHBoxLayout()
+        self._input_hint = plain_label(
+            tr("Enter 添加 · 支持批量粘贴")
+            if selected_height_limit is not None
+            else tr("Enter 添加 · 支持逗号和换行粘贴")
+        )
+        self._input_hint.setToolTip(tr("Enter 添加标签；支持用逗号或换行分隔多个标签后粘贴。"))
+        self._input_hint.setVisible(show_hints)
+        help_row.addWidget(self._input_hint)
+        help_row.addStretch()
+        self._count_label = plain_label()
+        help_row.addWidget(self._count_label)
+        layout.addLayout(help_row)
+        self.error_label = plain_label()
+        self.error_label.setObjectName("tag-input-error")
+        self.error_label.setWordWrap(True)
+        self.error_label.hide()
+        layout.addWidget(self.error_label)
+        self._build_popup()
+        self.input.textChanged.connect(self._input_changed)
+        self.input.composition_finished.connect(self._composition_finished)
+        self.name_input.textChanged.connect(self._name_changed)
+        self.name_input.composition_finished.connect(lambda: self._name_changed(self.name_input.text()))
+        self.hex_input.textChanged.connect(self._hex_changed)
+        self.hex_input.composition_finished.connect(lambda: self._hex_changed(self.hex_input.text()))
+        self._editor.color_chosen.connect(self._set_color)
+        self._editor.collapse_requested.connect(self.collapse_editor)
+        self._reposition_timer = QTimer(self)
+        self._reposition_timer.setSingleShot(True)
+        self._reposition_timer.timeout.connect(self._position_popup)
+        self._focus_check_timer = QTimer(self)
+        self._focus_check_timer.setSingleShot(True)
+        self._focus_check_timer.timeout.connect(self._hide_if_focus_outside)
+        self._reveal_timer = QTimer(self)
+        self._reveal_timer.setSingleShot(True)
+        self._reveal_timer.timeout.connect(self._reveal_inline_editor)
+        self._ready = True
+        self._refresh_chips()
+        self._refresh_candidates()
+        self._retheme()
+
+    @property
+    def draft(self) -> TagDraft:
+        """返回正在编辑的标签草稿，其持久化由外层窗口负责。"""
+        return self._draft
+
+    @property
+    def name_input(self):
+        """提供当前标签编辑卡片中的名称输入控件。"""
+        return self._editor.name_input
+
+    @property
+    def hex_input(self):
+        """提供颜色编辑和校验使用的 HEX 输入控件。"""
+        return self._editor.hex_input
+
+    @property
+    def editor_card(self):
+        """返回候选浮层共用的标签编辑卡片。"""
+        return self._editor
+
+    @property
+    def is_dirty(self):
+        """判断草稿、未提交文本、校验错误或组词状态是否仍需要用户处理。"""
+        return bool(
+            self.draft.is_dirty
+            or self.input.text().strip()
+            or self._name_errors
+            or self._hex_errors
+            or self.is_composing
+        )
