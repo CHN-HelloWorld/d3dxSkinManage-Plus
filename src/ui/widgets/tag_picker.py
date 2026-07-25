@@ -1070,3 +1070,188 @@ class TagPicker(QWidget):
                 if self._editor_anchor is not None and ancestor.isAncestorOf(self._editor_anchor):
                     ancestor.ensureWidgetVisible(self._editor_anchor, 0, 10)
             ancestor = ancestor.parentWidget()
+
+    def _highlight_choice(self):
+        """同步键盘候选的高亮状态，并将有效选择滚动到可见区域。"""
+        for index, (_, row) in enumerate(self._choices):
+            row.setProperty("highlighted", index == self._active_choice)
+            row.style().unpolish(row)
+            row.style().polish(row)
+        if 0 <= self._active_choice < len(self._choices):
+            self._candidate_scroll.ensureWidgetVisible(self._choices[self._active_choice][1])
+
+    def _input_key(self, event):
+        """处理候选导航、添加、保存和收起操作；空输入时退格先选中末标签，再次退格才移除。"""
+        key = event.key()
+        if self.is_composing:
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter, Qt.Key.Key_Comma):
+                event.accept()
+                return True
+            return False
+        if key in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            self.show_popup()
+            if self._choices:
+                step = 1 if key == Qt.Key.Key_Down else -1
+                self._active_choice = (
+                    (self._active_choice + step) % len(self._choices)
+                    if self._active_choice >= 0
+                    else (0 if step > 0 else len(self._choices) - 1)
+                )
+                self._highlight_choice()
+            return True
+        if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                self.save_requested.emit()
+            elif self.popup.isVisible() and 0 <= self._active_choice < len(self._choices):
+                tag_id = self._choices[self._active_choice][0]
+                self._attach(tag_id) if tag_id else self._commit_input()
+            else:
+                self._commit_input()
+            return True
+        if key == Qt.Key.Key_Backspace and not self.input.text() and self.draft.selected_ids:
+            last = self.draft.selected_ids[-1]
+            if self._armed_tag_id == last:
+                self._detach(last)
+            else:
+                self._armed_tag_id = last
+                self._refresh_chips()
+            return True
+        if key == Qt.Key.Key_Escape and self.popup.isVisible():
+            self.hide_popup()
+            return True
+        if self._armed_tag_id and key != Qt.Key.Key_Backspace:
+            self._armed_tag_id = None
+            self._refresh_chips()
+        return False
+
+    def _forward_wheel(self, source, event):
+        """穿过阻止鼠标传播的标签和面板边框处理滚动。"""
+        delta = event.pixelDelta().y() or event.angleDelta().y()
+        if not delta:
+            return False
+        ancestor = source
+        while ancestor is not None:
+            if (
+                isinstance(ancestor, QScrollArea)
+                and ancestor.verticalScrollBarPolicy() != Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            ):
+                bar = ancestor.verticalScrollBar()
+                can_scroll = bar.value() > bar.minimum() if delta > 0 else bar.value() < bar.maximum()
+                if bar.isEnabled() and can_scroll:
+                    # 保留 Qt 滚轮步长和修饰键，分发给滚动条时防止重入过滤器。
+                    self._forwarding_wheel = True
+                    try:
+                        QApplication.sendEvent(bar, event)
+                    finally:
+                        self._forwarding_wheel = False
+                    if event.isAccepted():
+                        return True
+            ancestor = ancestor.parentWidget()
+        return False
+
+    def eventFilter(self, watched, event):
+        """协调标签区域的滚轮、键盘、焦点和外部点击，并合并尺寸变化引起的浮层重定位。"""
+        if not getattr(self, "_ready", False):
+            return False
+        kind = event.type()
+        if kind not in _FILTER_EVENT_TYPES:
+            return False
+        if (
+            kind == QEvent.Type.Wheel
+            and self._inline_editor
+            and not self._forwarding_wheel
+            and isinstance(watched, QWidget)
+            and not isinstance(watched, QScrollBar)
+            and watched.window() is self.window()
+            and (
+                watched is self
+                or self.isAncestorOf(watched)
+                or watched is self.popup
+                or self.popup.isAncestorOf(watched)
+            )
+        ):
+            return self._forward_wheel(watched, event)
+        if kind == QEvent.Type.KeyPress:
+            if watched is self.input:
+                return self._input_key(event)
+            if watched in (self.name_input, self.hex_input) or (
+                isinstance(watched, QWidget) and self.popup.isAncestorOf(watched)
+            ):
+                if event.key() == Qt.Key.Key_Escape:
+                    self.input.setFocus()
+                    self.hide_popup()
+                    return True
+                if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                    if self.is_composing:
+                        return True
+                    if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+                        self.save_requested.emit()
+                        return True
+                    if watched in (self.name_input, self.hex_input):
+                        return True
+        if watched is self.input and kind in (QEvent.Type.FocusIn, QEvent.Type.MouseButtonPress):
+            self.show_popup()
+        elif kind == QEvent.Type.FocusIn and isinstance(watched, QWidget) and self.popup.isVisible():
+            # 重建行时焦点可能暂时回到表单，分发结束后再判断最终目标。
+            self._focus_check_timer.start(0)
+        if kind == QEvent.Type.MouseButtonPress and isinstance(watched, QWidget):
+            if watched is self._field:
+                self.input.setFocus()
+                self.show_popup()
+            elif self.popup.isVisible() and not self.has_active_modal:
+                # 事件可能投递给父控件，按全局命中位置判断是否点击外部。
+                position = event.globalPosition().toPoint()
+                inside = any(
+                    widget is not None
+                    and widget.isVisible()
+                    and QRect(widget.mapToGlobal(QPoint()), widget.size()).contains(position)
+                    for widget in (self, self.popup, self._popup_boundary)
+                )
+                if not inside:
+                    self.hide_popup()
+        if (
+            kind in (QEvent.Type.Resize, QEvent.Type.Move)
+            and isinstance(watched, QWidget)
+            and (
+                watched in (self, self._field)
+                or watched.isAncestorOf(self)
+                or (self._inline_editor and watched is self._editor_scroll.viewport())
+            )
+        ):
+            if self.popup.isVisible():
+                self._reposition_timer.start(0)
+        if kind == QEvent.Type.Hide and watched in (self, self.window()):
+            self.hide_popup()
+        if (
+            self._selected_scroll is not None
+            and kind == QEvent.Type.Resize
+            and watched is self._selected_scroll.viewport()
+        ):
+            self._selection_resize_timer.start(0)
+        return False
+
+    def changeEvent(self, event) -> None:
+        """初始化完成后响应调色板变化，同步标签编辑器主题。"""
+        super().changeEvent(event)
+        if getattr(self, "_ready", False) and event.type() == QEvent.Type.PaletteChange:
+            self._retheme()
+
+    def showEvent(self, event) -> None:
+        """显示期间注册应用事件过滤器，并安排已选标签区的尺寸同步。"""
+        super().showEvent(event)
+        if self._ready:
+            QApplication.instance().installEventFilter(self)
+            if self._selected_scroll is not None:
+                self._selection_resize_timer.start(0)
+
+    def hideEvent(self, event) -> None:
+        """隐藏时解除应用事件过滤，停止相关定时器并收起候选浮层。"""
+        # 隐藏编辑器不再接收应用事件，重新显示时恢复注册。
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        if getattr(self, "_ready", False):
+            self._selection_resize_timer.stop()
+            self._reposition_timer.stop()
+            self.hide_popup()
+        super().hideEvent(event)
