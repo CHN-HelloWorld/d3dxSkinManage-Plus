@@ -238,3 +238,189 @@ def _style_combo_popup(container) -> None:
         if vp is not None:
             vp.setAutoFillBackground(False)
             vp.setStyleSheet("background: transparent;")
+
+
+_POPUP_SHOW_GENERATION = "_acrylic_popup_show_generation"
+_POPUP_PENDING_PAINT = "_acrylic_popup_pending_paint"
+
+
+def _apply_popup_blur(popup: QWidget) -> None:
+    """按当前主题启用弹出窗口模糊；普通弹出窗口失败时尝试另一种系统材质接口。"""
+    from src.ui import win_effects
+
+    dark = theme.current_theme() == "dark"
+    if not win_effects.apply_acrylic_blurbehind(popup, dark=dark) and popup.metaObject().className() != "QTipLabel":
+        win_effects.apply_acrylic_backdrop(popup, dark=dark)
+
+
+def _prepare_popup_effects(popup: QWidget, *, small: bool = False) -> None:
+    """准备圆角表面；支持原生模糊的弹层按系统要求安排首次合成。"""
+    from src.ui import win_effects
+
+    win_effects.disable_open_close_transition(popup)
+    win_effects.apply_rounded_corners(popup, small=small)
+    generation = (popup.property(_POPUP_SHOW_GENERATION) or 0) + 1
+    popup.setProperty(_POPUP_SHOW_GENERATION, generation)
+    surface = getattr(popup.parentWidget(), "_combo_acrylic_surface", None)
+    if (
+        popup.metaObject().className() == "QComboBoxPrivateContainer"
+        and surface is not None
+        and surface.backdrop is not None
+    ):
+        # 采样磨砂与圆角由 Qt 同层合成，叠加原生模糊会再次污染透明四角。
+        popup.setProperty(_POPUP_PENDING_PAINT, None)
+        return
+    # 先让 Qt 完成弹窗表面绘制，再调整 Windows 10 的原生合成策略。
+    if win_effects.needs_popup_paint_before_blur():
+        popup.setProperty(_POPUP_PENDING_PAINT, generation)
+        popup.update()
+    else:
+        popup.setProperty(_POPUP_PENDING_PAINT, None)
+        _apply_popup_blur(popup)
+
+
+def _finish_popup_effects(popup: QWidget, window, generation: int) -> None:
+    """仅为仍可见、句柄和显示代次未变的弹出窗口补设模糊效果。"""
+    if (
+        not shiboken6.isValid(popup)
+        or not popup.isVisible()
+        or popup.property(_POPUP_SHOW_GENERATION) != generation
+        or not shiboken6.isValid(window)
+        or popup.windowHandle() is not window
+    ):
+        return
+    try:
+        _apply_popup_blur(popup)
+        # 修改原生合成不会标记 Qt 缓冲为脏，需重新上传完整弹窗及透明视口。
+        popup.update()
+    except Exception:
+        pass
+
+
+class AcrylicPopupFilter(QObject):
+    """在 Polish/Show 阶段给弹出层施加半透明亚克力。"""
+
+    def eventFilter(self, obj, event):
+        # 仅独立弹窗需要原生效果，普通页面子控件不参与这些高频事件。
+        """识别提示、菜单和组合框浮层，在样式与显示阶段配置透明表面和原生效果。"""
+        if not isinstance(obj, QWidget) or not obj.isWindow():
+            return False
+        et = event.type()
+        if et == QEvent.Type.Paint:
+            generation = obj.property(_POPUP_PENDING_PAINT)
+            if generation is not None:
+                obj.setProperty(_POPUP_PENDING_PAINT, None)
+                window = obj.windowHandle()
+                # 等待绘制和缓冲刷新结束后再执行，提示对象销毁时由上下文取消回调。
+                QTimer.singleShot(0, obj, lambda: _finish_popup_effects(obj, window, generation))
+            return False
+        if et not in (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.StyleChange):
+            return False
+        try:
+            if obj.metaObject().className() == "QTipLabel":
+                _style_tooltip(obj)
+                # 提示标签的样式事件早于文字和几何设置，不应在此时创建原生窗口。
+                if et == QEvent.Type.Show:
+                    _prepare_popup_effects(obj, small=True)
+                return False
+            if et == QEvent.Type.StyleChange:
+                return False
+            # 仅处理按需创建的独立菜单和下拉弹窗。长期存在的浮层自行准备透明属性，
+            # 避免父窗口样式级联期间重建原生窗口造成重入。
+            is_menu = isinstance(obj, QMenu)
+            is_combo = not is_menu and obj.metaObject().className() == "QComboBoxPrivateContainer"
+            if not (is_menu or is_combo):
+                return False
+            if is_menu:
+                if et == QEvent.Type.Polish:
+
+                    def prepare_owner(menu=obj):
+                        """显示前重新检查原始所有者是否已转为原生控件。"""
+                        _prepare_menu_window_owner(menu)
+
+                    obj.aboutToShow.connect(prepare_owner)
+                _prepare_menu_window_owner(obj)
+            is_cat_menu = is_menu and obj.objectName() == "catPickerMenu"
+            # 先准备透明属性，再对最终句柄应用系统效果，避免句柄重建使效果失效。
+            if is_combo:
+                _style_combo_popup(obj)
+            elif is_menu and not is_cat_menu:
+                _style_menu(obj)
+
+            # 原生圆角裁剪覆盖窗口内容与磨砂表面，不依赖背景开关。
+            # 父控件加入最终布局后才创建原生窗口，避免样式准备阶段传播原生属性并改变坐标。
+            # Windows 10 的亚克力效果在首次绘制后启用。
+            if et == QEvent.Type.Show:
+                _prepare_popup_effects(obj)
+        except Exception:
+            pass
+        return False
+
+
+_filter_singleton: AcrylicPopupFilter | None = None
+
+
+def install(app) -> None:
+    """在 QApplication 上安装弹窗亚克力过滤器（幂等）。"""
+    from src.ui.application_event_filters import install_application_event_filter
+
+    global _filter_singleton
+    # Qt 的滚动和淡入快照窗口不透明，无法保留真实弹窗的原生材质。
+    for effect in (
+        Qt.UIEffect.UI_AnimateCombo,
+        Qt.UIEffect.UI_AnimateMenu,
+        Qt.UIEffect.UI_FadeMenu,
+        Qt.UIEffect.UI_AnimateTooltip,
+        Qt.UIEffect.UI_FadeTooltip,
+    ):
+        app.setEffectEnabled(effect, False)
+    if _filter_singleton is None or (not shiboken6.isValid(_filter_singleton)):
+        _filter_singleton = AcrylicPopupFilter()
+        install_application_event_filter(
+            app, _filter_singleton, (QEvent.Type.Polish, QEvent.Type.Show, QEvent.Type.StyleChange, QEvent.Type.Paint)
+        )
+
+
+# 顶层对话框（QDialog）弱亚克力
+
+# 弹出层（QMenu / 下拉框）由上面的过滤器统一处理；普通模态对话框（新建类别 / Mod
+# 编辑 / 各类进度框…）是独立顶层窗口，机制不同，单独提供 :func:`apply_dialog_acrylic`。
+
+# Qt 分层窗口通过 WA_TranslucentBackground 提供透明客户区。
+# 窗口绘制半透明圆角底和描边，使用 Source 模式避免背景传播导致重复叠色。
+# 原生窗口建立后应用 DWM 圆角及 ACCENT 模糊；系统不支持时保留可读的基础底色。
+# 文本框使用较厚底色，图像和颜色样本保留原色。
+
+
+_DIALOG_MARK = "_dialog_acrylic"
+
+
+def _apply_window_acrylic_effects(dialog: QWidget, *, small: bool) -> None:
+    """为已创建的对话框句柄应用系统圆角、模糊及过渡设置。"""
+    try:
+        from src.ui import win_effects
+
+        # 禁用系统开窗快照过渡，避免首帧缺少尚未合成的模糊背景。
+        win_effects.disable_open_close_transition(dialog)
+        # 圆角对齐 paintEvent 的圆角底；磨砂层透出半透明底后的窗口内容（高斯模糊）。
+        win_effects.apply_rounded_corners(dialog, small=small)
+        win_effects.apply_acrylic_blurbehind(dialog, dark=(theme.current_theme() == "dark"))
+    except Exception:
+        pass
+
+
+class _DialogAcrylicSurface(QObject):
+    """在对话框自身绘制背景，让透明子控件共享同一表面。
+
+    同级背景控件不能参与 Qt 的父背景传播，会造成文字和缩放边缘底色不一致。
+    """
+
+    def __init__(self, dialog: QWidget, radius_px: int, tint_alpha: float, animate: bool = True) -> None:
+        """保存对话框圆角、叠色和入场动画配置，并订阅表面与窗口生命周期事件。"""
+        super().__init__(dialog)
+        self._radius = radius_px
+        self._alpha = tint_alpha
+        self._effects_applied = False
+        self._effect_theme = theme.current_theme()
+        self._animate = animate
+        dialog.installEventFilter(self)
