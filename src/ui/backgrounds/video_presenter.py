@@ -212,3 +212,148 @@ class NativeVideoPresenter(QObject):
         socket.readyRead.connect(self._read)
         self._server.close()
         self.refresh()
+
+    def _write(self, packet):
+        """在连接可用且呈现器未停止时将协议数据包写入本地套接字。"""
+        if self._socket is not None and not self._stopped:
+            self._socket.write(packet)
+
+    def _send(self, message):
+        """将控制消息编码为 JSON 协议数据包后写入渲染进程连接。"""
+        self._write(encode_json(message))
+
+    def _configuration(self):
+        """收集背景参数、主题语言、原生父窗口和物理像素区域，返回可发送的配置消息。"""
+        from src.utils.i18n import get_i18n
+
+        overlay = self.overlay
+        ratio = overlay.devicePixelRatioF()
+        position = overlay.mapTo(self.root, QPoint(0, 0))
+        options = {
+            **self._options,
+            "scrim_light": round(overlay._scrim * 100),
+            "scrim_dark": round(overlay._scrim * 100),
+            "blur": overlay._blur,
+            "fit": overlay._fit,
+        }
+        return dict(
+            action="configure",
+            options=options,
+            theme=theme.current_theme(),
+            language=get_i18n().current_language,
+            parent=int(self.root.winId()),
+            size=[overlay.width(), overlay.height()],
+            rect=[
+                round(position.x() * ratio),
+                round(position.y() * ratio),
+                max(1, round(overlay.width() * ratio)),
+                max(1, round(overlay.height() * ratio)),
+            ],
+            paused=self._paused,
+            suspended=self._suspended or not self.window.isVisible(),
+        )
+
+    def _frame_ready(self, image):
+        """将可见窗口的非空前景图像与对应配置提交给限流发送器，捕获共享图像写入错误。"""
+        if self._stopped or self._socket is None:
+            return
+        try:
+            configuration = self._configuration()
+            if configuration["suspended"]:
+                return
+            if not image.isNull():
+                self._sender.submit(image, configuration=configuration)
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._report_error(tr("背景呈现失败：{exc}", exc=exc))
+
+    def _report_error(self, message):
+        """合并首个待发布错误，并延迟到绘制调用结束后通知控制器以便安全移除图形效果。"""
+        if self._stopped or self._pending_error is not None:
+            return
+        # 错误处理会移除当前图形效果，因此退出绘制栈后再通知控制器。
+        self._pending_error = message
+        call_later(0, self, self._publish_error)
+
+    def _publish_error(self):
+        """取出待发布错误，在呈现器仍活动时发出错误状态信号。"""
+        message, self._pending_error = self._pending_error, None
+        if not self._stopped and message is not None:
+            self.state_changed.emit("error", message)
+
+    def _read(self):
+        """解析管道中的预览、确认及状态消息，推进图像发送并转发结果信号。
+
+        协议读取失败交由延迟错误通知处理，避免在当前回调内破坏呈现资源。
+        """
+        try:
+            for kind, payload in self._reader.feed(bytes(self._socket.readAll())):
+                if self._stopped:
+                    break
+                if kind == b"P":
+                    _, image = decode_image(payload)
+                    self.preview_ready.emit(image)
+                elif kind == b"J":
+                    message = decode_json(payload)
+                    if "ack" in message:
+                        self._sender.acknowledge(message["ack"])
+                    elif "state" in message:
+                        self.state_changed.emit(message["state"], message.get("message", ""))
+        except (OSError, ValueError, RuntimeError) as exc:
+            self._report_error(tr("背景进程通信失败：{exc}", exc=exc))
+
+    def stop(self):
+        """发送停止命令，卸载前景捕获和事件过滤器，并给予子进程有限退出时间。
+
+        该操作可重复调用；共享图像、套接字和日志在子进程确认结束后统一释放。
+        """
+        if self._stopped:
+            return
+        self._send({"action": "stop"})
+        if self._socket is not None:
+            self._socket.flush()
+        self._stopped = True
+        self._repaint_coalescer.stop()
+        self._sender.discard_pending()
+        self._server.close()
+        self._deadline = time.monotonic() + 1.5
+        try:
+            if self.overlay._native_presenter is self:
+                self.overlay._native_presenter = None
+                self.overlay.update()
+            for widget in {self.root, self.window, self.overlay}:
+                widget.removeEventFilter(self)
+            if self.root.graphicsEffect() is self._capture_effect:
+                self.root.setGraphicsEffect(None)
+        except RuntimeError:
+            pass
+
+    def _poll(self):
+        """监控渲染进程退出及连接超时，发布异常日志并终止超过宽限期的进程。"""
+        if self._process is None:
+            return
+        code = self._process.poll()
+        if code is not None:
+            if not self._stopped:
+                self._log.seek(0)
+                detail = self._log.read().decode("utf8", errors="replace")[-4000:]
+                logger.warning("背景呈现进程退出 (%s): %s", code, detail)
+                self.state_changed.emit("error", tr("背景播放进程已退出，请重试。"))
+                self.stop()
+            self._finish()
+        elif self._deadline is not None and time.monotonic() >= self._deadline:
+            if not self._stopped:
+                self.state_changed.emit("error", tr("背景播放进程启动超时，请重试。"))
+                self.stop()
+            self._process.kill()
+
+    def _finish(self):
+        """停止进程轮询，关闭共享图像、套接字和日志，再移除全局引用并延迟销毁。"""
+        self._poll_timer.stop()
+        self._images.close()
+        if self._socket is not None:
+            self._socket.abort()
+        if self._log is not None:
+            self._log.close()
+            self._log = None
+        _live_presenters.discard(self)
+        self.deleteLater()
