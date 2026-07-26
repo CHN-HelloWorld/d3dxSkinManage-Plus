@@ -638,3 +638,40 @@ A game's private working state records serve a different purpose from named vari
 
 ## Chapter 5: Online mods and updates
 
+### 5.1 Connecting to GameBanana
+
+![Plusa organizing downloads](../images/plusa/supplement/下载更新.webp)
+
+Activate a game, then open **Online Mods**. The app uses the English name in the game's configuration to find a match on GameBanana and saves the result for that game. Changing the English name triggers a new match.
+
+If you see **GameBanana has no entry for this game**, first check the English name on the Games page. You can also use the website search link provided on the page. A network failure and a game that is not listed have different causes: check the connection for the former, and check the game name and the site's listings for the latter.
+
+Configure the proxy in two steps:
+
+1. Under **Settings → General → Network proxy**, turn on the main switch, then use the system proxy or enter a manual address and port.
+2. Under **Settings → Online Mods → Online Mod proxy**, turn on **Enable proxy**.
+
+![Online Mods settings](../images/guide-en/15-在线设置.webp)
+
+*Online browsing, images, downloads, and mod updates all use the Online Mods proxy policy.*
+
+Local categories, importing, and deployment do not require a connection to GameBanana.
+
+### 5.2 Browsing, searching, and details
+
+The online page lets you browse by category, search for mods, change the sort order, and refresh the list. Sort options include **Default**, **Newest**, **Recently updated**, **Most liked**, **Most downloaded**, and **Most viewed**.
+
+![Online browsing with placeholder content](../images/guide-en/24-在线Mod.webp)
+
+*The names, covers, authors, and statistics are tutorial placeholders used to show the browsing controls in the real interface.*
+
+**Hide NSFW**, **Blur NSFW**, and **Show NSFW** control online content previews; the default is to blur them. This preference is saved separately from the display preference for local X-rated mods.
+
+Click a card to open its details, where you can view images, **Overview**, **Description**, **Update**, and **Available files**. An entry with multiple files often offers different versions, optional content, or attachments. Read the author's instructions before choosing a file.
+
+![Online details and file selection](../images/guide-en/29-在线详情.webp)
+
+*The filenames and sizes shown here are also placeholders. Read each file's description when using real entries.*
+
+Author descriptions and downloadable files come from an external site. This tutorial uses placeholder content to explain the controls; actual entries depend on the site's content.
+
