@@ -395,3 +395,84 @@ class _Session:
                 self.command("closeWallpaper", "-location", self.name)
             except Exception:
                 pass
+
+
+class SceneSource(QObject):
+    """向界面提供场景捕获的 Qt 接口，以信号转发后台错误和资源清理完成状态。"""
+
+    error = Signal(str)
+    finished = Signal()
+
+    def __init__(self, engine_path: str, scene_path: str, parent=None):
+        """创建捕获状态并通过弱引用转发线程通知，在对象销毁或应用退出时请求取消。"""
+        super().__init__(parent)
+        reference = weakref.ref(self)
+
+        def notify(kind, message):
+            """向仍存活的 Qt 来源转发错误或完成信号，忽略原生对象已经销毁的情况。"""
+            source = reference()
+            if source is not None:
+                try:
+                    if kind == "error":
+                        source.error.emit(message)
+                    else:
+                        source.finished.emit()
+                except RuntimeError:  # 原生 Qt 对象已销毁。
+                    pass
+
+        self._session = _Session(engine_path, scene_path, notify)
+        self._thread = None
+        # 普通事件回调不依赖 Qt 包装对象的生命周期。
+        self.destroyed.connect(lambda _=None, cancel=self._session.cancel: cancel.set())
+        weakref.finalize(self, self._session.cancel.set)
+        app = QCoreApplication.instance()
+        if app is not None:
+            # 事件循环退出时对象可能尚未销毁，绑定槽会在所属对象销毁时自动断开。
+            app.aboutToQuit.connect(self.stop)
+
+    @property
+    def is_closed(self):
+        """返回捕获线程是否已完成全部资源清理。"""
+        return self._session.closed.is_set()
+
+    @property
+    def window_name(self):
+        """返回仅属于本捕获任务的唯一场景窗口标题。"""
+        return self._session.name
+
+    def start(self, size: tuple[int, int], fps: int = 30) -> None:
+        """设置捕获尺寸与帧率后启动一次非守护线程，确保程序退出时仍能清理迟到窗口。"""
+        if self._thread is not None or self._session.cancel.is_set():
+            return
+        self.resize(size)
+        self.set_fps(fps)
+        # 使用非守护线程，确保解释器退出时清理迟到的原生窗口。
+        self._thread = threading.Thread(target=self._session.run, name=self.window_name, daemon=False)
+        self._thread.start()
+
+    def set_fps(self, fps: int) -> None:
+        """更新捕获节流，不重建场景窗口。"""
+        self._session.fps = max(1, min(60, int(fps)))
+
+    def set_volume(self, volume: int) -> None:
+        # 工作线程仅应用最新滑块值，不在界面线程进行进程通信。
+        """保存限制在零到一百之间的目标音量，由后台线程合并并应用最新值。"""
+        self._session.volume = max(0, min(100, int(volume)))
+
+    def resize(self, size: tuple[int, int]) -> None:
+        """保存至少一像素的目标尺寸，由捕获线程异步调整场景窗口。"""
+        self._session.size = tuple(max(1, int(value)) for value in size)
+
+    def take_frame(self) -> QImage | None:
+        """在互斥锁保护下取走最新独立图像并清空缓存，无新帧时返回 None。"""
+        with self._session.lock:
+            image, self._session.latest = self._session.latest, None
+        return image
+
+    def stop(self) -> None:
+        """请求后台捕获取消并清空待显示图像；尚未启动时直接标记清理完成。"""
+        self._session.cancel.set()
+        with self._session.lock:
+            self._session.latest = None
+        if self._thread is None:
+            self._session.closed.set()
