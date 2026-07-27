@@ -758,3 +758,26 @@ An item's More menu offers:
 
 After ignoring an update, you can use **Undo** in the window's current notification. Undo requires the mod and game to remain valid. After closing the window, do not assume this temporary Undo control will still be available.
 
+### 5.8 Updating the application
+
+Application version updates are under **Settings → Update → Application updates**. Use **Check application updates**.
+
+![Application update settings](../images/guide-en/16-程序更新.webp)
+
+Update availability depends on whether the distribution channel provides a valid update source and a matching package. If the app reports that no update source is configured, obtain the new version through the software publisher's download channel.
+
+When a new version is found, you can read its release notes and release history, then update, ask to be reminded later, or skip that version.
+
+The one-click update process downloads, checks, and extracts the package, then makes a backup according to your settings. A separate updater replaces the application and restarts it. Keep the `Updater/` folder supplied with the distribution; you do not need to launch the updater directly.
+
+- Finish active tasks before installing an update, then close the application when prompted.
+- Updates preserve your mods, settings, and plugins. Regular backups of personal data are still recommended.
+- The download source can be automatic or a specific mirror. Automatic mode falls back through the candidate sources.
+- If the updater reports an error, retain both application and updater logs, check paths and files in use, then retry.
+
+Application updates and GameBanana mod updates serve different purposes. The former upgrades the manager; the latter replaces resources in the library.
+
+---
+
+## Chapter 6: Settings
+
