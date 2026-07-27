@@ -806,3 +806,29 @@ Deleting a category, deleting a game, and clearing a deployment folder each have
 
 **Auto recommend** saves automatic mode, allowing the app to recalculate for a different device. Manually changing the number switches to a fixed limit. Higher concurrency is not always faster; lower it for mechanical hard drives, large archives, or limited memory.
 
+### 6.3 General → Network proxy
+
+| Setting | Default | Usage |
+| --- | --- | --- |
+| Enable proxy | Off | When enabled, application updates can use this proxy configuration |
+| Use system proxy | On | Reads the proxy from Windows |
+| Protocol | HTTP | Manual mode supports HTTP, HTTPS, and SOCKS5 |
+| Proxy address / Port | 127.0.0.1 / 7890 | Example defaults; these must match your proxy software |
+| Test connection | Manual action | Checks external network connectivity and latency through the proxy |
+
+Online Mods also requires **Enable proxy** in its own section. If Online Mods is using the proxy when you turn off the main switch, the app asks whether to disable that use as well.
+
+If no configuration is detected in system proxy mode, check Windows settings first. In manual mode, check the address, port, and whether the proxy application is running.
+
+### 6.4 General → Download data
+
+This page shows total package storage, split into installed and uninstalled packages, and provides:
+
+| Control | Purpose |
+| --- | --- |
+| Delete installer packages automatically | On by default; removes the corresponding source package after the mod is successfully added to the library |
+| Clean up installed | Removes downloaded source packages already added to the library, after confirmation |
+| Open folder | Opens the actual downloads folder |
+
+Keep downloads that have not yet been installed until you install them or decide how to handle them. These source packages are stored separately from the managed mod contents in the library, so cleaning up installed packages reduces duplicate storage.
+
