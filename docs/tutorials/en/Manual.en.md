@@ -711,3 +711,40 @@ Downloaded source packages are stored in `<data-root>/data/downloads/`. They are
 
 **Clean up installed** removes source packages that have been confirmed as added to the library, while keeping downloads that have not yet been installed. Deleting a source package does not delete the imported mod from the library, but retaining source packages is not a substitute for a complete backup.
 
+### 5.5 Checking installed mods for updates
+
+Click **Check for updates** in **Category Overview** to open the mod updates window. Checks depend on saved GameBanana source information. Mods installed from the online page have the relevant records; other local packages may not.
+
+The update window separates check progress from the update list. You can search mod names and view local and new version information, update notes, file dates, and estimated download sizes.
+
+If a check fails or covers only some items, the interface reports that the check is incomplete. This does not mean that all mods are up to date. Use **Check again** once the network connection is restored.
+
+Automatic checks are configured under **Settings → Online Mods → Mod updates**:
+
+| Setting | Default and behavior |
+| --- | --- |
+| Check Mod updates automatically | On |
+| Check on startup | On, with a minimum interval between checks |
+| Scheduled check frequency | Off by default; also offers Every 6 hours, Every 12 hours, and Daily |
+| Notification style | Badge only by default; a status bar notice can also be added |
+| Check concurrency | Auto recommend by default; lets you adjust concurrency in the update workflow |
+
+Manual and automatic checks have different triggers. For everyday use, refer to the latest check results shown in the update window.
+
+### 5.6 Updating one or more mods
+
+Click **Update** for an individual item or **Update all** for a batch. If an entry offers multiple files, **Choose update files** appears first. You must select one file for each relevant mod before starting.
+
+Tasks may pass through preparation, download, verification, extraction, and installation stages. Use the **Updated** status or the results summary to confirm completion.
+
+| Action | Behavior |
+| --- | --- |
+| Pause / Resume for one item | Controls the task at stages that currently allow pausing |
+| Pause all / Resume all / Stop all | Applies to all unfinished updates for the current game, including tasks hidden by the search filter |
+| Close update window | If tasks are running, you can return to them, stop unfinished updates, or continue in the background |
+| Stop | Unfinished items keep their old versions; completed updates are not undone. You may need to wait during installation commit or final cleanup |
+
+If preparing the new content fails, check the specific file or verification error. The app retains the materials needed for recovery. Do not manually delete source containers, working folders, or transaction records during an update.
+
+Export or back up important custom changes beforehand. Updating a mod and **Back up the previous version** for application updates are separate features; the latter does not replace a mod backup.
+
