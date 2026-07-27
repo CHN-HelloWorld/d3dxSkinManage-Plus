@@ -675,3 +675,39 @@ Click a card to open its details, where you can view images, **Overview**, **Des
 
 Author descriptions and downloadable files come from an external site. This tutorial uses placeholder content to explain the controls; actual entries depend on the site's content.
 
+### 5.3 Downloading and choosing an installation destination
+
+Select an available file in the details view and click **Download**. When the download finishes, the app prepares to import it into a destination category.
+
+Installation can proceed when there is one unambiguous category match. Otherwise, **Choose installation destination** appears:
+
+- Select an existing category in the tree. You can search by category name.
+- Check the destination game and category to avoid installing into another game.
+- If the interface offers to save the site's category name as the English name, you can do so to help future matching.
+- If the destination folder already has an English name, follow the overwrite confirmation prompt.
+
+Online installation still checks the archive, metadata, and destination path. A finished download does not necessarily mean the mod has been added to the library; wait for the installation result.
+
+If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
+
+### 5.4 Managing downloads
+
+Open **Downloads** from the online page to see queued, downloading, paused, completed, and failed tasks, along with their progress, speed, and size.
+
+| Control or menu item | Purpose |
+| --- | --- |
+| Pause / Resume | Control downloads that support pausing |
+| Cancel | Stop the current task |
+| Retry | Retry a failed download |
+| Open Mod category | Locate an installed mod |
+| Show in File Explorer | Locate a retained download file |
+| Remove from list | Remove the record |
+| Delete, including local files | Also handle that download's local files; follow the confirmation prompt |
+| Clear completed / Clear all | Process download list entries in bulk; check the scope in the prompt before proceeding |
+
+Downloaded source packages are stored in `<data-root>/data/downloads/`. They are not disposable image caches.
+
+**Delete installer packages automatically**, under **Settings → General → Download data**, is on by default. **The corresponding source package is deleted only after the mod has been successfully added to the library.** Turn this off to retain packages for an offline archive.
+
+**Clean up installed** removes source packages that have been confirmed as added to the library, while keeping downloads that have not yet been installed. Deleting a source package does not delete the imported mod from the library, but retaining source packages is not a substitute for a complete backup.
+
