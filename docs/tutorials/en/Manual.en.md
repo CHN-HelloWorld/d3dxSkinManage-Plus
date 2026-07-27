@@ -748,3 +748,13 @@ If preparing the new content fails, check the specific file or verification erro
 
 Export or back up important custom changes beforehand. Updating a mod and **Back up the previous version** for application updates are separate features; the latter does not replace a mod backup.
 
+### 5.7 Ignoring updates and restoring notifications
+
+An item's More menu offers:
+
+- **View on GameBanana**: open the source page in a browser.
+- **Ignore this version**: skip notifications for this version.
+- **Ignore this Mod**: stop notifications for future updates to this mod as well.
+
+After ignoring an update, you can use **Undo** in the window's current notification. Undo requires the mod and game to remain valid. After closing the window, do not assume this temporary Undo control will still be available.
+
