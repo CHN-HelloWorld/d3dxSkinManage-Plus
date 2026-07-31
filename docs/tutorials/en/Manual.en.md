@@ -832,3 +832,43 @@ This page shows total package storage, split into installed and uninstalled pack
 
 Keep downloads that have not yet been installed until you install them or decide how to handle them. These source packages are stored separately from the managed mod contents in the library, so cleaning up installed packages reduces duplicate storage.
 
+### 6.5 General → Images and cache
+
+This page separates the image memory cache from the disk cache, each with its own limit and cleanup controls.
+
+![Image memory and disk caches](../images/guide-en/27-图片与缓存.webp)
+
+| Item | Default or range | Description |
+| --- | --- | --- |
+| Image memory cache | Auto recommend; manual range 64–8192 MiB | Keeps recently decoded images so returning to them is faster |
+| Current image memory | Live statistics | Measures only the image cache, not the whole application's memory use |
+| Clear image memory | Button | Releases cache entries that can be freed; images currently on screen remain in memory |
+| Disk cache limit | 512 MB by default; 0 means unlimited | Manages online images and other caches that can be regenerated |
+| Disk slider range | Maximum 4096 MB by default | Controls how far the slider can go, rather than the effective cache limit |
+| Clear disk cache | Requires confirmation | Clears regenerable caches while retaining downloaded mod source packages |
+
+The automatic memory allowance varies with your device and display. Use the recommendation shown on your device. Lowering the allowance may require images to be decoded again when revisited, but does not delete mods or their metadata.
+
+The disk cache is not a backup folder. Do not manually clear `data/`, operation recovery records, or `.d3dxmeta/` as though they were caches.
+
+### 6.6 Personalization → Appearance
+
+![Appearance settings](../images/guide-en/12-设置个性化.webp)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Theme | Dark | Also offers Light and Follow System; the latter follows the Windows app theme |
+| Font | System default | Choose and preview a font installed on this computer |
+| Language | Simplified Chinese | Options come from language packs in the configuration folder |
+
+Restart the app after switching languages or editing a language pack to refresh the entire interface.
+
+To create another language pack:
+
+1. Click **Open language packs folder**.
+2. Copy an existing language folder and name it with a language code, such as `ja-JP`.
+3. Edit the UTF-8 `strings.json` file, preserving the source-text keys and dynamic placeholders.
+4. Return to Settings, click **Refresh list**, select the language, and restart.
+
+Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
+
