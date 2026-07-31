@@ -914,3 +914,37 @@ Shortcuts depend on focus: editing in a text box, working with items in Category
 
 Commands registered by plugins can also appear in the relevant groups. See Appendix A for the complete default shortcut table.
 
+### 6.9 Import and export
+
+![Import and export settings](../images/guide-en/14-导入与导出.webp)
+
+The **Import** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod import format | 7z | Folder inputs are compressed to this format; archives keep their original format when conversion is not forced |
+| Always use the import format | Off | Extracts and recompresses when needed |
+| Import concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+The **Export** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod export format | ZIP | Also offers 7z, RAR, or a folder |
+| Always use the export format | Off | When off, the source archive format may be retained; this option is unnecessary for folder exports |
+| Preserve the category folder structure | On | Organizes output by category path |
+| Include metadata and previews | Off | Enable to share tags, additional previews, and named variants |
+| Export concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+Creating RAR archives requires WinRAR. Reading RAR archives does not require a separate archiver installation. Read the explanations for unavailable options before choosing an output format.
+
+The current category determines the destination for a local import. For online installation, check the category in the installation destination selection flow.
+
+### 6.10 Online Mods
+
+The **Online Mod proxy** subpage provides a switch and **Open proxy settings**. It uses the proxy configured in General. You cannot enable the online proxy separately while the main switch is off.
+
+The **Mod updates** subpage provides automatic checks, startup checks, scheduled frequency, notification style, and check concurrency. Automatic and startup checks are on by default, scheduled checks are off, and notifications use **Badge only**. Concurrency uses **Auto recommend**, with a manual range of 1–16.
+
+See Chapter 5 for pausing, resuming, background tasks, and file selection in the update window.
+
