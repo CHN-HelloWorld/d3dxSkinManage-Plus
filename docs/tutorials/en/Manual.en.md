@@ -872,3 +872,45 @@ To create another language pack:
 
 Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
 
+### 6.7 Personalization → Window background
+
+You can turn the background off or use an image, video, or WE scene.
+
+![Choosing a window background source](../images/guide-en/28-整窗背景.webp)
+
+| Source | What to select |
+| --- | --- |
+| Close (off) | Uses the theme's background color |
+| Image | A supported local image such as PNG, JPG, JPEG, BMP, or WebP |
+| Video | A supported local video such as MP4, WebM, MKV, AVI, or MOV |
+| WE scene | The `project.json` from a Wallpaper Engine scene project, together with the local Wallpaper Engine application configuration |
+
+For WE scenes, use **Find automatically** or manually specify an application path such as `wallpaper64.exe`. Keep the complete scene project and its resource files; copying only the JSON file is not enough to play it.
+
+Display settings:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| Image fit | Fill (crop to cover) | Can be changed to fit; images also support Tile |
+| Background overlay | 45 for Dark, 30 for Light | Saved separately for each theme; darkens in Dark mode and softens and brightens in Light mode |
+| Background blur | 60 | Range 0–100; 0 turns it off |
+| Background frame rate | 30 FPS | Used for animated backgrounds; adjustable through the available options |
+| Scene quality | 2× | WE scenes can use 1× to reduce resource use |
+| Background volume | Muted | Adjust sound for supported animated backgrounds as needed |
+
+Animated backgrounds provide pause, resume, and retry controls. They pause automatically when the window is minimized and resume when it is restored. Restoring the window does not override a manual pause.
+
+If playback fails, check that the file still exists, its encoding is supported, and the WE path and project are complete. Image backgrounds do not require Wallpaper Engine, nor do ordinary local videos.
+
+### 6.8 Shortcuts → Key bindings
+
+![Shortcut settings](../images/guide-en/13-快捷键.webp)
+
+Commands are grouped by where they are used. Click the corresponding key binding to record a shortcut, then save it. Combinations of Ctrl / Alt / Shift with one primary key are supported.
+
+When a conflict is found, the app identifies the conflicting command. Confirming replacement may leave the previously assigned command unbound; canceling keeps the original binding. System-reserved combinations cannot be assigned to ordinary commands.
+
+Shortcuts depend on focus: editing in a text box, working with items in Category Overview, and copying in the presets list each have their own context. The manager does not provide global hotkeys that work in other applications.
+
+Commands registered by plugins can also appear in the relevant groups. See Appendix A for the complete default shortcut table.
+
