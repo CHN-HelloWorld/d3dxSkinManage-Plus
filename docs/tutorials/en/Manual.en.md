@@ -976,3 +976,21 @@ If the reset fails, the app keeps the original settings and displays a message. 
 
 ---
 
+## Chapter 7: Tools, plugins and About
+
+### 7.1 Tools
+
+![Category and maintenance tools](../images/guide-en/17-工具箱.webp)
+
+Tools is divided into category organization, maintenance and troubleshooting, and tools contributed by enabled plugins.
+
+| Entry | Purpose |
+| --- | --- |
+| Import category preset | Adds categories and category images to the destination game |
+| Export category preset | Shares the current game's complete category tree, optionally with images |
+| Rebuild Index | Rescans the file library to restore the index |
+| View Logs | Shows runtime records by startup session |
+| Plugin tools | Runs features provided by enabled plugins |
+
+Cache cleanup is under **Settings → General → Images and cache**. Downloaded source package cleanup is under **General → Download data**. To export mods, select the items in Category Overview.
+
