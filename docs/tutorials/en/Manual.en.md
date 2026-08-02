@@ -1118,3 +1118,19 @@ The manager's version and update controls are under **Settings → Update → Ap
 
 ---
 
+## Chapter 8: Data, backups and troubleshooting
+
+### 8.1 Finding the actual data root
+
+![Plusa helping with backups and troubleshooting](../images/plusa/supplement/备份排障.webp)
+
+The application first tries to store personal data beside the application. If that folder is not writable, it uses the Windows user data directory, usually:
+
+```text
+%LOCALAPPDATA%/d3dxSkinManage-Plus/
+```
+
+Use **Open language packs folder**, **Open plugins folder**, or **Open Log Folder** to check the location currently in use, then identify `config/` and `data/` under the same data root.
+
+A single-file release also includes folders for languages, plugins, tutorials, and media. Move the complete distribution instead of keeping only the executable.
+
