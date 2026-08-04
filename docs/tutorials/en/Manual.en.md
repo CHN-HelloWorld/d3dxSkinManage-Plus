@@ -1197,3 +1197,41 @@ The app checks managed source files, metadata, and deployment records before an 
 
 These messages prevent operations from continuing on the wrong item. **Do not delete markers, the database, or transaction records to dismiss the message.** Those records may contain the file contents and path information needed for recovery.
 
+### 8.6 Common problems
+
+| Symptom | What to check |
+| --- | --- |
+| The game list is empty after startup | Check that the correct data root is in use; the list is expected to be empty on a first installation |
+| An activation prompt covers the page | Double-click the target game on the **Games** page |
+| Cannot import at the root level | Open a category first |
+| Cannot find an imported mod | Check the current game, category, search text, type, rating, and tag filters |
+| Enabling a mod has no effect in the game | Check the deployment location, whether the loader is running, mod compatibility with the game version, and whether you have reloaded |
+| Space, F2, or another shortcut does nothing | Select a single item in Category Overview and move focus out of text boxes, then check custom bindings |
+| The key bindings page has no bindings | The mod's INI may not contain recognizable bindings, or loading may not have finished |
+| A variant cannot be saved | Enable the mod, confirm that it supports persistent variables, and let the loader write the current configuration first |
+| A variant's state is shown as unconfirmed | Save the configuration in the game and read it again, or explicitly choose to fill missing values with defaults |
+| The game still shows the old appearance after changing a variant | Reload as configured in the loader, and avoid letting unwritten game state overwrite the saved selection |
+| The online page says the game is not listed | Check the game's English name and the site's listings |
+| A download fails or is slow | Test the network and proxy, check free disk space, then retry |
+| A download is complete but not installed | Check the pending installation destination, switch back to the game it belongs to, and review the task result |
+| An update check is incomplete | Resolve network or source-information errors, then check again |
+| No application update is available | Check whether an update source is configured and whether the publisher has released a new package |
+| RAR can be read but cannot be exported | Creating RAR archives requires WinRAR |
+| Image memory use is high | Adjust the image memory allowance or clear the image cache; do not clear resource data |
+| A video or WE scene does not play | Check the asset path, format, complete scene folder, and local WE application |
+| Items are still missing after rebuilding | Review the report for invalid metadata, identity conflicts, or missing source files, and address each item |
+
+### 8.7 Reporting a problem
+
+Use **Tools → View Logs** to find the startup session in which the problem occurred, and retain the records before and after the operation. Include:
+
+- Application and Windows versions.
+- The page you started on and the sequence of actions.
+- The expected result, actual result, and complete error text.
+- Logs for the relevant period; include updater logs for updater problems.
+- Whether files were moved or renamed outside the app, disks were disconnected, or custom plugins were involved.
+
+You can replace or obscure game names, mod names, and personal paths in screenshots while keeping buttons, statuses, and error messages visible. Check logs for personal paths or credentials before sharing them too.
+
+---
+
