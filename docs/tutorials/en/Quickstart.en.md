@@ -73,3 +73,31 @@ In the **New Category** dialog:
 
 The new category card appears in the overview after creation. **Double-click this card to enter it**. The breadcrumb at the top should show the name you just entered; the Mod you import in the next step will go into this category.
 
+## Step 4: Import a Mod
+
+After entering your new category, drag an archive or folder into the content area, or use the default shortcut `Ctrl+I`. In an empty category, you can also click **Import Mod**.
+
+![Open the import dialog from an empty category](../images/guide-en/32-导入入口.webp)
+
+*① Check the breadcrumb to confirm your category. ② Click **Import Mod**. This screenshot uses the empty `待整理` (To organize) category as an example; enter the category you actually created.*
+
+![Import a Mod](../images/guide-en/05-导入Mod.webp)
+
+*You can add multiple sources and choose an age rating and cover image for each. The target category is the location you were in when you opened the import dialog.*
+
+Click **Confirm Import**. Progress appears in the task center at the bottom-right of the main window; expand it to inspect each item. When pausing or stopping, follow the prompts to keep completed items or roll back this import.
+
+After import, use **Edit Mod** to adjust the name, author, tags, and other information.
+
+## Step 5: Enable the Mod
+
+Double-click the Mod card, or select it and click **Enable** in the details panel. You can also use the default shortcut: keep focus in the overview list, **select a single Mod, and press Space**.
+
+![Select a disabled Mod and click Enable on the right](../images/guide-en/33-启用Mod.webp)
+
+*① Select the Mod you want to use. ② Click **Enable**. ③ Wait for completion, then check the **Enabled** status. The action button changes to **Disable**.*
+
+Enabling a Mod for the first time extracts its library archive into the deployment folder. Wait for the operation to finish. If another Mod is already enabled for the same character, use the conflict prompt to decide whether to replace it.
+
+> ⚠️ If you see **Mod folder not configured**, return to **Games**, enter and save the deployment folder, then try again.
+
