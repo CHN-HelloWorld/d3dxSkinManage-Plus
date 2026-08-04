@@ -101,3 +101,35 @@ Enabling a Mod for the first time extracts its library archive into the deployme
 
 > ⚠️ If you see **Mod folder not configured**, return to **Games**, enter and save the deployment folder, then try again.
 
+## Step 6: Launch the loader and game
+
+Use **Launch Mod Loader** and **Launch Game** in the left navigation, or the default shortcuts `F6` and `F7`. These actions require the corresponding paths to be configured first. You can also start them yourself as instructed by your loader.
+
+If the game is already running, use the loader's reload action. 3DMigoto's default configuration commonly uses **F10**; if you changed it, follow your loader configuration. This key is used inside the game and is separate from the manager's shortcuts.
+
+## No effect? Check in this order
+
+| Symptom | What to do |
+| --- | --- |
+| The page says **Activate a game environment first** | Return to **Games** and double-click the target card |
+| You cannot import at the root level | Double-click a category to enter it first |
+| You cannot enable a Mod | Check **Mod folder**, whether the target disk is online, and any current task messages |
+| The application shows the Mod as enabled, but the game does not change | Check the deployment folder, whether the loader is running, and the Mod's version compatibility, then reload through the loader |
+| Extraction or file verification fails | Keep the original archive, check that the download is complete and files are not in use, then retry according to the specific error |
+| A shortcut does nothing | Check the current binding in **Settings → Shortcuts** and move focus out of text fields |
+| Categories or Mods have not appeared yet | Use the default `F5` to refresh; if the mismatch remains, use **Tools → Rebuild Index** |
+| You need to report an issue | Open **Tools → View Logs** and provide your version, the steps you took, and the logs for the relevant time period |
+
+## What to read next
+
+| What you want to do | Manual section |
+| --- | --- |
+| Edit tags, manage preview images, move items in bulk, or export | Chapter 3 |
+| Save a complete Mod setup or manage multiple appearances for one Mod | Chapter 4 |
+| Find, install, and update Mods online | Chapter 5 |
+| Configure backgrounds, language, cache, and shortcuts | Chapter 6 |
+| Share category trees, use plugins, and view logs | Chapter 7 |
+| Back up, migrate, or troubleshoot | Chapter 8 |
+| Write your own plugin or add menus and tool pages | [Plugin development guide](PluginGuide.en.md) |
+
+> 💡 All shortcuts listed in this tutorial are the default bindings. You can change them in **Settings → Shortcuts**; the bindings shown in the interface take precedence.
