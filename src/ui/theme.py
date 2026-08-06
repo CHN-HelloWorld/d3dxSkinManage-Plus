@@ -453,3 +453,256 @@ def radius(name: str) -> int:
 def space(name: str) -> int:
     """读取命名间距，未知名称回退中等间距。"""
     return SPACING.get(name, SPACING["md"])
+
+
+def font(key: str) -> str:
+    """返回字体令牌的字符串值；字体族实时读取已配置的 QSS 字体列表。"""
+    if key == "family":
+        from src.ui.fonts import qss_family
+
+        return qss_family()
+    return str(FONT.get(key, ""))
+
+
+# QSS 渲染
+
+
+def _qss_vars(theme: str) -> dict[str, str]:
+    """汇总颜色、圆角、间距和字体为 QSS 占位符映射，并为尺寸补充像素单位。"""
+    pal = _palette(theme)
+    vars_: dict[str, str] = dict(pal)
+    for k, v in RADII.items():
+        vars_[f"radius.{k}"] = f"{v}px"
+    for k, v in SPACING.items():
+        vars_[f"space.{k}"] = f"{v}px"
+    vars_["font.family"] = font("family")
+    vars_["font.size"] = f"{FONT['size']}px"
+    vars_["font.size_small"] = f"{FONT['size_small']}px"
+    vars_["font.size_title"] = f"{FONT['size_title']}px"
+    vars_["font.size_subtitle"] = f"{FONT['size_subtitle']}px"
+    return vars_
+
+
+_PLACEHOLDER = re.compile(r"\{\{\s*([a-zA-Z0-9_.]+)\s*\}\}")
+
+
+def render_qss(theme: str) -> str:
+    """读取 QSS 模板并注入当前主题 token，返回最终样式表字符串。"""
+    theme = resolve_auto(theme)
+    tmpl_path = get_resources_dir() / "themes" / "fluent.qss"
+    try:
+        template = tmpl_path.read_text(encoding="utf-8")
+    except OSError as e:
+        logger.error("读取 QSS 模板失败: %s", e)
+        return ""
+
+    vars_ = _qss_vars(theme)
+
+    # 下拉箭头：按主题着色的 chevron-down，供 QSS QComboBox::down-arrow 引用。
+    # 延迟导入 icons 避免与其对 theme 的依赖形成循环。
+    try:
+        from src.ui import icons
+
+        arrow = icons.write_themed_svg("actions/chevron-down", "text.secondary", theme, tag=f"down-{theme}")
+    except Exception:
+        arrow = None
+    if not arrow:
+        arrow = str(get_resources_dir() / "icons" / "fluent" / "actions" / "chevron-down.svg")
+    vars_["arrow.down"] = arrow.replace("\\", "/")
+
+    def _sub(m: re.Match[str]) -> str:
+        """替换一个已知样式令牌，未知占位符记录警告并显示洋红色以暴露配置问题。"""
+        key = m.group(1)
+        if key not in vars_:
+            logger.warning("QSS 未知占位符: {{%s}}", key)
+            return "#ff00ff"
+        return vars_[key]
+
+    return _PLACEHOLDER.sub(_sub, template)
+
+
+def _rgba(hex_color: str, alpha: float) -> str:
+    """把 #rrggbb 转成 QSS 的 rgba(r,g,b,a)。解析失败回退原值。"""
+    h = hex_color.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    try:
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    except (ValueError, IndexError):
+        return hex_color
+    return f"rgba({r}, {g}, {b}, {alpha:.2f})"
+
+
+def background_overlay_qss(theme: str) -> str:
+    """构造自定义背景启用时的表面覆盖样式。
+
+    布局容器透明，内容表面使用半透明底色；导航只保留一层填充，
+    预览占位透出所属表面。输入及弹窗使用各自可读的背景。
+    """
+    theme = resolve_auto(theme)
+    layer = color("bg.layer", theme)
+    card = color("bg.card", theme)
+    accent = color("accent", theme)
+    stroke = color("stroke.card", theme)
+    radius_card = f"{RADII['card']}px"
+
+    card_fill = _rgba(card, ACRYLIC["card"])
+    panel_fill = _rgba(layer, ACRYLIC["panel"])
+    list_fill = _rgba(card, ACRYLIC["list"])
+    hover_fill = _rgba(color("bg.hover", theme), ACRYLIC["strong"])
+    nav_fill = _rgba(layer, ACRYLIC["nav"])
+    # 导航已有 60% 容器底色；轻叠交互色，避免再次用 strong 遮住背景。
+    nav_hover_fill = _rgba(color("bg.pressed", theme), 0.50)
+    nav_pressed_fill = _rgba(color("bg.pressed", theme), 0.65)
+    nav_selected_fill = _rgba(accent, 0.26)
+    # 详情面板提高填充不透明度，保证长文本和文件列表可读。
+    gb_detail_fill = _rgba(layer, 0.90)
+    # 菜单和提示的透明属性由弹窗过滤器设置，此处提供未应用原生效果时的底色。
+    menu_solid = color("bg.card", theme)
+    input_fill = _rgba(color("control.bg", theme), 0.55)
+    popup_fill = _rgba(card, 0.62)
+    btn_fill = _rgba(card, 0.55)
+    group_fill = _rgba(layer, 0.50)
+
+    return (
+        "/* ===== F2 背景图：亚克力材质覆盖层 ===== */\n"
+        # 普通容器透明，透出底层背景绘制层
+        "QWidget { background-color: transparent; }\n"
+        # 对话框 / 菜单栏：不透明，聚焦优先
+        f"QDialog, QMessageBox, QMenuBar {{ background-color: {layer}; }}\n"
+        # 左侧导航：单层亚克力（容器着色，列表/按钮透出，避免双层叠加过暗）
+        f"#navContainer {{ background-color: {nav_fill}; }}\n"
+        "#navList, #navLaunchBtn, #navCollapseBtn { background-color: transparent; }\n"
+        "#navList::item:hover:!selected, #navLaunchBtn:hover, #navCollapseBtn:hover {"
+        f" background-color: {nav_hover_fill}; }}\n"
+        "#navLaunchBtn:pressed, #navCollapseBtn:pressed {"
+        f" background-color: {nav_pressed_fill}; }}\n"
+        # 选中态保留强调色与指示条，同时透出导航下方的背景。
+        '#navList::item:selected, #navLaunchBtn[current="true"] {'
+        f" background-color: {nav_selected_fill}; }}\n"
+        # 设置卡片背景后须显式绘制边框和圆角，以替代失效的原生面板边缘。
+        "#charCard, #modCard, #galleryItem, #gameCard, #gbModCard {\n"
+        f"    background-color: {card_fill};\n"
+        f"    border: 1px solid {stroke};\n"
+        f"    border-radius: {radius_card};\n"
+        "}\n"
+        "#charCard:hover, #modCard:hover, #galleryItem:hover,"
+        " #gameCard:hover, #gbModCard:hover {\n"
+        f"    background-color: {hover_fill};\n"
+        f"    border-color: {accent};\n"
+        "}\n"
+        # 商店卡片使用统一的亚克力底色，信息区与预览占位区保持透明，
+        # 避免子控件背景叠加或形成独立的矩形边界。
+        "#charThumb, #modPreview, #galleryImage, #gamePreview"
+        " { background-color: transparent; }\n"
+        # 预览面板只绘制一层亚克力背景，内部信息区保持透明，
+        # 并移除基础样式边框，避免多层叠加和矩形边缘遮盖圆角。
+        f"#previewPanel {{ background-color: {panel_fill}; border-radius: {radius_card};"
+        f" border: none; }}\n"
+        "#previewInfoFrame { background-color: transparent; }\n"
+        # 商店详情栏（悬浮 QFrame）：单层亚克力面板 + 边框，内部滚动区由内联置透明
+        f"#gbDetailPanel {{ background-color: {gb_detail_fill}; border: 1px solid {stroke};"
+        f" border-radius: {radius_card}; }}\n"
+        # 面包屑条：亚克力（其底色实际由内联 surface_color 设定，这里回退处理）
+        f"#breadcrumbFrame {{ background-color: {panel_fill}; border-radius: {radius_card}; }}\n"
+        # 设置和工具页的分组框使用低不透明度面板，并将标题置于面板内。
+        # 按 objectName 定位面板，避免 frameShape="6" 选择器同时匹配 QScrollArea，
+        # 使画廊、商店和工具页的滚动内容区出现不透明底色。
+        "QGroupBox {\n"
+        f"    background-color: {group_fill};\n"
+        "    margin-top: 0;\n"
+        "    padding: 26px 12px 12px 12px;\n"
+        "}\n"
+        "QGroupBox::title {\n"
+        "    subcontrol-origin: padding;\n"
+        "    subcontrol-position: top left;\n"
+        "    top: 6px; left: 10px;\n"
+        "}\n"
+        # 滚动区视口的底色（默认 StyledPanel + 视口 autofill）无法被全局选择器清掉，
+        # 只有「内联」QScrollArea{background:transparent} 才能透出——见各页 scroll 代码。
+        # 列表 / 表格 / 树：内容承载面，亚克力（#navList 已被上面置透明，特异度更高）
+        "QTableWidget, QTableView, QTreeWidget, QTreeView, QListView {\n"
+        f"    background-color: {list_fill};\n"
+        "}\n"
+        # 为输入和弹窗重新声明背景，避免继承通用容器的透明规则。
+        # 右键菜单 / 提示：不透明，避免「过于透明」看不清
+        f"QMenu {{ background-color: {menu_solid}; }}\n"
+        f"QToolTip {{ background-color: {menu_solid}; }}\n"
+        # 输入 / 下拉 / 数字框：亚克力（搜索栏、排序/筛选下拉等）
+        "QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox, QComboBox {\n"
+        f"    background-color: {input_fill};\n"
+        "}\n"
+        # 下拉弹窗：亚克力（特异度 2，需 ≥ 基础同名规则）
+        f"QComboBox QAbstractItemView {{ background-color: {popup_fill}; }}\n"
+        # 普通按钮：轻亚克力可见（强调按钮 [accent] 特异度更高，保持原强调色）
+        f"QPushButton {{ background-color: {btn_fill}; }}\n"
+        # 预设栏按钮（QToolButton，需做成下拉框那样的亚克力条）
+        f"#presetBtn {{ background-color: {input_fill};"
+        f" border: 1px solid {color('stroke.control', theme)}; border-radius: {RADII['control']}px; }}\n"
+        # 悬停反馈：#presetBtn(id) 比基础 QToolButton:hover 特异度高会盖掉它，故需显式补回
+        f"#presetBtn:hover {{ background-color: {hover_fill}; }}\n"
+    )
+
+
+def _with_selector_attribute(qss: str, attribute: str) -> str:
+    """在伪选择器之前给规则目标增加属性。
+
+    跟踪括号和引号，保留属性值、后代关系和子控件选择器的语义。
+    """
+    qss = re.sub(r"/\*.*?\*/", "", qss, flags=re.S)
+
+    def selectors(source: str) -> str:
+        """解析逗号分隔的 QSS 选择器，在末级伪状态之前插入属性，并保留引号与属性内部字符。"""
+        pieces = []
+        start = 0
+        depth = 0
+        quote = ""
+        escaped = False
+        pseudo = None
+        for i, char in enumerate(source + ","):
+            if quote:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == quote:
+                    quote = ""
+            elif char in "\"'":
+                quote = char
+            elif char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+            elif depth == 0:
+                if char == ",":
+                    end = len(source[:i].rstrip())
+                    at = pseudo if pseudo is not None else end
+                    pieces.append(source[start:at].strip() + attribute + source[at:end])
+                    start = i + 1
+                    pseudo = None
+                elif char.isspace() or char in ">+~":
+                    # 属性加在最右侧目标控件上，并忽略伪选择器后的空白。
+                    if source[i:].strip() and not source[i:].lstrip().startswith(","):
+                        pseudo = None
+                elif char == ":" and pseudo is None:
+                    pseudo = i
+        return ", ".join(pieces)
+
+    return re.sub(r"([^{}]+)\{([^{}]*)\}", lambda match: selectors(match[1]) + " {" + match[2] + "}", qss)
+
+
+def appearance_qss(theme: str) -> str:
+    """在同一样式表保留两种背景状态，便于分批切换。
+
+    为基础规则补充等权重条件，避免背景属性意外覆盖强调、禁用和悬停规则。
+    """
+    return (
+        _with_selector_attribute(render_qss(theme), "[enabled]")
+        + "\n"
+        + _with_selector_attribute(background_overlay_qss(theme), '[_backgroundSurface="true"]')
+        + f'\nQDialog[dialogFrameInstalled="true"] {{ background-color: {color("mod_updates.surface", theme)};'
+        + f" border: 1px solid {color('mod_updates.control', theme)}; border-radius: 10px; }}"
+        + '\nQDialog[_dialog_acrylic="true"],'
+        + ' QDialog[dialogFrameInstalled="true"][_dialog_acrylic="true"]'
+        + " { background-color: transparent; border: none; }"
+    )
