@@ -295,3 +295,86 @@ def _build_palette(theme: str) -> dict[str, str]:
         settings_colors = _SETTINGS_LIGHT_COLORS
     pal.update({f"settings.{key}": value for key, value in settings_colors.items()})
     return pal
+
+
+def _palette(theme: str | None = None) -> dict[str, str]:
+    """解析主题名并按主题缓存完整语义色板。"""
+    theme = _resolve(theme)
+    if theme not in _palette_cache:
+        _palette_cache[theme] = _build_palette(theme)
+    return _palette_cache[theme]
+
+
+def _resolve(theme: str | None) -> str:
+    """接受有效的显式主题名，否则回退当前应用主题。"""
+    if theme in _VALID_THEMES:
+        return theme  # type: ignore[return-value]
+    return _current_theme
+
+
+# 公共 API
+
+
+def set_theme(theme: str) -> str:
+    """设置当前主题（``light`` / ``dark`` / ``auto``）。返回解析后的实际主题名。"""
+    global _current_theme
+    _current_theme = resolve_auto(theme)
+    return _current_theme
+
+
+def current_theme() -> str:
+    """返回当前应用使用的主题名称。"""
+    return _current_theme
+
+
+# 快捷键页面使用局部对比度调色板，强调色仍跟随全局主题。
+_SHORTCUT_COLORS = {
+    "light": {
+        "text.tertiary": "#737373",
+        "warning": "#8d5300",
+        "warning.subtle": "#fff5e4",
+        "success.subtle": "#edf6ec",
+        "accent.subtle": "#e8f1fa",
+        "accent.hover": "#005aab",
+        "key.shadow": "#10000000",
+        "scrollbar.handle": "#bfbfbf",
+    },
+    "dark": {
+        "text.tertiary": "#a0a0a0",
+        "stroke.card": "#383838",
+        "stroke.control": "#494949",
+        "stroke.divider": "#383838",
+        "bg.hover": "#343434",
+        "bg.pressed": "#3c3c3c",
+        "warning.subtle": "#413821",
+        "success.subtle": "#293c28",
+        "accent.subtle": "#243e4b",
+        "accent.hover": "#78d2ff",
+        "text.on_accent": "#14222a",
+        "key.shadow": "#33000000",
+        "scrollbar.handle": "#575757",
+    },
+}
+
+
+def shortcut_color(token: str) -> str:
+    """返回快捷键页局部颜色，其他颜色复用全局主题。"""
+    if system_accent() and token in {"accent.subtle", "accent.hover", "text.on_accent"}:
+        return color(token)
+    return _SHORTCUT_COLORS[current_theme()].get(token) or color(token)
+
+
+def set_background_active(on: bool) -> None:
+    """记录当前是否启用整窗背景图。
+
+    由 :meth:`App.apply_theme` 在渲染 QSS 前调用。置位后，所有走
+    :func:`surface_color` 的内联样式会改用半透明亚克力叠色（QSS 模板里的
+    表面由 :func:`background_overlay_qss` 统一覆盖）。
+    """
+    global _background_active
+    _background_active = bool(on)
+
+
+def is_background_active() -> bool:
+    """返回主题系统是否启用了自定义背景材质。"""
+    return _background_active
