@@ -1,0 +1,541 @@
+/* Fluent 主题模板 — d3dxSkinManage-Plus
+   占位符（双花括号包裹的 token 名）由 src/ui/theme.render_qss() 按当前主题注入。
+   明暗切换仅替换调色板，本文件选择器/几何对两套主题通用。
+*/
+
+/* 全局 */
+/* 字体族由应用及控件提供，切换字体无需重新应用整个主题。 */
+QWidget {
+    background-color: {{bg.base}};
+    color: {{text.primary}};
+    font-size: {{font.size}};
+}
+QMainWindow, QDialog {
+    background-color: {{bg.base}};
+}
+QMessageBox {
+    background-color: {{bg.layer}};
+}
+QLabel {
+    background: transparent;
+    color: {{text.primary}};
+}
+QToolTip {
+    background-color: {{bg.card}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.card}};
+    padding: 4px 8px;
+    border-radius: {{radius.control}};
+}
+
+/* 左侧导航 (Fluent NavigationView) */
+#navList {
+    background-color: {{bg.layer}};
+    border: none;
+    border-right: 1px solid {{stroke.divider}};
+    padding: 8px 6px;
+    outline: 0;
+}
+#navList::item {
+    background-color: transparent;
+    color: {{text.primary}};
+    border-radius: {{radius.control}};
+    border-left: 3px solid transparent;
+    padding: 9px 10px;
+    margin: 2px 2px;
+}
+#navList::item:hover {
+    background-color: {{bg.hover}};
+}
+#navList::item:selected {
+    background-color: {{accent.subtle}};
+    color: {{text.primary}};
+    border-left: 3px solid transparent;
+    font-weight: 600;
+}
+/* 导航选中态滑动指示条：随选中项在菜单项间平滑滑动（main_window 用几何动画驱动），
+   替代上面瞬时的 border-left accent——避免「双指示」并实现菜单项间的过渡动画。 */
+#navIndicator {
+    background-color: {{accent}};
+    border-radius: 2px;
+}
+/* 设置页子菜单滑动下划线指示条（settings.py 用几何动画驱动，随选中按钮滑动） */
+#settingsNavIndicator {
+    background-color: {{accent}};
+    border-radius: 1px;
+}
+#navContainer {
+    background-color: {{bg.layer}};
+}
+/* 底部启动按钮 / 折叠按钮（贴边、无圆角） */
+#navLaunchBtn, #navCollapseBtn {
+    background-color: {{bg.layer}};
+    color: {{text.primary}};
+    border: none;
+    border-top: 1px solid {{stroke.divider}};
+    border-radius: 0;
+}
+#navLaunchBtn {
+    padding: 8px 12px;
+    text-align: left;
+    /* 预留 3px 透明左边框，选中时仅替换颜色，保持导航项与启动按钮的图标对齐。 */
+    border-left: 3px solid transparent;
+}
+/* 折叠按钮：图标始终居中（不设 text-align:left，避免图标偏左被内容区遮挡） */
+#navCollapseBtn {
+    padding: 6px;
+}
+/* 折叠态：启动按钮图标居中（去掉预留左边框，图标在 52px 容器内真正居中） */
+#navLaunchBtn[collapsed="true"] {
+    text-align: center;
+    padding: 8px 0;
+    border-left: 0;
+}
+#navLaunchBtn:hover, #navCollapseBtn:hover {
+    background-color: {{bg.hover}};
+}
+#navLaunchBtn:pressed, #navCollapseBtn:pressed {
+    background-color: {{bg.pressed}};
+}
+#navLaunchBtn:disabled {
+    color: {{text.disabled}};
+}
+/* 底部「关于」按钮选中态：与导航项选中态视觉一致（accent 柔和底 + 左侧 accent 条） */
+#navLaunchBtn[current="true"] {
+    background-color: {{accent.subtle}};
+    color: {{text.primary}};
+    border-left: 3px solid {{accent}};
+    font-weight: 600;
+}
+#navLaunchBtn[current="true"][collapsed="true"] {
+    border-left: 0;
+}
+/* 折叠态导航项：去掉左侧指示条 + 左右内边距对称。
+   图标的水平居中由 main_window._NavItemDelegate 自绘（按控件中线摆放）——样式自带的
+   图标边距（PM_FocusFrameHMargin+1）QSS 管不到，靠调 padding-left 凑永远差几像素。 */
+#navList[collapsed="true"]::item {
+    border-left: 0;
+    padding: 9px 0;
+    margin: 2px;
+}
+
+/* 按钮 */
+QPushButton {
+    background-color: {{bg.card}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.control}};
+    border-radius: {{radius.control}};
+    padding: 6px 16px;
+    min-height: 20px;
+}
+QPushButton:hover {
+    background-color: {{bg.hover}};
+}
+QPushButton:pressed {
+    background-color: {{bg.pressed}};
+}
+QPushButton:disabled {
+    color: {{text.disabled}};
+    background-color: {{control.bg.disabled}};
+    border-color: {{stroke.divider}};
+}
+/* 主操作按钮：setProperty("accent", True) */
+QPushButton[accent="true"] {
+    background-color: {{accent}};
+    color: {{text.on_accent}};
+    border: 1px solid {{accent}};
+}
+QPushButton[accent="true"]:hover {
+    background-color: {{accent.hover}};
+    border-color: {{accent.hover}};
+}
+QPushButton[accent="true"]:pressed {
+    background-color: {{accent.pressed}};
+    border-color: {{accent.pressed}};
+}
+QPushButton[accent="true"]:disabled {
+    background-color: {{control.bg.disabled}};
+    color: {{text.disabled}};
+    border-color: {{stroke.divider}};
+}
+/* 语义彩色按钮：用动态属性 btnColor=success|danger|warning 着色（替代内联烘焙色，
+   这样换主题时随 setStyleSheet 自动重着色，不再残留旧主题色）。强调色按钮用 [accent="true"]。 */
+QPushButton[btnColor="success"], QPushButton[btnColor="danger"], QPushButton[btnColor="warning"] {
+    color: #ffffff;
+    border: none;
+    font-weight: bold;
+}
+QPushButton[btnColor="success"] { background-color: {{success}}; }
+QPushButton[btnColor="danger"]  { background-color: {{danger}}; }
+QPushButton[btnColor="warning"] { background-color: {{warning}}; }
+QPushButton[btnColor="success"]:hover { background-color: {{success}}; }
+QPushButton[btnColor="danger"]:hover  { background-color: {{danger}}; }
+QPushButton[btnColor="warning"]:hover { background-color: {{warning}}; }
+QPushButton[btnColor="success"]:disabled,
+QPushButton[btnColor="danger"]:disabled,
+QPushButton[btnColor="warning"]:disabled {
+    background-color: {{control.bg.disabled}};
+    color: {{text.disabled}};
+}
+/* 透明/工具按钮 */
+QPushButton[flat="true"], QPushButton:flat {
+    background: transparent;
+    border: 1px solid transparent;
+}
+QPushButton[flat="true"]:hover, QPushButton:flat:hover {
+    background-color: {{bg.hover}};
+}
+
+QToolButton {
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: {{radius.control}};
+    padding: 5px;
+    color: {{text.primary}};
+}
+QToolButton:hover {
+    background-color: {{bg.hover}};
+}
+QToolButton:pressed {
+    background-color: {{bg.pressed}};
+}
+QToolButton:checked {
+    background-color: {{accent.subtle}};
+}
+/* 面包屑分类段：给下拉指示符留出空间，避免箭头压住文字 */
+QToolButton#crumbSeg {
+    padding: 5px 22px 5px 8px;
+}
+QToolButton#crumbSeg::menu-indicator {
+    image: url({{arrow.down}});
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+    width: 12px;
+    height: 12px;
+    right: 5px;
+}
+
+/* 输入控件 */
+QLineEdit, QTextEdit, QPlainTextEdit, QSpinBox, QDoubleSpinBox {
+    background-color: {{control.bg}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.control}};
+    border-radius: {{radius.control}};
+    padding: 5px 8px;
+    selection-background-color: {{selection.bg}};
+    selection-color: {{selection.text}};
+}
+QLineEdit:hover, QTextEdit:hover, QPlainTextEdit:hover,
+QSpinBox:hover, QDoubleSpinBox:hover {
+    border-color: {{text.tertiary}};
+}
+QLineEdit:focus, QTextEdit:focus, QPlainTextEdit:focus,
+QSpinBox:focus, QDoubleSpinBox:focus {
+    border-color: {{accent}};
+}
+QLineEdit:disabled, QTextEdit:disabled, QPlainTextEdit:disabled {
+    background-color: {{control.bg.disabled}};
+    color: {{text.disabled}};
+}
+
+/* 下拉框 */
+QComboBox {
+    background-color: {{control.bg}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.control}};
+    border-radius: {{radius.control}};
+    padding: 5px 8px;
+    min-height: 22px;
+}
+/* 前置图标下拉框：文本左侧留出图标位（图标由 LeadingIconComboBox 自绘） */
+QComboBox[leadingIcon="true"] {
+    padding-left: 30px;
+}
+QComboBox:hover {
+    border-color: {{text.tertiary}};
+}
+QComboBox:focus {
+    border-color: {{accent}};
+}
+QComboBox::drop-down {
+    border: none;
+    width: 22px;
+    subcontrol-origin: padding;
+    subcontrol-position: center right;
+}
+QComboBox::down-arrow {
+    image: url({{arrow.down}});
+    width: 12px;
+    height: 12px;
+}
+QComboBox QAbstractItemView {
+    background-color: {{bg.card}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.card}};
+    /* 8px 对齐 Win11 DWM 圆角(DWMWCP_ROUND≈8px)——见 win_effects.apply_rounded_corners，
+       让绘制的背景圆角与合成器裁切的窗口圆角重合，避免角部露出方底缝隙。 */
+    border-radius: {{radius.card}};
+    selection-background-color: {{accent.subtle}};
+    selection-color: {{text.primary}};
+    outline: 0;
+    padding: 4px;
+}
+
+/* 复选框 / 单选框 */
+QCheckBox, QRadioButton {
+    spacing: 8px;
+    color: {{text.primary}};
+    background: transparent;
+}
+QCheckBox::indicator, QRadioButton::indicator {
+    width: 18px;
+    height: 18px;
+    border: 1px solid {{stroke.control}};
+    background: {{control.bg}};
+}
+QCheckBox::indicator {
+    border-radius: {{radius.small}};
+}
+QRadioButton::indicator {
+    border-radius: 9px;
+}
+QCheckBox::indicator:hover, QRadioButton::indicator:hover {
+    border-color: {{text.tertiary}};
+}
+QCheckBox::indicator:checked, QRadioButton::indicator:checked {
+    background-color: {{accent}};
+    border-color: {{accent}};
+}
+
+/* 分组框 */
+QGroupBox {
+    background: transparent;
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+    margin-top: 14px;
+    padding: 16px 12px 12px 12px;
+    font-weight: 600;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    color: {{text.secondary}};
+}
+
+/* 表格 / 树 / 列表 */
+QTableWidget, QTableView, QTreeWidget, QTreeView, QListWidget, QListView {
+    background-color: {{bg.card}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+    gridline-color: {{stroke.control}};
+    alternate-background-color: {{bg.subtle}};
+    outline: 0;
+}
+QTableWidget::item, QTreeWidget::item, QTreeView::item, QListView::item {
+    padding: 4px 6px;
+    border-radius: {{radius.small}};
+}
+QTableWidget::item:selected, QTableView::item:selected,
+QTreeWidget::item:selected, QTreeView::item:selected,
+QListWidget::item:selected, QListView::item:selected {
+    background-color: {{accent.subtle}};
+    color: {{text.primary}};
+}
+QTreeWidget::item:hover, QTreeView::item:hover, QListView::item:hover {
+    background-color: {{bg.hover}};
+}
+QHeaderView::section {
+    background-color: {{bg.subtle}};
+    color: {{text.secondary}};
+    border: none;
+    border-bottom: 1px solid {{stroke.divider}};
+    /* 表头右边框与表格网格线采用相同颜色。 */
+    border-right: 1px solid {{stroke.control}};
+    padding: 6px 8px;
+    font-weight: 600;
+}
+
+/* 滚动条 (Fluent 细窄) */
+QScrollArea { border: none; background: transparent; }
+QScrollBar:vertical {
+    background: transparent;
+    width: 12px;
+    margin: 2px;
+    border: none;
+}
+QScrollBar::handle:vertical {
+    background: {{scrollbar.handle}};
+    border-radius: 4px;
+    min-height: 28px;
+}
+QScrollBar::handle:vertical:hover { background: {{scrollbar.handle.hover}}; }
+QScrollBar:horizontal {
+    background: transparent;
+    height: 12px;
+    margin: 2px;
+    border: none;
+}
+QScrollBar::handle:horizontal {
+    background: {{scrollbar.handle}};
+    border-radius: 4px;
+    min-width: 28px;
+}
+QScrollBar::handle:horizontal:hover { background: {{scrollbar.handle.hover}}; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
+
+/* 标签页 */
+QTabWidget::pane {
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+    top: -1px;
+}
+QTabBar::tab {
+    background: transparent;
+    color: {{text.secondary}};
+    padding: 8px 16px;
+    border: none;
+    border-bottom: 2px solid transparent;
+}
+QTabBar::tab:hover { color: {{text.primary}}; }
+QTabBar::tab:selected {
+    color: {{accent}};
+    border-bottom: 2px solid {{accent}};
+    font-weight: 600;
+}
+/* 在线详情使用独立的动画下划线，此处关闭静态底边。 */
+#gbDetailTabs QTabBar::tab:selected { border-bottom: 2px solid transparent; }
+
+/* 菜单 */
+QMenu {
+    background-color: {{bg.card}};
+    color: {{text.primary}};
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+    padding: 5px;
+}
+QMenu::item {
+    padding: 6px 16px 6px 10px;
+    border-radius: {{radius.small}};
+}
+QMenu::item:selected { background-color: {{bg.hover}}; }
+QMenu::item:disabled { color: {{text.disabled}}; }
+QMenu::icon {
+    left: 6px;
+}
+QMenu::separator {
+    height: 1px;
+    background: {{stroke.divider}};
+    margin: 5px 8px;
+}
+QMenuBar { background-color: {{bg.base}}; }
+QMenuBar::item { padding: 6px 10px; background: transparent; }
+QMenuBar::item:selected { background-color: {{bg.hover}}; border-radius: {{radius.small}}; }
+
+/* 进度条 */
+QProgressBar {
+    background-color: {{bg.subtle}};
+    border: none;
+    border-radius: 4px;
+    height: 6px;
+    text-align: center;
+    color: {{text.secondary}};
+}
+QProgressBar::chunk {
+    background-color: {{accent}};
+    border-radius: 4px;
+}
+
+/* 分割器 */
+QSplitter::handle { background: transparent; }
+QSplitter::handle:horizontal { width: 6px; }
+QSplitter::handle:vertical { height: 6px; }
+QSplitter::handle:hover { background: {{accent.subtle}}; }
+
+/* 总览预览栏内的横向分割线：抓取区 7px，但只在正中画一道 ~1px 细线（gradient 比
+   margin 可靠——Qt 对 splitter handle 的 margin 支持不稳，会把整条填满显得过粗）。 */
+#previewSplitter::handle:vertical {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0.42 transparent, stop:0.42 {{stroke.card}},
+        stop:0.58 {{stroke.card}}, stop:0.58 transparent);
+}
+#previewSplitter::handle:vertical:hover {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0.33 transparent, stop:0.33 {{accent}},
+        stop:0.67 {{accent}}, stop:0.67 transparent);
+}
+
+/* 滑块 */
+QSlider::groove:horizontal {
+    height: 4px; background: {{stroke.control}}; border-radius: 2px;
+}
+QSlider::sub-page:horizontal { background: {{accent}}; border-radius: 2px; }
+QSlider::handle:horizontal {
+    background: {{accent}}; width: 16px; height: 16px;
+    margin: -6px 0; border-radius: 8px;
+}
+
+/* ============================================================================
+   语义卡片（沿用既有 objectName）
+*/
+#charCard, #modCard, #galleryItem {
+    background-color: {{bg.card}};
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+}
+#charCard:hover, #modCard:hover, #galleryItem:hover {
+    border-color: {{accent}};
+    background-color: {{bg.subtle}};
+}
+#charThumb {
+    /* 预览图占位区透明：有图时不在图四周/圆角处露出灰底色块（暗色下灰底近黑，
+       圆角预览会"漏黑角"）；无图时占位文字直接落在卡片表面即可。 */
+    background-color: transparent;
+    border-radius: {{radius.control}};
+    color: {{text.tertiary}};
+    font-size: 24px;
+    font-weight: bold;
+}
+#modPreview, #galleryImage {
+    background-color: transparent;
+    border-radius: {{radius.control}};
+    color: {{text.tertiary}};
+}
+
+/* Mod 商店卡片（无背景图时）：补回圆角描边——背景图模式由 background_overlay_qss
+   单独着色。配合 gb_mod_card 缩略图顶部圆角，卡片左上/右上角才真正圆。 */
+#gbModCard {
+    background-color: {{bg.card}};
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+}
+
+/* 总览右侧预览栏（无背景图时）：内容区无独立底色（透明，透出窗口基础色 bg.base）；
+   给整块面板描一圈 1px 圆角边框，形状与背景图模式的圆角亚克力面板一致——这一圈的左边
+   就是唯一的左边界（拖拽区由紧贴其外侧的 #mainSplitter handle 承担，见 overview.py）。
+   背景图模式由 background_overlay_qss 覆盖：改磨砂亚克力 + 去掉这圈矩形描边。 */
+#previewPanel {
+    background: transparent;
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+}
+#panelPreviewArea {
+    background: transparent;
+}
+
+/* 信息框 (QFrame::Box / StyledPanel) */
+QFrame[frameShape="6"], QFrame[frameShape="2"] {
+    background-color: {{bg.layer}};
+    border: 1px solid {{stroke.card}};
+    border-radius: {{radius.card}};
+}
+
+/* 总览预览栏文本信息区：去掉卡片底色与边框，内容平铺、无独立底色
+   （否则会命中上面的通用 QFrame 规则被染成 bg.layer 盒子——即上一轮"底色仍在"的真凶）。 */
+#previewInfoFrame {
+    background: transparent;
+    border: none;
+}
