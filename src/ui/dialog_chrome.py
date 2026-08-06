@@ -123,3 +123,109 @@ class DialogTitleBar(QWidget):
         window.setWindowIcon(icon)
         self._set_icon(icon)
         self.retheme()
+
+    def _set_title(self, title):
+        """同步窗口标题与悬浮提示，空标题回退应用名并更新关闭按钮无障碍名称。"""
+        self.title_label.setText(title or APP_DISPLAY_NAME)
+        self.title_label.setToolTip(title)
+        self.close_button.setAccessibleName(tr("关闭{value}", value=title or APP_DISPLAY_NAME))
+
+    def _set_icon(self, icon):
+        """按当前屏幕缩放将窗口图标绘制到标题栏的固定逻辑尺寸。"""
+        self.icon_label.setPixmap(icon.pixmap(QSize(16, 16), self.devicePixelRatioF()))
+
+    def retheme(self):
+        """根据对话框材质重建标题栏样式，并刷新关闭图标。"""
+        fill = "transparent" if self.window().property("_dialog_acrylic") else _color("surface")
+        self.setStyleSheet(f"""
+            QWidget#dialogTitleBar {{ background: {fill}; border: 0; }}
+            QLabel {{ color: {_color("secondary")}; background: transparent;
+                     font-size: 11px; border: 0; padding: 0; margin: 0; }}
+            QPushButton {{ background: transparent; border: 0; border-radius: 0;
+                          padding: 0; margin: 0; min-width: 42px; max-width: 42px;
+                          min-height: 30px; max-height: 30px; }}
+            QPushButton:hover {{ background: #c42b1c; }}
+            QPushButton:focus {{ background: transparent; border: 0; outline: 0; }}
+            QPushButton:hover:focus {{ background: #c42b1c; }}
+            QPushButton:disabled {{ background: transparent; }}
+        """)
+        self.close_button.refresh_icon()
+
+    def mousePressEvent(self, event):
+        """保存拖动基准，Win10 原生指针使用合并移动，其他情况保留系统移动。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._end_drag()
+            self._drag_origin = event.globalPosition().toPoint()
+            self._window_origin = self.window().pos()
+            from src.ui import win_effects
+
+            self._coalesced_move = (
+                event.spontaneous()
+                and QApplication.platformName() == "windows"
+                and win_effects.needs_popup_paint_before_blur()
+            )
+            if self._coalesced_move:
+                from src.ui.native_resize import begin_native_resize
+
+                self._native_move = begin_native_resize(self.window())
+            else:
+                # 系统移动可能接受请求却未接管，继续送达标题栏的事件仍须移动窗口。
+                handle = self.window().windowHandle()
+                if handle is not None:
+                    handle.startSystemMove()
+            event.accept()
+        else:
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        """合并 Win10 系统指针事件，避免窗口依次追赶已经过期的位置。"""
+        if self._drag_origin is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            if self._coalesced_move:
+                self._pending_move = event.globalPosition().toPoint()
+                self._pending_native_move = event.spontaneous()
+                if not self._move_timer.isActive():
+                    self._move_timer.start(0)
+            else:
+                self.window().move(self._window_origin + event.globalPosition().toPoint() - self._drag_origin)
+            event.accept()
+        else:
+            self._end_drag()
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        """提交释放位置并取消排队更新，避免松开后仍继续移动。"""
+        if event.button() == Qt.MouseButton.LeftButton and self._coalesced_move:
+            self._move_timer.stop()
+            self._pending_move = event.globalPosition().toPoint()
+            self._pending_native_move = False
+            self._apply_pending_move(finish=True)
+        self._end_drag()
+        super().mouseReleaseEvent(event)
+
+    def _apply_pending_move(self, *, finish: bool = False) -> None:
+        """以最新光标计算目标位置，复用原生几何基准并保留窗口尺寸与层级。"""
+        position = self._pending_move
+        if position is not None and self._pending_native_move:
+            position = QCursor.pos()
+        self._pending_move = None
+        self._pending_native_move = False
+        if self._drag_origin is None or position is None:
+            return
+        window = self.window()
+        target = self._window_origin + position - self._drag_origin
+        if not finish and self._native_move is not None:
+            geometry = QRect(window.geometry())
+            geometry.moveTopLeft(target)
+            if self._native_move.apply(window, geometry):
+                return
+            from src.ui.native_resize import begin_native_resize
+
+            window.move(target)
+            self._native_move = begin_native_resize(window)
+            return
+        window.move(target)
+
+    def hideEvent(self, event):
+        """标题栏隐藏时终止拖动，防止位置基准残留。"""
+        self._end_drag()
+        super().hideEvent(event)
