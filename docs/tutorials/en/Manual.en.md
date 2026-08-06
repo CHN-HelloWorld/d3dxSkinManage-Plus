@@ -638,3 +638,647 @@ A game's private working state records serve a different purpose from named vari
 
 ## Chapter 5: Online mods and updates
 
+### 5.1 Connecting to GameBanana
+
+![Plusa organizing downloads](../images/plusa/supplement/下载更新.webp)
+
+Activate a game, then open **Online Mods**. The app uses the English name in the game's configuration to find a match on GameBanana and saves the result for that game. Changing the English name triggers a new match.
+
+If you see **GameBanana has no entry for this game**, first check the English name on the Games page. You can also use the website search link provided on the page. A network failure and a game that is not listed have different causes: check the connection for the former, and check the game name and the site's listings for the latter.
+
+Configure the proxy in two steps:
+
+1. Under **Settings → General → Network proxy**, turn on the main switch, then use the system proxy or enter a manual address and port.
+2. Under **Settings → Online Mods → Online Mod proxy**, turn on **Enable proxy**.
+
+![Online Mods settings](../images/guide-en/15-在线设置.webp)
+
+*Online browsing, images, downloads, and mod updates all use the Online Mods proxy policy.*
+
+Local categories, importing, and deployment do not require a connection to GameBanana.
+
+### 5.2 Browsing, searching, and details
+
+The online page lets you browse by category, search for mods, change the sort order, and refresh the list. Sort options include **Default**, **Newest**, **Recently updated**, **Most liked**, **Most downloaded**, and **Most viewed**.
+
+![Online browsing with placeholder content](../images/guide-en/24-在线Mod.webp)
+
+*The names, covers, authors, and statistics are tutorial placeholders used to show the browsing controls in the real interface.*
+
+**Hide NSFW**, **Blur NSFW**, and **Show NSFW** control online content previews; the default is to blur them. This preference is saved separately from the display preference for local X-rated mods.
+
+Click a card to open its details, where you can view images, **Overview**, **Description**, **Update**, and **Available files**. An entry with multiple files often offers different versions, optional content, or attachments. Read the author's instructions before choosing a file.
+
+![Online details and file selection](../images/guide-en/29-在线详情.webp)
+
+*The filenames and sizes shown here are also placeholders. Read each file's description when using real entries.*
+
+Author descriptions and downloadable files come from an external site. This tutorial uses placeholder content to explain the controls; actual entries depend on the site's content.
+
+### 5.3 Downloading and choosing an installation destination
+
+Select an available file in the details view and click **Download**. When the download finishes, the app prepares to import it into a destination category.
+
+Installation can proceed when there is one unambiguous category match. Otherwise, **Choose installation destination** appears:
+
+- Select an existing category in the tree. You can search by category name.
+- Check the destination game and category to avoid installing into another game.
+- If the interface offers to save the site's category name as the English name, you can do so to help future matching.
+- If the destination folder already has an English name, follow the overwrite confirmation prompt.
+
+Online installation still checks the archive, metadata, and destination path. A finished download does not necessarily mean the mod has been added to the library; wait for the installation result.
+
+If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
+
+### 5.4 Managing downloads
+
+Open **Downloads** from the online page to see queued, downloading, paused, completed, and failed tasks, along with their progress, speed, and size.
+
+| Control or menu item | Purpose |
+| --- | --- |
+| Pause / Resume | Control downloads that support pausing |
+| Cancel | Stop the current task |
+| Retry | Retry a failed download |
+| Open Mod category | Locate an installed mod |
+| Show in File Explorer | Locate a retained download file |
+| Remove from list | Remove the record |
+| Delete, including local files | Also handle that download's local files; follow the confirmation prompt |
+| Clear completed / Clear all | Process download list entries in bulk; check the scope in the prompt before proceeding |
+
+Downloaded source packages are stored in `<data-root>/data/downloads/`. They are not disposable image caches.
+
+**Delete installer packages automatically**, under **Settings → General → Download data**, is on by default. **The corresponding source package is deleted only after the mod has been successfully added to the library.** Turn this off to retain packages for an offline archive.
+
+**Clean up installed** removes source packages that have been confirmed as added to the library, while keeping downloads that have not yet been installed. Deleting a source package does not delete the imported mod from the library, but retaining source packages is not a substitute for a complete backup.
+
+### 5.5 Checking installed mods for updates
+
+Click **Check for updates** in **Category Overview** to open the mod updates window. Checks depend on saved GameBanana source information. Mods installed from the online page have the relevant records; other local packages may not.
+
+The update window separates check progress from the update list. You can search mod names and view local and new version information, update notes, file dates, and estimated download sizes.
+
+If a check fails or covers only some items, the interface reports that the check is incomplete. This does not mean that all mods are up to date. Use **Check again** once the network connection is restored.
+
+Automatic checks are configured under **Settings → Online Mods → Mod updates**:
+
+| Setting | Default and behavior |
+| --- | --- |
+| Check Mod updates automatically | On |
+| Check on startup | On, with a minimum interval between checks |
+| Scheduled check frequency | Off by default; also offers Every 6 hours, Every 12 hours, and Daily |
+| Notification style | Badge only by default; a status bar notice can also be added |
+| Check concurrency | Auto recommend by default; lets you adjust concurrency in the update workflow |
+
+Manual and automatic checks have different triggers. For everyday use, refer to the latest check results shown in the update window.
+
+### 5.6 Updating one or more mods
+
+Click **Update** for an individual item or **Update all** for a batch. If an entry offers multiple files, **Choose update files** appears first. You must select one file for each relevant mod before starting.
+
+Tasks may pass through preparation, download, verification, extraction, and installation stages. Use the **Updated** status or the results summary to confirm completion.
+
+| Action | Behavior |
+| --- | --- |
+| Pause / Resume for one item | Controls the task at stages that currently allow pausing |
+| Pause all / Resume all / Stop all | Applies to all unfinished updates for the current game, including tasks hidden by the search filter |
+| Close update window | If tasks are running, you can return to them, stop unfinished updates, or continue in the background |
+| Stop | Unfinished items keep their old versions; completed updates are not undone. You may need to wait during installation commit or final cleanup |
+
+If preparing the new content fails, check the specific file or verification error. The app retains the materials needed for recovery. Do not manually delete source containers, working folders, or transaction records during an update.
+
+Export or back up important custom changes beforehand. Updating a mod and **Back up the previous version** for application updates are separate features; the latter does not replace a mod backup.
+
+### 5.7 Ignoring updates and restoring notifications
+
+An item's More menu offers:
+
+- **View on GameBanana**: open the source page in a browser.
+- **Ignore this version**: skip notifications for this version.
+- **Ignore this Mod**: stop notifications for future updates to this mod as well.
+
+After ignoring an update, you can use **Undo** in the window's current notification. Undo requires the mod and game to remain valid. After closing the window, do not assume this temporary Undo control will still be available.
+
+### 5.8 Updating the application
+
+Application version updates are under **Settings → Update → Application updates**. Use **Check application updates**.
+
+![Application update settings](../images/guide-en/16-程序更新.webp)
+
+Update availability depends on whether the distribution channel provides a valid update source and a matching package. If the app reports that no update source is configured, obtain the new version through the software publisher's download channel.
+
+When a new version is found, you can read its release notes and release history, then update, ask to be reminded later, or skip that version.
+
+The one-click update process downloads, checks, and extracts the package, then makes a backup according to your settings. A separate updater replaces the application and restarts it. Keep the `Updater/` folder supplied with the distribution; you do not need to launch the updater directly.
+
+- Finish active tasks before installing an update, then close the application when prompted.
+- Updates preserve your mods, settings, and plugins. Regular backups of personal data are still recommended.
+- The download source can be automatic or a specific mirror. Automatic mode falls back through the candidate sources.
+- If the updater reports an error, retain both application and updater logs, check paths and files in use, then retry.
+
+Application updates and GameBanana mod updates serve different purposes. The former upgrades the manager; the latter replaces resources in the library.
+
+---
+
+## Chapter 6: Settings
+
+### 6.1 Sections, search, and saving
+
+The Settings page has six sections across the top: **General**, **Personalization**, **Shortcuts**, **Import and export**, **Online Mods**, and **Update**. Each section also has subpages on the left.
+
+Use the default `Ctrl+K` shortcut to open settings search, or type a setting name in the upper-right corner. Search results can take you across sections and locate the relevant control.
+
+![Searching all settings](../images/guide-en/26-设置搜索.webp)
+
+*Enter “cache” to find settings for image memory and disk caches.*
+
+The page states **Changes apply immediately and are saved automatically**. Switches and selections usually save immediately, while text fields submit changes when editing finishes. Some sliders preview changes as you drag and save when you release them.
+
+This chapter lists the default settings. Screenshots use example settings; check the values and switch positions shown on your device.
+
+### 6.2 General → Mod management
+
+| Setting | Default | Description |
+| --- | --- | --- |
+| Deletion method | Permanent deletion (unrecoverable) | You can also choose the Recycle Bin; this applies only to deleting individual mods or batches of mods |
+| Concurrency | Auto recommend | The number of deployment tasks that can run at once; manually adjustable from 1–16 |
+
+Deleting a category, deleting a game, and clearing a deployment folder each have their own scope confirmations. Selecting the Recycle Bin for mod deletion does not make these other operations recoverable.
+
+**Auto recommend** saves automatic mode, allowing the app to recalculate for a different device. Manually changing the number switches to a fixed limit. Higher concurrency is not always faster; lower it for mechanical hard drives, large archives, or limited memory.
+
+### 6.3 General → Network proxy
+
+| Setting | Default | Usage |
+| --- | --- | --- |
+| Enable proxy | Off | When enabled, application updates can use this proxy configuration |
+| Use system proxy | On | Reads the proxy from Windows |
+| Protocol | HTTP | Manual mode supports HTTP, HTTPS, and SOCKS5 |
+| Proxy address / Port | 127.0.0.1 / 7890 | Example defaults; these must match your proxy software |
+| Test connection | Manual action | Checks external network connectivity and latency through the proxy |
+
+Online Mods also requires **Enable proxy** in its own section. If Online Mods is using the proxy when you turn off the main switch, the app asks whether to disable that use as well.
+
+If no configuration is detected in system proxy mode, check Windows settings first. In manual mode, check the address, port, and whether the proxy application is running.
+
+### 6.4 General → Download data
+
+This page shows total package storage, split into installed and uninstalled packages, and provides:
+
+| Control | Purpose |
+| --- | --- |
+| Delete installer packages automatically | On by default; removes the corresponding source package after the mod is successfully added to the library |
+| Clean up installed | Removes downloaded source packages already added to the library, after confirmation |
+| Open folder | Opens the actual downloads folder |
+
+Keep downloads that have not yet been installed until you install them or decide how to handle them. These source packages are stored separately from the managed mod contents in the library, so cleaning up installed packages reduces duplicate storage.
+
+### 6.5 General → Images and cache
+
+This page separates the image memory cache from the disk cache, each with its own limit and cleanup controls.
+
+![Image memory and disk caches](../images/guide-en/27-图片与缓存.webp)
+
+| Item | Default or range | Description |
+| --- | --- | --- |
+| Image memory cache | Auto recommend; manual range 64–8192 MiB | Keeps recently decoded images so returning to them is faster |
+| Current image memory | Live statistics | Measures only the image cache, not the whole application's memory use |
+| Clear image memory | Button | Releases cache entries that can be freed; images currently on screen remain in memory |
+| Disk cache limit | 512 MB by default; 0 means unlimited | Manages online images and other caches that can be regenerated |
+| Disk slider range | Maximum 4096 MB by default | Controls how far the slider can go, rather than the effective cache limit |
+| Clear disk cache | Requires confirmation | Clears regenerable caches while retaining downloaded mod source packages |
+
+The automatic memory allowance varies with your device and display. Use the recommendation shown on your device. Lowering the allowance may require images to be decoded again when revisited, but does not delete mods or their metadata.
+
+The disk cache is not a backup folder. Do not manually clear `data/`, operation recovery records, or `.d3dxmeta/` as though they were caches.
+
+### 6.6 Personalization → Appearance
+
+![Appearance settings](../images/guide-en/12-设置个性化.webp)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Theme | Dark | Also offers Light and Follow System; the latter follows the Windows app theme |
+| Font | System default | Choose and preview a font installed on this computer |
+| Language | Simplified Chinese | Options come from language packs in the configuration folder |
+
+Restart the app after switching languages or editing a language pack to refresh the entire interface.
+
+To create another language pack:
+
+1. Click **Open language packs folder**.
+2. Copy an existing language folder and name it with a language code, such as `ja-JP`.
+3. Edit the UTF-8 `strings.json` file, preserving the source-text keys and dynamic placeholders.
+4. Return to Settings, click **Refresh list**, select the language, and restart.
+
+Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
+
+### 6.7 Personalization → Window background
+
+You can turn the background off or use an image, video, or WE scene.
+
+![Choosing a window background source](../images/guide-en/28-整窗背景.webp)
+
+| Source | What to select |
+| --- | --- |
+| Close (off) | Uses the theme's background color |
+| Image | A supported local image such as PNG, JPG, JPEG, BMP, or WebP |
+| Video | A supported local video such as MP4, WebM, MKV, AVI, or MOV |
+| WE scene | The `project.json` from a Wallpaper Engine scene project, together with the local Wallpaper Engine application configuration |
+
+For WE scenes, use **Find automatically** or manually specify an application path such as `wallpaper64.exe`. Keep the complete scene project and its resource files; copying only the JSON file is not enough to play it.
+
+Display settings:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| Image fit | Fill (crop to cover) | Can be changed to fit; images also support Tile |
+| Background overlay | 45 for Dark, 30 for Light | Saved separately for each theme; darkens in Dark mode and softens and brightens in Light mode |
+| Background blur | 60 | Range 0–100; 0 turns it off |
+| Background frame rate | 30 FPS | Used for animated backgrounds; adjustable through the available options |
+| Scene quality | 2× | WE scenes can use 1× to reduce resource use |
+| Background volume | Muted | Adjust sound for supported animated backgrounds as needed |
+
+Animated backgrounds provide pause, resume, and retry controls. They pause automatically when the window is minimized and resume when it is restored. Restoring the window does not override a manual pause.
+
+If playback fails, check that the file still exists, its encoding is supported, and the WE path and project are complete. Image backgrounds do not require Wallpaper Engine, nor do ordinary local videos.
+
+### 6.8 Shortcuts → Key bindings
+
+![Shortcut settings](../images/guide-en/13-快捷键.webp)
+
+Commands are grouped by where they are used. Click the corresponding key binding to record a shortcut, then save it. Combinations of Ctrl / Alt / Shift with one primary key are supported.
+
+When a conflict is found, the app identifies the conflicting command. Confirming replacement may leave the previously assigned command unbound; canceling keeps the original binding. System-reserved combinations cannot be assigned to ordinary commands.
+
+Shortcuts depend on focus: editing in a text box, working with items in Category Overview, and copying in the presets list each have their own context. The manager does not provide global hotkeys that work in other applications.
+
+Commands registered by plugins can also appear in the relevant groups. See Appendix A for the complete default shortcut table.
+
+### 6.9 Import and export
+
+![Import and export settings](../images/guide-en/14-导入与导出.webp)
+
+The **Import** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod import format | 7z | Folder inputs are compressed to this format; archives keep their original format when conversion is not forced |
+| Always use the import format | Off | Extracts and recompresses when needed |
+| Import concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+The **Export** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod export format | ZIP | Also offers 7z, RAR, or a folder |
+| Always use the export format | Off | When off, the source archive format may be retained; this option is unnecessary for folder exports |
+| Preserve the category folder structure | On | Organizes output by category path |
+| Include metadata and previews | Off | Enable to share tags, additional previews, and named variants |
+| Export concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+Creating RAR archives requires WinRAR. Reading RAR archives does not require a separate archiver installation. Read the explanations for unavailable options before choosing an output format.
+
+The current category determines the destination for a local import. For online installation, check the category in the installation destination selection flow.
+
+### 6.10 Online Mods
+
+The **Online Mod proxy** subpage provides a switch and **Open proxy settings**. It uses the proxy configured in General. You cannot enable the online proxy separately while the main switch is off.
+
+The **Mod updates** subpage provides automatic checks, startup checks, scheduled frequency, notification style, and check concurrency. Automatic and startup checks are on by default, scheduled checks are off, and notifications use **Badge only**. Concurrency uses **Auto recommend**, with a manual range of 1–16.
+
+See Chapter 5 for pausing, resuming, background tasks, and file selection in the update window.
+
+### 6.11 Update → Application updates
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Check application updates | Manual control | Displays the current version and checks the update source configured by the publisher |
+| Enable automatic application updates | On | Controls automatic checks and notifications |
+| Check on startup | On | Checks in the background, with a 24-hour minimum interval |
+| Back up the previous version | On | Backs up application files before updating the manager itself |
+| Update package source | Automatic | Tries mirrors first and falls back on failure; you can also choose a specific source |
+
+The supplied updater installs application updates. If no update source is configured, obtain the new version through the software publisher's download channel.
+
+### 6.12 Restoring defaults
+
+**Reset**, in the lower-right corner, first opens a confirmation dialog with Cancel selected by default. Confirming resets all application preferences, including:
+
+- Appearance, language, font, and background.
+- Customized shortcuts.
+- Import, export, deletion, network, and update preferences.
+- Settings that support automatic recommendations, which return to recommendations based on the device.
+- Options such as interface layout stored in application preferences.
+
+**Game configurations and imported mods are retained.** The game list, active game, and current preset selection are saved separately in `config/games.json`.
+
+If the reset fails, the app keeps the original settings and displays a message. To revert just one option, adjust it directly without resetting all preferences.
+
+---
+
+## Chapter 7: Tools, plugins and About
+
+### 7.1 Tools
+
+![Category and maintenance tools](../images/guide-en/17-工具箱.webp)
+
+Tools is divided into category organization, maintenance and troubleshooting, and tools contributed by enabled plugins.
+
+| Entry | Purpose |
+| --- | --- |
+| Import category preset | Adds categories and category images to the destination game |
+| Export category preset | Shares the current game's complete category tree, optionally with images |
+| Rebuild Index | Rescans the file library to restore the index |
+| View Logs | Shows runtime records by startup session |
+| Plugin tools | Runs features provided by enabled plugins |
+
+Cache cleanup is under **Settings → General → Images and cache**. Downloaded source package cleanup is under **General → Download data**. To export mods, select the items in Category Overview.
+
+### 7.2 Importing a category preset
+
+A category preset uses the **`.d3dxcp`** extension. It contains a category structure and optional category images, without mod contents or a complete preset of enabled mods.
+
+![Category preset controls](../images/guide-en/10-分类预设.webp)
+
+Choose **Import category preset** in Tools, or **Start with a category preset** on an empty Category Overview page:
+
+1. Select a `.d3dxcp` file.
+2. Check the destination game and review the complete category tree.
+3. Review the counts for new folders, existing folders, images to add, and path conflicts.
+4. Locate and resolve any conflicts, then click **Compare again**.
+5. After checking the result, click **Start import**, then **View categories** when it finishes.
+
+If the game suggested by the file differs from the current game, the interface prompts you to check the destination. If every folder already exists and no images need adding, it explains that no import is needed.
+
+Existing categories and category images are handled according to the comparison results. Importing a preset does not mean replacing the entire existing tree. Resolve path or type conflicts before importing.
+
+Cancellation takes effect at a safe boundary. If the app reports that categories have been imported but cleanup is pending, keep the recovery records. Follow the prompt to retry, or restart and wait for cleanup to finish.
+
+### 7.3 Exporting a category preset
+
+![Exporting the complete category tree](../images/guide-en/25-分类导出.webp)
+
+Activate a game, then click **Export category preset** in Tools:
+
+- Enter a preset name.
+- Review the current game's complete category tree and counts.
+- Select **Include category images** if needed.
+- Repair unreadable images, or deselect those images using the available controls.
+- Choose an output location, confirm the output file, and click **Start export**.
+
+The export covers the current game's complete category tree, rather than a single selected mod. Recipients of this file still need to import their own mods.
+
+### 7.4 Rebuilding the index
+
+Use this when source files still exist but the categories or mod list no longer match the disk. First try refreshing with the default `F5` shortcut. Rebuild only when the index needs restoring.
+
+Before starting, check that the resource drive is accessible and the correct game is selected, and finish related file tasks. After confirmation, the app scans the library, reads category and mod markers, and restores the index entries and associations it can recognize.
+
+A normal rebuild mainly handles the current game. **If the app detects corruption of the entire index database at startup, recovery involves all configured games.** Connect each game's resource drive and follow the prompts.
+
+The completion report lists registered entries, classification results, and problems such as invalid metadata. Unreadable files or files with conflicting identities may not be recoverable; keep the report and address the affected items. Rebuilding cannot recover permanently deleted archives and does not replace a backup.
+
+### 7.5 Log Viewer
+
+![Log Viewer](../images/guide-en/23-日志.webp)
+
+Click **View Logs** in Tools to access:
+
+| Control | Purpose |
+| --- | --- |
+| Session | Selects a startup session by date and sequence, such as “2026-10-30 #1” |
+| Level | All, or one of DEBUG, INFO, WARNING, ERROR, and CRITICAL |
+| Auto-scroll to bottom | Moves to the newest entries after a refresh |
+| Refresh | Rereads the selected file |
+| Open Log Folder | Locates the actual log files |
+| Copy | Copies the currently displayed content |
+
+The level filter matches exactly: selecting WARNING does not also include ERROR. Use **All** when you need the context before and after an error.
+
+The window reads only approximately the final 1 MiB of a log. Open the full file from the log folder if you need earlier content. Logs are saved by date and startup sequence and retained for 14 days by default, so save the relevant session promptly when reporting a problem.
+
+Updater logs are also part of the logging system. Keep them alongside the application logs if an application update fails. Remove unrelated personal paths or sensitive information before submitting a report.
+
+### 7.6 Installing and managing plugins
+
+![Plugin list and details](../images/guide-en/18-插件.webp)
+
+The Plugins page lists plugins on the left and shows details for the selected plugin on the right. Search by name, author, or description, or filter by **All**, **Enabled**, or **Disabled**.
+
+There are two installation methods:
+
+| Method | Steps |
+| --- | --- |
+| Install an archive | Click **Install plugin**, choose a ZIP, 7z, or RAR file, and follow the result message |
+| Add a folder manually | Click **Open plugins folder**, add the complete plugin folder containing `plugin.json`, then click **Rescan** |
+
+Plugins are discovered in `plugins/` under the application root by default. If that folder is not writable, the app uses its data-folder fallback; use the actual location shown by **Open plugins folder**. Bundled examples and plugins you install use the same folder and management rules.
+
+After installation, check the plugin's status in the list. Select it to review its author, description, permissions, and source, then enable it as needed. The first trust prompt explains that the plugin runs code inside the app and lists its requested capabilities. Confirm only for sources you trust. New permissions discovered after an update or rescan require confirmation again.
+
+**Ready** means the plugin is already available: its tool buttons, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
+
+If the status is **Dependency blocked**, expand the details and follow the instructions to install and enable dependency plugins with compatible versions. Confirm trust separately for each dependency. Dependencies are not installed or authorized automatically. After resolving the requirements, reload or enable the original plugin again.
+
+Installing a new archive for the same plugin replaces its code folder and preserves private settings data. Before replacement, the installer checks the archive, manifest, version requirements, and code; a failed check keeps the original plugin. Check its status after updating, and confirm any additional permissions.
+
+### 7.7 Plugin permissions, settings, and uninstallation
+
+Expand **Permissions and source** in the details pane to review capabilities such as reading or modifying mods, storing settings, network access, files, processes, background tasks, views, and shortcuts, along with dependencies and activation information.
+
+An enabled, trusted plugin whose dependencies are satisfied displays editable controls for any declared settings, including while its status is **Ready**. Settings are saved, and each can be reset to its default. Some plugins also provide dedicated options on their own pages.
+
+Disabling removes the plugin's commands, pages, menus, shortcuts, and callbacks and cancels its tasks. Plugins that depend on it also stop, while retaining their enabled-state preference. Cancellation takes effect at safe boundaries and does not undo every completed operation; check the final task result.
+
+Use **Reload** after editing plugin code. The app removes old commands and interfaces and cancels tasks, then reads the current code and restarts previously active plugins that depend on it, without restarting the whole app. Use **Rescan** when adding plugins or changing the folder layout.
+
+**Uninstall** first disables the plugin and plugins that depend on it, then deletes its code folder. Check the name before confirming. The plugin's settings and private data are preserved for reuse when you reinstall the same plugin. Keep a separate backup of your own plugin source files.
+
+If the status is **Error**, read the error description and logs. Parsing failures, permission mismatches, code checks, and runtime errors can all prevent activation. Permission declarations and checks do not determine whether a plugin's source is trustworthy for you.
+
+Three optional plugins are bundled; enable each one before first use. Their contributions add the corresponding controls to Tools, Category Overview context menus, navigation pages, and shortcut settings:
+
+- **Mod inventory export** exports a CSV inventory of the current game from Tools. From a category's context menu, it includes that category and its subcategories. Select **Export enabled mods only** in plugin details to limit the output. The inventory is generated in the background, with a notification on completion. It contains text metadata only, without mod files, and is not a restorable preset file.
+- **Preset check** adds a navigation page with the same name for checking missing mod and appearance variant references. Return to the main interface to edit affected presets. Choose whether to include the default preset and click **Check again** to refresh. Results reflect references that can currently be resolved; a missing reference does not prove a resource is permanently lost.
+- **Preset cycle** switches to the previous or next combination from Tools or **Plugin Commands**. The default shortcuts are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the app and adjustable in **Settings → Shortcuts**. The default preset is skipped unless you change the option in plugin details. The host task interface shows progress and failure reasons. Repeated clicks during an unfinished switch do not queue multiple switches.
+
+These plugins' source code and usage instructions are in `plugins/`. To write your own plugin, read this tutorial's [Plugin development guide](PluginGuide.en.md). Start with the first working example, learn the current SDK's commands, settings, pages, background tasks, and dependencies, then complete testing and packaging.
+
+### 7.8 About and the project film
+
+![About page](../images/guide-en/19-关于.webp)
+
+Open **About** near the bottom of the navigation to read the project introduction, tribute to the original author, project timeline, team and contributor information, and license details.
+
+Watch the project film on the About page using its playback controls. Keep the supplied media folders when moving the application.
+
+The project uses PolyForm Noncommercial 1.0.0 with additional attribution integrity terms. The bundled LICENSE defines the exact rights and conditions. Preserve the required attribution and third-party notices when modifying or distributing the project.
+
+The manager's version and update controls are under **Settings → Update → Application updates**.
+
+---
+
+## Chapter 8: Data, backups and troubleshooting
+
+### 8.1 Finding the actual data root
+
+![Plusa helping with backups and troubleshooting](../images/plusa/supplement/备份排障.webp)
+
+The application first tries to store personal data beside the application. If that folder is not writable, it uses the Windows user data directory, usually:
+
+```text
+%LOCALAPPDATA%/d3dxSkinManage-Plus/
+```
+
+Use **Open language packs folder**, **Open plugins folder**, or **Open Log Folder** to check the location currently in use, then identify `config/` and `data/` under the same data root.
+
+A single-file release also includes folders for languages, plugins, tutorials, and media. Move the complete distribution instead of keeping only the executable.
+
+### 8.2 Files to keep
+
+| Location | Contents | Backup recommendation |
+| --- | --- | --- |
+| `config/settings.json` | Application preferences and shortcut overrides | Keep |
+| `config/games.json` | Game list, paths, active game, current preset, and community site matches | Keep |
+| `config/plugin_state.json` | Plugin activation, trust, and related state | Keep |
+| `config/languages/` | Default and custom language files | Keep, especially your own changes |
+| `data/mod_index.db` | Current resource and deployment index | Back up after closing the app |
+| `data/presets.json` | Presets for all games | Keep |
+| `data/<game-resource-folder>/mods/` | Category folders and complete mod containers | Essential |
+| Preferences and other records in `data/<game-resource-folder>/` | State specific to the game, variant working state, previews, and other records | Back up the entire folder together |
+| `data/downloads/` | Downloaded source packages and queue information | Keep if packages are awaiting installation or needed for an archive |
+| `plugins/` and plugins' personal storage | Installed plugins and their data | Keep if you intend to continue using them |
+| `cache/` | Caches that can be regenerated | Do not use as your only backup source |
+| `logs/` | Troubleshooting logs | Keep relevant sessions when a problem occurs |
+| External loaders and deployment folders | Loader configuration, managed deployments, and manually added resources | Back up separately if they contain custom or manual content |
+
+The `.d3dxmod` and `.d3dxmeta/` entries inside a complete container are essential data. Keep the `.d3dxcategory` markers in category folders as well.
+
+Named variants are stored in `.d3dxmeta/variants/`. Back up the complete mod containers together with `presets.json` to restore both presets and the appearance configurations they reference.
+
+### 8.3 Recommended full backup procedure
+
+1. Wait for import, export, deployment, update, and recovery tasks to finish.
+2. Exit the application normally. If the game or loader is still writing configuration, finish those operations too.
+3. Copy `config/`, `data/`, and `plugins/` from the actual data root, along with any external assets you need.
+4. Save custom loader configuration and manually added resources in deployment folders separately.
+5. Store the backup in a different location from the source data, and spot-check containers, metadata, and preset files.
+
+While the application is running, the database may also use `-wal` and `-shm` files. Close the app normally before copying to avoid an inconsistent snapshot. Do not copy just one database file while it is being written.
+
+To share an individual mod, export it from Category Overview and include metadata. To share a category structure, use `.d3dxcp`. Neither replaces a full backup of your data.
+
+### 8.4 Moving to another folder, disk, or computer
+
+To move the entire manager, first back up as described above and exit the app, then copy the complete distribution and personal data. After starting from the new location, check each of the following:
+
+- Game executable and loader paths.
+- The actual deployment location specified by **Mod folder**.
+- External background images, videos, or WE scenes, and the WE application path.
+- Availability of fonts you installed, language packs, and plugins.
+- Whether the games' resource drives are connected.
+
+Some paths managed by the app can be stored relative to the data root. Paths to external games, loaders, and media may still need to be entered again.
+
+When changing the deployment location, prefer the migration confirmation provided on the **Games** page. Do not reimport an incomplete deployment folder as a new mod library, especially after discarding identity markers and while still using the old index.
+
+### 8.5 File identity, verification, and recovery messages
+
+The app checks managed source files, metadata, and deployment records before an operation. The following changes can block writes:
+
+| Message type | First action |
+| --- | --- |
+| File missing or disk offline | Reconnect the disk and check the actual path |
+| File in use | Close the relevant editor or preview, or finish related game operations, then retry |
+| Source file or metadata changed | Select the item again, refresh, and check where the change came from |
+| Identity mismatch or ownership cannot be determined | Keep the complete container and records; check whether only some files were copied or replaced |
+| Verification mismatch | Keep the original package and error details; check whether the file is damaged or was modified |
+| Unfinished transaction, rollback, or cleanup | Wait for recovery, or restart and retry as instructed |
+
+These messages prevent operations from continuing on the wrong item. **Do not delete markers, the database, or transaction records to dismiss the message.** Those records may contain the file contents and path information needed for recovery.
+
+### 8.6 Common problems
+
+| Symptom | What to check |
+| --- | --- |
+| The game list is empty after startup | Check that the correct data root is in use; the list is expected to be empty on a first installation |
+| An activation prompt covers the page | Double-click the target game on the **Games** page |
+| Cannot import at the root level | Open a category first |
+| Cannot find an imported mod | Check the current game, category, search text, type, rating, and tag filters |
+| Enabling a mod has no effect in the game | Check the deployment location, whether the loader is running, mod compatibility with the game version, and whether you have reloaded |
+| Space, F2, or another shortcut does nothing | Select a single item in Category Overview and move focus out of text boxes, then check custom bindings |
+| The key bindings page has no bindings | The mod's INI may not contain recognizable bindings, or loading may not have finished |
+| A variant cannot be saved | Enable the mod, confirm that it supports persistent variables, and let the loader write the current configuration first |
+| A variant's state is shown as unconfirmed | Save the configuration in the game and read it again, or explicitly choose to fill missing values with defaults |
+| The game still shows the old appearance after changing a variant | Reload as configured in the loader, and avoid letting unwritten game state overwrite the saved selection |
+| The online page says the game is not listed | Check the game's English name and the site's listings |
+| A download fails or is slow | Test the network and proxy, check free disk space, then retry |
+| A download is complete but not installed | Check the pending installation destination, switch back to the game it belongs to, and review the task result |
+| An update check is incomplete | Resolve network or source-information errors, then check again |
+| No application update is available | Check whether an update source is configured and whether the publisher has released a new package |
+| RAR can be read but cannot be exported | Creating RAR archives requires WinRAR |
+| Image memory use is high | Adjust the image memory allowance or clear the image cache; do not clear resource data |
+| A video or WE scene does not play | Check the asset path, format, complete scene folder, and local WE application |
+| Items are still missing after rebuilding | Review the report for invalid metadata, identity conflicts, or missing source files, and address each item |
+
+### 8.7 Reporting a problem
+
+Use **Tools → View Logs** to find the startup session in which the problem occurred, and retain the records before and after the operation. Include:
+
+- Application and Windows versions.
+- The page you started on and the sequence of actions.
+- The expected result, actual result, and complete error text.
+- Logs for the relevant period; include updater logs for updater problems.
+- Whether files were moved or renamed outside the app, disks were disconnected, or custom plugins were involved.
+
+You can replace or obscure game names, mod names, and personal paths in screenshots while keeping buttons, statuses, and error messages visible. Check logs for personal paths or credentials before sharing them too.
+
+---
+
+## Appendix A: Default keyboard shortcuts
+
+These are the application's default bindings. If you have customized them, or plugin conflict resolution has changed them, refer to **Settings → Shortcuts**.
+
+| Default shortcut | Action | Where it works |
+| --- | --- | --- |
+| `Ctrl+C` | Copy | Text areas; copies a preset in the presets list |
+| `Ctrl+X` | Cut | Text areas; prepares to move selected items in Category Overview |
+| `Ctrl+V` | Paste | Text areas, Category Overview, or the presets list |
+| `Ctrl+A` | Select all | The current text area, Category Overview, or presets list |
+| `Delete` | Delete | Text or selected items in Category Overview; deleting items still requires the applicable confirmation |
+| `F5` | Refresh the current game library | Main window |
+| `Ctrl+I` | Import mods | A game is active and the destination category is open |
+| `Ctrl+F` | Search this page | The current page, if it supports search |
+| `Ctrl+K` | Search all settings | Main window |
+| `Ctrl+,` | Open Settings | Main window |
+| `Ctrl+1` | Games | Main window |
+| `Ctrl+2` | Category Overview | Main window |
+| `Ctrl+3` | Gallery | Main window |
+| `Ctrl+4` | Online Mods | Main window |
+| `Alt+Left` | Go up one level / close online details | The corresponding page |
+| `Ctrl+Shift+N` | New Category | Category Overview |
+| `F2` | Edit the selected item | A single mod or category selected in Category Overview |
+| `Space` | Enable or disable | A single mod selected in Category Overview |
+| `Ctrl+Shift+E` | Export selected items | Category Overview |
+| `F6` | Launch Mod loader | A valid loader is configured |
+| `F7` | Launch Game | A game executable is configured |
+
+`Esc`, `Ctrl+Enter` in edit windows, and similar keys are contextual actions outside the customizable command set listed above. In-game F10 is configured by 3DMigoto.
+
+---
+
+## Appendix B: Operation scope reference
+
+| What you want to do | Where to do it | Key point |
+| --- | --- | --- |
+| Stop using a mod temporarily | Disable | Keeps the source container in the library |
+| Delete a mod | Delete in Category Overview | Check whether it uses the Recycle Bin or permanent deletion |
+| Delete all data for a game | Delete on the Games page | Permanently removes resources, configuration, and managed deployments; back up first |
+| Switch to another set of enabled mods | Presets | Includes both mod selections and variant references |
+| Change the appearance within one mod | Variants | Requires the mod to support the corresponding variables |
+| Share an empty category structure | Export category preset | Produces a `.d3dxcp` file without mods |
+| Share a mod and its named variants | Export the mod with metadata | Check the output package and keep all associated content |
+| Clear regenerable images | Images and cache | Distinguish memory cleanup from disk cleanup |
+| Remove duplicate downloaded source packages | Download data → Clean up installed | Keeps downloads that have not yet been installed |
+| Reset application preferences | Reset | Requires confirmation; preserves game configurations and imported mods |
+| Repair the index | Tools → Rebuild Index | Requires intact source files; cannot restore deleted resources |
