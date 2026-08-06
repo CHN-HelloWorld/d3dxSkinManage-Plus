@@ -229,3 +229,144 @@ class DialogTitleBar(QWidget):
         """标题栏隐藏时终止拖动，防止位置基准残留。"""
         self._end_drag()
         super().hideEvent(event)
+
+    def _end_drag(self):
+        """清除拖动基准，停止手动更新窗口位置。"""
+        # Qt 析构父窗口时仍会投递隐藏事件，循环回收可能已清空 Python 状态。
+        timer = getattr(self, "_move_timer", None)
+        if timer is None or not shiboken6.isValid(timer):
+            return
+        timer.stop()
+        self._pending_move = None
+        self._pending_native_move = False
+        self._native_move = None
+        self._coalesced_move = False
+        self._drag_origin = None
+
+    def changeEvent(self, event):
+        """主题确实改变时刷新标题栏，避免重复响应样式传播事件。"""
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.PaletteChange, QEvent.Type.StyleChange) and hasattr(self, "close_button"):
+            current = theme.current_theme()
+            if getattr(self, "_theme", None) != current:
+                self._theme = current
+                self.retheme()
+
+
+class ResizeHandle(QWidget):
+    """在 Windows 合并 Qt 缩放请求，其他可响应的平台使用原生缩放。"""
+
+    def __init__(self, parent: QWidget, edges: Qt.Edge, cursor: Qt.CursorShape):
+        """配置边缘方向、光标及合并拖动事件的定时器，右下角额外显示尺寸提示图标。"""
+        super().__init__(parent)
+        self.edges = edges
+        self._drag_origin = None
+        self._initial_geometry = QRect()
+        self._pending_position = None
+        self._pending_native_position = False
+        self._native_resize = None
+        self._resize_timer = QTimer(self)
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.timeout.connect(self._apply_pending_resize)
+        self.setCursor(cursor)
+        self.setAccessibleName(tr("调整窗口大小"))
+        # 命中区域不绘制继承的控件背景。
+        self.setStyleSheet("background: transparent; border: none;")
+        if edges == Qt.Edge.RightEdge | Qt.Edge.BottomEdge:
+            indicator = QLabel(self)
+            indicator.setFixedSize(12, 12)
+            indicator.setPixmap(icons.colored_pixmap_from("mod-updates/resize", 12, _color("muted")))
+            indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+            self.setToolTip(tr("拖动调整窗口大小"))
+
+    def mousePressEvent(self, event):
+        """仅对可调整的普通窗口启动左键缩放，记录几何基准并按平台选择原生或手动路径。"""
+        window = self.window()
+        if event.button() != Qt.MouseButton.LeftButton or window.isMaximized() or window.isFullScreen():
+            super().mousePressEvent(event)
+            return
+        self._cancel_resize()
+        handle = window.windowHandle()
+        # Windows 模态缩放会等待同步绘制，改由 Qt 合并拖动位置，避免慢帧阻塞输入或重放过期尺寸。
+        if QApplication.platformName() == "windows" or handle is None or not handle.startSystemResize(self.edges):
+            self._drag_origin = event.globalPosition().toPoint()
+            self._initial_geometry = window.geometry()
+            if QApplication.platformName() == "windows":
+                from src.ui.native_resize import begin_native_resize
+
+                self._native_resize = begin_native_resize(window)
+        event.accept()
+
+    def mouseMoveEvent(self, event):
+        """合并连续鼠标移动，只安排一次待处理尺寸更新；失去拖动条件时取消。"""
+        if self._drag_origin is None or not event.buttons() & Qt.MouseButton.LeftButton:
+            self._cancel_resize()
+            super().mouseMoveEvent(event)
+            return
+        self._pending_position = event.globalPosition().toPoint()
+        self._pending_native_position = event.spontaneous() and QApplication.platformName() == "windows"
+        # 指针事件批次结束后处理最新位置，不反复重启活动定时器。
+        if not self._resize_timer.isActive():
+            self._resize_timer.start(0)
+        event.accept()
+
+    def _apply_pending_resize(self, *, finish=False):
+        """依据拖动边缘计算受最小和最大尺寸约束的目标几何，优先原生更新并在基准失效时重建。"""
+        position = self._pending_position
+        if position is not None and self._pending_native_position:
+            # 原生输入投递时可能已过期，布局前重新采样当前位置；程序发送的事件保留指定坐标。
+            position = QCursor.pos()
+        self._pending_position = None
+        self._pending_native_position = False
+        if self._drag_origin is None or position is None:
+            return
+        window = self.window()
+        delta = position - self._drag_origin
+        rect = QRect(self._initial_geometry)
+        minimum, maximum = window.minimumSize(), window.maximumSize()
+        if self.edges & Qt.Edge.LeftEdge:
+            width = max(minimum.width(), min(maximum.width(), rect.width() - delta.x()))
+            rect.setLeft(rect.right() - width + 1)
+        elif self.edges & Qt.Edge.RightEdge:
+            rect.setWidth(max(minimum.width(), min(maximum.width(), rect.width() + delta.x())))
+        if self.edges & Qt.Edge.TopEdge:
+            height = max(minimum.height(), min(maximum.height(), rect.height() - delta.y()))
+            rect.setTop(rect.bottom() - height + 1)
+        elif self.edges & Qt.Edge.BottomEdge:
+            rect.setHeight(max(minimum.height(), min(maximum.height(), rect.height() + delta.y())))
+        if not finish and self._native_resize is not None:
+            if self._native_resize.apply(window, rect):
+                return
+            # Qt 处理显示器或缩放变化后重新设置拖动基准。
+            from src.ui.native_resize import begin_native_resize
+
+            window.setGeometry(rect)
+            self._native_resize = begin_native_resize(window)
+            return
+        window.setGeometry(rect)
+
+    def mouseReleaseEvent(self, event):
+        """左键释放时提交最终 Qt 几何，随后停止尺寸更新调度。"""
+        if event.button() == Qt.MouseButton.LeftButton and self._drag_origin is not None:
+            # 释放事件可能先于绘制或最后移动事件，结束拖动前提交释放位置。
+            self._resize_timer.stop()
+            self._pending_position = event.globalPosition().toPoint()
+            # 释放按钮后指针可能继续移动。
+            self._pending_native_position = False
+            self._apply_pending_resize(finish=True)
+            self._cancel_resize()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def _cancel_resize(self):
+        """丢弃待处理位置和原生基准，停止尺寸更新定时器。"""
+        # 控件状态可能先于 Qt 父窗口释放，剩余子定时器由 Qt 的所有权关系销毁。
+        timer = getattr(self, "_resize_timer", None)
+        if timer is None or not shiboken6.isValid(timer):
+            return
+        timer.stop()
+        self._pending_position = None
+        self._pending_native_position = False
+        self._drag_origin = None
+        self._native_resize = None
