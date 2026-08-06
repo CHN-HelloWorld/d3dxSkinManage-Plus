@@ -378,3 +378,78 @@ def set_background_active(on: bool) -> None:
 def is_background_active() -> bool:
     """返回主题系统是否启用了自定义背景材质。"""
     return _background_active
+
+
+def surface_color(token: str, role: str = "panel", theme: str | None = None) -> str:
+    """表面色：无背景图时返回不透明 token 色；启用背景图时返回亚克力叠色。
+
+    供「内联样式」调用点使用（QSS 模板内的选择器由 overlay 统一处理）。
+    ``role="placeholder"`` 时启用背景图返回 ``transparent``——让预览图占位区
+    直接透出其所在卡片/面板的亚克力，而非再叠一层灰块。
+    """
+    hexc = color(token, theme)
+    if not _background_active:
+        return hexc
+    if role == "placeholder":
+        return "transparent"
+    return _rgba(hexc, ACRYLIC.get(role, ACRYLIC["panel"]))
+
+
+def rgba(token: str, alpha: float, theme: str | None = None) -> str:
+    """公开的 token→rgba 工具：供需要任意不透明度叠色的调用点（如亚克力弹窗过滤器）使用。"""
+    return _rgba(color(token, theme), alpha)
+
+
+def surface_text_color(token: str, theme: str | None = None) -> str:
+    """保持浅色透明表面上的次要文字可读。"""
+    mode = resolve_auto(theme or current_theme())
+    if _background_active and mode == "light" and token in ("settings.secondary", "settings.muted"):
+        return _mix(
+            color("settings.secondary", mode),
+            color("settings.text", mode),
+            0.55 if token == "settings.secondary" else 0.40,
+        )
+    if _background_active and mode == "light" and token in ("text.secondary", "text.tertiary"):
+        return _mix(
+            color("text.secondary", mode), color("text.primary", mode), 0.55 if token == "text.secondary" else 0.30
+        )
+    return color(token, mode)
+
+
+def resolve_auto(theme: str) -> str:
+    """把 ``auto`` 解析成 light/dark（按 Windows 应用主题）；其余原样校验。"""
+    if theme in _VALID_THEMES:
+        return theme
+    if theme == "auto":
+        try:
+            import winreg  # type: ignore
+
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                r"Software\Microsoft\Windows\CurrentVersion\Themes\Personalize",
+            ) as key:
+                light, _ = winreg.QueryValueEx(key, "AppsUseLightTheme")
+            return "light" if light else "dark"
+        except Exception:
+            return "light"
+    return "light"
+
+
+def color(token: str, theme: str | None = None) -> str:
+    """解析颜色 token → ``#rrggbb``。未知 token 返回品红以便目视发现。"""
+    pal = _palette(theme)
+    val = pal.get(token)
+    if val is None:
+        logger.warning("未知颜色 token: %s", token)
+        return "#ff00ff"
+    return val
+
+
+def radius(name: str) -> int:
+    """读取命名圆角尺寸，未知名称回退标准控件圆角。"""
+    return RADII.get(name, RADII["control"])
+
+
+def space(name: str) -> int:
+    """读取命名间距，未知名称回退中等间距。"""
+    return SPACING.get(name, SPACING["md"])
