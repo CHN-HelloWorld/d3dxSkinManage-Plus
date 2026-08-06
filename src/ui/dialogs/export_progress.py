@@ -199,3 +199,201 @@ class ExportWorkerThread(QThread):
             self._terminated = True
             self._paused.set()  # 若处于暂停，解除阻塞以尽快退出
             self._control.notify_all()
+
+    @property
+    def is_paused(self) -> bool:
+        """返回当前是否请求暂停，不表示所有底层文件操作都已停止。"""
+        return not self._paused.is_set()
+
+
+class ExportProgressDialog(QDialog):
+    """导出进度控制器。
+
+    通过主窗口右下角的任务中心面板显示进度和逐项状态，实例自身不显示窗口。
+    QDialog 提供 accept/reject 生命周期接口。
+
+    ``panel=None`` 时仅执行任务，工作线程的调度方式相同。
+    """
+
+    export_finished = Signal(int, int)  # (成功数, 总数)
+
+    def __init__(
+        self,
+        mods: list,  # list[Mod]
+        dest_dir: str,
+        mod_manager,
+        parent: QWidget | None = None,
+        export_items: list[ExportItem] | None = None,
+        panel=None,
+    ) -> None:
+        """接收宿主提供的任务面板和可选导出计划，读取配置并初始化本批产物及结果记录，不启动导出。"""
+        super().__init__(parent)
+        self._dest_dir = dest_dir
+        self._panel = panel
+        self._worker: ExportWorkerThread | None = None
+        self._success = 0
+        self._failed = 0
+        self._skipped = 0
+        self._failed_names: list[str] = []
+        self._was_terminated = False
+        #: 本批已成功写入磁盘的产物路径（「取消全部导出」要按这份清单回滚）。
+        self._exported_paths: list[str] = []
+        #: 结束后是否自动打开导出目录（选「取消全部导出」时置 False）。
+        self._open_dir_on_finish = True
+        #: 终止时是否回滚已导出的产物（由「取消全部导出」置 True）。
+        self._purge_on_terminate = False
+        #: 已上报过终态（成功/失败/跳过）的项下标。收尾时其余的一律标「未导出」。
+        self._settled: set[int] = set()
+        self._overall_progress = 0.0
+
+        # 上层若已构建带 rel_dir 的导出计划（节点作根、保留结构）则直接采用；
+        # 未提供导出项时从 Mod 构建，并按 preserve_tree 计算相对目录。
+        if export_items is not None:
+            self._items = list(export_items)
+        else:
+            self._items = [
+                ExportItem(
+                    name=m.display_name,
+                    src_path=m.path,
+                    meta=share_meta_from_mod(m),
+                    preview_paths=list(getattr(m, "preview_images", []) or []),
+                )
+                for m in mods
+            ]
+        self._total = len(self._items)
+        self._library_root = str(mod_manager._get_library_root())
+        self._fmt = Config().get("export.format", "zip")
+        self._preserve_tree = Config().get("export.preserve_tree", True)
+        self._include_meta = bool(Config().get("export.include_metadata", False))
+        self._strict_format = bool(Config().get("export.strict_format", False))
+
+        self._setup_ui()
+
+    def _setup_ui(self):
+        """使控制器窗口保持隐藏，并连接宿主任务面板的控制信号、初始化逐项排队状态。"""
+        self.setWindowTitle(tr("导出 Mod"))
+        # 导出状态由任务中心展示，控制器窗口始终保持隐藏。
+        self.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+        if self._panel is None:
+            return
+        self._panel.pause_requested.connect(self._on_pause)
+        self._panel.resume_requested.connect(self._on_resume)
+        self._panel.stop_requested.connect(self._on_terminate)
+        title = tr("正在导出 {total} 个 Mod", total=self._total)
+        self._panel.start_batch(
+            self._total,
+            title,
+            has_pause=True,
+            # 共用任务面板的默认文案用于纳管，导出需提供独立的终止提示。
+            stop_tooltip=tr("停止导出"),
+            cancelled_title=tr("已停止导出"),
+            done_text=tr("已导出"),
+            pause_tooltip=tr("暂停导出"),
+            resume_tooltip=tr("继续导出"),
+        )
+        self._panel.update_progress(0.0, title, tr("准备中…"))
+        for index, item in enumerate(self._items):
+            self._panel.update_item(index, item.name, ST_QUEUED)
+
+    def _release_panel(self) -> None:
+        """断开与浮层的连线，避免下一批导出收到本批的回调。"""
+        if self._panel is None:
+            return
+        for sig, slot in (
+            (self._panel.pause_requested, self._on_pause),
+            (self._panel.resume_requested, self._on_resume),
+            (self._panel.stop_requested, self._on_terminate),
+        ):
+            try:
+                sig.disconnect(slot)
+            except TypeError:
+                pass
+        self._panel = None
+
+    def start_export(self):
+        """按配置创建导出线程并连接面板更新信号，空批次直接进入正常收尾。"""
+        if self._total == 0:
+            self._on_finished()
+            return
+        self._worker = ExportWorkerThread(
+            self._items,
+            self._dest_dir,
+            self._fmt,
+            self._preserve_tree,
+            self._library_root,
+            self._include_meta,
+            strict_format=self._strict_format,
+            parent=self,
+            max_workers=effective_archive_workers(Config().get("export.parallel_workers")),
+        )
+        self._worker.progress_updated.connect(self._on_progress)
+        self._worker.item_done.connect(self._on_item_done)
+        self._worker.finished_all.connect(self._on_finished)
+        # 细化进度（单个 Mod 内部阶段），与导入 worker 的 stage_progress 同格式
+        self._worker.stage_progress.connect(self._on_stage_progress)
+        self._worker.start()
+
+    # worker → 浮层
+
+    def _on_progress(self, current: int, total: int, detail: str):
+        """每个 Mod 起步的粗粒度进度；Mod 内部阶段由 _on_stage_progress 细化。"""
+        if self._panel is None:
+            return
+        if 0 <= current < len(self._items):
+            self._panel.update_item(current, self._items[current].name, ST_RUNNING, tr("正在导出…"))
+        self._panel.update_progress(
+            self._overall_progress * 100.0, tr("正在导出 {total} 个 Mod", total=self._total), detail
+        )
+
+    def _on_stage_progress(self, overall: float, text: str):
+        """单个 Mod 内部阶段进度（overall 0~1 全局小数）。"""
+        self._overall_progress = max(self._overall_progress, max(0.0, min(1.0, overall)))
+        if self._panel is None:
+            return
+        self._panel.update_progress(
+            self._overall_progress * 100.0, tr("正在导出 {total} 个 Mod", total=self._total), text
+        )
+
+    def _on_item_done(self, index: int, result: ExportResult):
+        """在界面线程记录单项成功、失败或源缺失，并登记已确认产物路径供取消全部导出时清理。"""
+        if result.skipped:
+            self._skipped += 1
+            status, detail = ST_FAILED, tr("已跳过·{value}", value=result.error or tr("源缺失"))
+        elif result.ok:
+            self._success += 1
+            if result.out_path:
+                self._exported_paths.append(str(result.out_path))
+            status, detail = ST_DONE, tr("已导出")
+        else:
+            self._failed += 1
+            self._failed_names.append(result.name)
+            status, detail = ST_FAILED, result.error or tr("失败")
+        self._settled.add(index)
+        done = self._success + self._failed + self._skipped
+        self._overall_progress = max(self._overall_progress, done / max(1, self._total))
+        if self._panel is None:
+            return
+        name = self._items[index].name if 0 <= index < len(self._items) else result.name
+        self._panel.update_item(index, name, status, detail)
+        self._panel.update_progress(
+            self._overall_progress * 100.0, tr("正在导出 {total} 个 Mod", total=self._total), f"{done}/{self._total}"
+        )
+
+    def _mark_unsettled_items(self) -> None:
+        """将未收到终态的明细行标记为未导出。
+
+        包括中途取消及尚未开始的项目，不增加成功或失败计数。
+        """
+        if self._panel is None:
+            return
+        for index, item in enumerate(self._items):
+            if index not in self._settled:
+                self._panel.update_item(index, item.name, ST_FAILED, tr("未导出"))
+
+    def _on_finished(self):
+        """正常完成时结算面板、报告成功数并接受控制器；已终止批次交由终止流程收尾。"""
+        if self._was_terminated:
+            return  # 已在 _on_terminate 中处理收尾
+        self._finish_panel(cancelled=False)
+        self.export_finished.emit(self._success, self._total)
+        self.accept()
