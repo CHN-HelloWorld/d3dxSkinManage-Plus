@@ -370,3 +370,204 @@ class ResizeHandle(QWidget):
         self._pending_native_position = False
         self._drag_origin = None
         self._native_resize = None
+
+    def hideEvent(self, event):
+        """缩放手柄隐藏时取消当前拖动，避免后续定时器更新窗口。"""
+        self._cancel_resize()
+        super().hideEvent(event)
+
+
+class _DialogFrame(QObject):
+    """为普通对话框管理自定义标题栏、边缘缩放手柄及进度布局。"""
+
+    def __init__(self, dialog):
+        """安装无边框标题栏与八个缩放区域，调整内容边距并接管缺少布局的进度对话框。"""
+        super().__init__(dialog)
+        self.dialog = dialog
+        self._theme = theme.current_theme()
+        self._close_allowed = bool(dialog.windowFlags() & Qt.WindowType.WindowCloseButtonHint)
+        if not dialog.windowFlags() & Qt.WindowType.FramelessWindowHint:
+            dialog.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        self.titlebar = DialogTitleBar(dialog)
+        # 边框由对话框自身样式绘制，避免全窗口覆盖层变为原生同级窗口后阻挡点击。
+        self._progress_layout = None
+        self._progress_snapshot = None
+        margins = dialog.contentsMargins()
+        # 在现有布局外预留标题栏空间，避免消息框重建布局时覆盖。
+        dialog.setContentsMargins(margins.left() + 1, margins.top() + 32, margins.right() + 1, margins.bottom() + 1)
+        if dialog.minimumHeight() == dialog.maximumHeight():
+            dialog.setFixedHeight(dialog.height() + 33)
+        if isinstance(dialog, QProgressDialog) and dialog.layout() is None:
+            self._progress_layout = QVBoxLayout(dialog)
+            self._progress_layout.setContentsMargins(16, 12, 16, 12)
+            self._progress_layout.setSpacing(12)
+            self._layout_progress()
+        self.handles = []
+        for edges, cursor in (
+            (Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor),
+            (Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+            (Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
+            (Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+            (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeFDiagCursor),
+            (Qt.Edge.RightEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeBDiagCursor),
+            (Qt.Edge.LeftEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeBDiagCursor),
+            (Qt.Edge.RightEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeFDiagCursor),
+        ):
+            self.handles.append(ResizeHandle(dialog, edges, cursor))
+        dialog.installEventFilter(self)
+        self.update_geometry()
+
+    def _layout_progress(self):
+        """修正进度对话框忽略外边距的内部几何。
+
+        复用原控件保留取消和自动关闭语义，在 Qt 内部布局后核对替换的标签、进度条和按钮。
+        """
+        layout = self._progress_layout
+        if layout is None:
+            return
+        children = self.dialog.findChildren(QWidget, options=Qt.FindChildOption.FindDirectChildrenOnly)
+        controls = [
+            child for cls in (QLabel, QProgressBar, QPushButton) for child in children if isinstance(child, cls)
+        ]
+        for widget in controls:
+            if isinstance(widget, QLabel) and widget.styleSheet() != "background: transparent;":
+                widget.setStyleSheet("background: transparent;")
+
+        def snapshot():
+            """捕获进度对话框内容区域和子控件几何、可见性与尺寸建议，用于检测布局变化。"""
+            return (
+                self.dialog.contentsRect(),
+                tuple((widget, widget.geometry(), widget.isHidden(), widget.sizeHint()) for widget in controls),
+            )
+
+        if snapshot() == self._progress_snapshot:
+            return
+        for index, widget in enumerate(controls):
+            if layout.indexOf(widget) != index:
+                layout.insertWidget(index, widget)
+                if isinstance(widget, QPushButton):
+                    layout.setAlignment(widget, Qt.AlignmentFlag.AlignRight)
+        layout.invalidate()
+        layout.setGeometry(self.dialog.contentsRect())
+        self._progress_snapshot = snapshot()
+
+    def update_geometry(self):
+        """按窗口尺寸重排标题栏和缩放手柄，并依据固定尺寸、窗口状态和关闭权限控制交互。"""
+        dialog = self.dialog
+        width, height = dialog.width(), dialog.height()
+        self.titlebar.setGeometry(1, 1, max(0, width - 2), 31)
+        self.titlebar.show()
+        self.titlebar.raise_()
+        fixed_w = dialog.minimumWidth() == dialog.maximumWidth()
+        fixed_h = dialog.minimumHeight() == dialog.maximumHeight()
+        fixed = bool(dialog.windowFlags() & Qt.WindowType.MSWindowsFixedSizeDialogHint)
+        for handle in self.handles:
+            edges = handle.edges
+            left, right = bool(edges & Qt.Edge.LeftEdge), bool(edges & Qt.Edge.RightEdge)
+            top, bottom = bool(edges & Qt.Edge.TopEdge), bool(edges & Qt.Edge.BottomEdge)
+            corner = (left or right) and (top or bottom)
+            w = 12 if corner else 5 if left or right else width - 24
+            h = 12 if corner else 5 if top or bottom else height - 24
+            x = width - w if right else 0 if left else 12
+            y = height - h if bottom else 0 if top else 12
+            handle.setGeometry(x, y, max(0, w), max(0, h))
+            handle.setVisible(
+                not (
+                    fixed
+                    or dialog.isMaximized()
+                    or dialog.isFullScreen()
+                    or ((left or right) and fixed_w)
+                    or ((top or bottom) and fixed_h)
+                )
+            )
+            handle.raise_()
+        self.titlebar.close_button.setEnabled(self._close_allowed)
+
+    def eventFilter(self, obj, event):
+        # 垃圾回收可能先清理 Python 状态，子对象拆卸仍会产生事件，不能仅检查原生对话框有效性。
+        """随布局和窗口状态更新边框几何，主题或显示变化时刷新标题栏与原生圆角。"""
+        dialog = getattr(self, "dialog", None)
+        if dialog is None or not shiboken6.isValid(dialog):
+            return False
+        kind = event.type()
+        if kind == QEvent.Type.Paint:
+            self._layout_progress()
+        if kind in (QEvent.Type.Resize, QEvent.Type.Show, QEvent.Type.LayoutRequest, QEvent.Type.WindowStateChange):
+            self.update_geometry()
+        if kind in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange):
+            current = theme.current_theme()
+            if current != self._theme:
+                self._theme = current
+                self.titlebar.retheme()
+                self.dialog.update()
+        if kind == QEvent.Type.Show:
+            from src.ui.win_effects import apply_dark_titlebar, apply_rounded_corners
+
+            apply_dark_titlebar(self.dialog, theme.current_theme() == "dark")
+            apply_rounded_corners(self.dialog)
+        return False
+
+
+class DialogFrameManager(QObject):
+    """覆盖静态 Qt 对话框、插件对话框和应用对话框。"""
+
+    def eventFilter(self, obj, event):
+        """为普通顶层对话框配置透明材质、入场动画和统一边框，跳过原生文件及专用不透明对话框。"""
+        if not isinstance(obj, QDialog) or isinstance(obj, QFileDialog):
+            return False
+        if obj.property("opaqueDialogSurface"):
+            # 拥有不透明表面的对话框保留自身原生边框，避免样式准备时重建分层缓冲。
+            return False
+        if event.type() in (QEvent.Type.Polish, QEvent.Type.Show):
+            if obj.isWindow():
+                # 构造函数返回前可能收到样式事件，此时仅设置标志，显示时再添加子控件。
+                if event.type() == QEvent.Type.Polish:
+                    if not obj.windowFlags() & Qt.WindowType.FramelessWindowHint:
+                        obj.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+                    if not obj.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground):
+                        obj.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+                else:
+                    from src.ui.acrylic import apply_dialog_acrylic
+
+                    # 私有控件未创建前也可能收到样式事件，进度取消保持立即生效。
+                    fresh_surface = not obj.property("_dialog_acrylic")
+                    apply_dialog_acrylic(obj, tint_alpha=0.78, animate=not isinstance(obj, QProgressDialog))
+                    if (
+                        fresh_surface
+                        and not isinstance(obj, QProgressDialog)
+                        and getattr(obj, "_slide_anim", None) is None
+                    ):
+                        # 显示期间新安装的表面过滤器尚未收到当前显示事件。
+                        from src.ui import anim
+
+                        obj._dialog_resting_geometry = obj.geometry()
+                        anim.slide_in(obj, dy=16, duration=150)
+                    if not obj.property("customDialogFrame") and not obj.property("dialogFrameInstalled"):
+                        frame = decorate_dialog(obj)
+                        frame.titlebar.retheme()
+                    elif obj.property("customDialogFrame"):
+                        for bar in obj.findChildren(DialogTitleBar):
+                            bar.retheme()
+        return False
+
+
+def decorate_dialog(dialog: QDialog) -> _DialogFrame:
+    """允许构造阶段需要关闭按钮的对话框显式安装边框。"""
+    if not dialog.property("dialogFrameInstalled"):
+        dialog.setProperty("dialogFrameInstalled", True)
+        dialog._dialog_frame = _DialogFrame(dialog)
+        # 边框在显示时安装，此时样式选择器已被缓存。
+        dialog.style().unpolish(dialog)
+        dialog.style().polish(dialog)
+    return dialog._dialog_frame
+
+
+def install(app: QApplication) -> DialogFrameManager:
+    """安装应用级对话框装饰过滤器，并保留系统原生文件对话框支持。"""
+    from src.ui.application_event_filters import install_application_event_filter
+
+    # 文件和目录选择使用系统对话框，其他对话框使用统一边框。
+    app.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
+    manager = DialogFrameManager(app)
+    install_application_event_filter(app, manager, (QEvent.Type.Polish, QEvent.Type.Show))
+    return manager
