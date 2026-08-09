@@ -397,3 +397,159 @@ class ExportProgressDialog(QDialog):
         self._finish_panel(cancelled=False)
         self.export_finished.emit(self._success, self._total)
         self.accept()
+
+    def _finish_panel(self, *, cancelled: bool) -> None:
+        """补齐未结算明细、显示批次摘要并断开面板信号；允许且有成功产物时打开目标目录。"""
+        self._mark_unsettled_items()
+        detail = self._summary_detail()
+        if self._panel is not None:
+            if cancelled:
+                self._panel.finish_cancelled(detail)
+            else:
+                self._panel.finish(
+                    tr("已导出 {success}/{total} 个 Mod", success=self._success, total=self._total),
+                    detail,
+                    ok=not (self._failed or self._skipped),
+                )
+        logger.info("导出结束（%s）: %s → %s", "已终止" if cancelled else "完成", detail, self._dest_dir)
+        self._release_panel()
+        # 导出完成且有实际产物时自动打开目标目录；取消全部导出时跳过。
+        if self._open_dir_on_finish and self._success > 0:
+            self._open_dest_dir()
+
+    def _summary_detail(self) -> str:
+        """生成批次结果说明，确保各状态数量之和等于总数。"""
+        parts = [tr("成功 {success}", success=self._success)]
+        if self._failed:
+            parts.append(tr("失败 {failed}", failed=self._failed))
+        if self._skipped:
+            parts.append(tr("跳过 {skipped}（源缺失）", skipped=self._skipped))
+        remaining = self._total - (self._success + self._failed + self._skipped)
+        if remaining > 0:
+            parts.append(tr("未导出 {remaining}", remaining=remaining))
+        return "，".join(parts) + f" · {self._dest_dir}"
+
+    def _open_dest_dir(self) -> None:
+        """使用当前平台的系统文件管理器打开导出目录，失败仅记录警告。"""
+        try:
+            if os.name == "nt":
+                os.startfile(self._dest_dir)  # type: ignore[attr-defined]
+            else:
+                import subprocess
+
+                subprocess.Popen(["xdg-open", self._dest_dir])
+        except Exception as e:
+            logger.warning("打开导出目录失败: %s", e)
+
+    # 浮层 → worker
+
+    def _on_pause(self):
+        """请求后台协作暂停，并在任务面板显示恢复或停止操作提示。"""
+        if self._worker:
+            self._worker.pause()
+        if self._panel is not None:
+            self._panel.set_paused(True)
+            self._panel.update_progress(None, tr("导出已暂停"), tr("选择“继续导出”恢复任务，或选择“停止导出”。"))
+
+    def _on_resume(self):
+        """恢复后台执行事件并解除任务面板的暂停状态。"""
+        if self._worker:
+            self._worker.resume()
+        if self._panel is not None:
+            self._panel.set_paused(False)
+
+    def _on_terminate(self):
+        """先暂停工作线程，再询问保留、撤销或继续导出。
+
+        确认框会运行嵌套事件循环，暂停必须先于显示，以免确认期间继续创建产物。
+        """
+        if not self._worker or not self._worker.isRunning():
+            return
+        was_paused = self._worker.is_paused
+        self._worker.pause()
+        if self._panel is not None:
+            self._panel.set_paused(True)
+        # 先派发本控制器已排队的单项完成通知，使确认框计数与明细一致。
+        # 限定接收者可避免 processEvents 引入无关输入事件的重入。
+        QCoreApplication.sendPostedEvents(self, 0)
+
+        remaining = max(0, self._total - (self._success + self._failed + self._skipped))
+        # 确认框须以可见主窗口为父对象，不能使用隐藏的导出控制器窗口。
+        host = self.parent()
+        box = QMessageBox(host.window() if host is not None else None)
+        box.setWindowTitle(tr("停止导出"))
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(
+            tr(
+                "已导出 {success} 个 Mod，还有 {remaining} 个 Mod 未导出，请选择操作：",
+                success=self._success,
+                remaining=remaining,
+            )
+        )
+        keep_btn = box.addButton(tr("保留已导出的Mod"), QMessageBox.ButtonRole.AcceptRole)
+        purge_btn = box.addButton(tr("取消全部导出"), QMessageBox.ButtonRole.DestructiveRole)
+        resume_btn = box.addButton(tr("继续导出"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(resume_btn)
+        box.exec()
+        clicked = box.clickedButton()
+
+        # 仅在明确选择保留或撤销时停止；关闭确认框时继续导出。
+        # 停止后不会自动补做剩余项目，未明确选择停止时恢复此前执行状态。
+        if clicked is purge_btn:
+            self._open_dir_on_finish = False
+            self._do_terminate(purge=True)
+            return
+        if clicked is keep_btn:
+            self._do_terminate(purge=False)
+            return
+        if not was_paused:
+            self._on_resume()
+
+    def _do_terminate(self, *, purge: bool) -> None:
+        """请求终止并在工作线程结束后处理结果，按选择回滚已导出的产物。"""
+        if not self._worker:
+            return
+        self._was_terminated = True
+        self._purge_on_terminate = purge
+        self._worker.terminate_export()  # 内部会 _paused.set 解除阻塞
+        if self._panel is not None:
+            self._panel.set_paused(False)
+            self._panel.set_stop_enabled(False)
+            self._panel.update_progress(None, tr("正在停止导出…"), tr("正在等待后台任务结束"))
+        if self._worker.isRunning():
+            self._worker.finished.connect(self._do_terminate_finish)
+        else:
+            self._do_terminate_finish()
+
+    def _do_terminate_finish(self):
+        """在线程终止后按用户决定保留或清理本批已确认产物，再结算面板并报告结果。"""
+        if getattr(self, "_purge_on_terminate", False):
+            self._purge_exported()
+        self._finish_panel(cancelled=True)
+        self.export_finished.emit(self._success, self._total)
+        self.reject()
+
+    def _purge_exported(self) -> None:
+        """仅清理本批记录的输出路径，不扫描或删除目标目录中的其他内容。"""
+        removed = 0
+        for raw in self._exported_paths:
+            path = Path(raw)
+            try:
+                if path.is_dir():
+                    shutil.rmtree(str(path), ignore_errors=True)
+                    removed += 1
+                elif path.is_file():
+                    path.unlink(missing_ok=True)
+                    removed += 1
+            except OSError as e:
+                logger.warning("回滚导出产物失败: %s: %s", path, e)
+        self._exported_paths.clear()
+        self._success = 0
+        logger.info("已按用户选择撤销本批导出产物: %d 个", removed)
+
+    def closeEvent(self, event):
+        """运行中禁止关闭（本控制器不显示窗口，此处只作回退处理）。"""
+        if self._worker and self._worker.isRunning():
+            event.ignore()
+        else:
+            super().closeEvent(event)
