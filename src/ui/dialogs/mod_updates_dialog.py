@@ -442,3 +442,112 @@ class ModUpdatesDialog(QDialog):
         outer.addWidget(self._batch_surface)
         self._batch_panel.hide()
         return self._batch_panel
+
+    def _build_empty(self) -> QWidget:
+        """构建可滚动的空列表提示页，按状态提供重新检查或清除搜索操作。"""
+        empty = QWidget()
+        empty.setMinimumHeight(220)
+        layout = QVBoxLayout(empty)
+        layout.setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(0)
+        layout.addStretch()
+        badge = icon_label("check", 29, "accent")
+        badge.setObjectName("updateEmptyIcon")
+        badge.setFixedSize(64, 64)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_icon = badge
+        layout.addWidget(badge, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addSpacing(17)
+        self._empty_title = label(name="updateEmptyTitle")
+        self._empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_title.setWordWrap(True)
+        layout.addWidget(self._empty_title)
+        layout.addSpacing(9)
+        self._empty_description = label(name="updateEmptyDescription")
+        self._empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_description.setWordWrap(True)
+        layout.addWidget(self._empty_description)
+        layout.addSpacing(19)
+        self._empty_action = self._button(tr("重新检查"), "refresh")
+        self._empty_action.setObjectName("updateEmptyAction")
+        self._empty_action.setFixedWidth(100)
+        self._empty_action.clicked.connect(self._empty_action_clicked)
+        layout.addWidget(self._empty_action, 0, Qt.AlignmentFlag.AlignHCenter)
+        layout.addStretch()
+        scroll = QScrollArea()
+        scroll.setObjectName("updateEmptyScroll")
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setWidget(empty)
+        return scroll
+
+    def _build_footer(self) -> QWidget:
+        """构建固定底栏，展示待更新数量、预计容量及全部更新或完成操作。"""
+        footer = QWidget()
+        self._footer = footer
+        footer.setObjectName("updateFooter")
+        footer.setFixedHeight(75)
+        layout = QHBoxLayout(footer)
+        layout.setContentsMargins(25, 15, 25, 15)
+        layout.setSpacing(10)
+        self._footer_icon = icon_label("download", 16, "accent")
+        layout.addWidget(self._footer_icon)
+        copy = QVBoxLayout()
+        copy.setSpacing(1)
+        self._footer_count = label(name="updateFooterCount")
+        self._footer_count.setTextFormat(Qt.TextFormat.RichText)
+        self._footer_count.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._download_size = label(name="updateDownloadSize")
+        copy.addWidget(self._footer_count)
+        copy.addWidget(self._download_size)
+        layout.addLayout(copy, 1)
+        self._later = self._button(tr("稍后"), quiet=True)
+        self._later.setFixedWidth(48)
+        self._later.clicked.connect(self.reject)
+        layout.addWidget(self._later)
+        self._update_all_btn = _BulkUpdateButton()
+        self._update_all_btn.clicked.connect(self._update_all_clicked)
+        layout.addWidget(self._update_all_btn)
+        return footer
+
+    def _build_message(self) -> None:
+        """创建窗口持有的临时提示层和可选撤销按钮，并配置一次性自动隐藏定时器。"""
+        self._message = QWidget(self)
+        self._message.setObjectName("updateMessage")
+        layout = QHBoxLayout(self._message)
+        layout.setContentsMargins(17, 12, 17, 12)
+        layout.setSpacing(10)
+        layout.addWidget(icon_label("info", 16, "accent"))
+        self._message_text = label(name="updateMessageText")
+        self._message_text.setWordWrap(True)
+        layout.addWidget(self._message_text, 1)
+        self._undo_btn = self._button(tr("撤销"))
+        self._undo_btn.setObjectName("updateUndo")
+        self._undo_btn.setFixedWidth(36)
+        self._undo_btn.clicked.connect(self._undo_clicked)
+        layout.addWidget(self._undo_btn)
+        self._message.hide()
+        self._message_timer = QTimer(self)
+        self._message_timer.setSingleShot(True)
+        self._message_timer.timeout.connect(self._dismiss_message)
+
+    def row_count(self) -> int:
+        """返回仍由窗口持有的条目数，包含搜索隐藏及等待成功退场的条目。"""
+        return len(self._rows_by_id)
+
+    def pending_ids(self) -> list[str]:
+        """返回尚未完成且未进入退场流程的 Mod 标识；搜索只改变可见性，不改变全部更新范围。"""
+        return [
+            mid for mid, row in self._rows_by_id.items() if row.state != "done" and mid not in self._row_retirements
+        ]
+
+    def is_batch_complete(self) -> bool:
+        """仅在有任务历史、检查已结束、无待处理行且全部任务成功时返回真；成功行移出后仍使用历史判断。"""
+        return (
+            bool(self._task_snapshots)
+            and not self._checking
+            and not self.pending_ids()
+            and all(snapshot.get("phase") == "done" for snapshot in self._task_snapshots.values())
+        )
