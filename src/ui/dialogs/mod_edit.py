@@ -673,3 +673,99 @@ class ModEditDialog(QDialog):
         )
         self._save_note.setText(note)
         self._save_note.setToolTip(note)
+
+    def reject(self) -> None:
+        """保存或标签模态操作期间拒绝关闭；无修改直接退出，有修改时异步确认是否放弃。"""
+        if self._saving or self.tag_picker.has_active_modal:
+            return
+        if self.discard_dialog and self.discard_dialog.isVisible():
+            self.discard_dialog.raise_()
+            return
+        self.tag_picker.hide_popup()
+        if self._collect_fields() == self._original_fields and not self.tag_picker.is_dirty:
+            super().reject()
+            return
+        self.discard_dialog = _DiscardDialog(self)
+        self.discard_dialog.accepted.connect(lambda: self.done(QDialog.DialogCode.Rejected))
+        self.discard_dialog.open()
+
+    def keyPressEvent(self, event) -> None:
+        """Esc 优先关闭标签弹出层，Ctrl+Enter 触发统一保存，其余按键交由对话框处理。"""
+        if event.key() == Qt.Key.Key_Escape and self.tag_picker.popup.isVisible():
+            self.tag_picker.hide_popup()
+            event.accept()
+            return
+        if (
+            event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter)
+            and event.modifiers() & Qt.KeyboardModifier.ControlModifier
+        ):
+            self._on_save()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    def get_result(self) -> dict | None:
+        """返回最近一次成功接受的字段结果，包含可选标签提交结果；未成功保存时为空值。"""
+        return self._result
+
+    def showEvent(self, event) -> None:
+        """显示时将窗口约束到可用屏幕并聚焦名称输入框。"""
+        self._fit_to_screen()
+        super().showEvent(event)
+        self._name_input.setFocus()
+
+    def changeEvent(self, event) -> None:
+        """在实际主题切换后重建表单样式和图标，忽略仅由重新应用样式产生的事件。"""
+        super().changeEvent(event)
+        if (
+            event.type() in (QEvent.Type.StyleChange, QEvent.Type.PaletteChange)
+            and hasattr(self, "_style_theme")
+            and self._style_theme != theme.current_theme()
+        ):
+            self._apply_style()
+            icons.retheme_icons(self)
+
+    def resizeEvent(self, event) -> None:
+        """宽度变化且表单已初始化时重新计算单双栏布局，单纯高度变化不重排。"""
+        super().resizeEvent(event)
+        if hasattr(self, "_form_grid") and event.oldSize().width() != event.size().width():
+            self._update_columns()
+
+    def _fit_to_screen(self) -> None:
+        """显示时将窗口大小和约束限制在可用屏幕内，再按宽度切换布局，内容不决定窗口高度。"""
+        available = self.screen().availableGeometry()
+        width_limit = max(280, available.width() - 40)
+        height_limit = max(240, available.height() - 80)
+        self.setMinimumSize(min(450, width_limit), min(340, height_limit))
+        self.setMaximumSize(width_limit, height_limit)
+        self.resize(min(self.width(), width_limit), min(self.height(), height_limit))
+        self._update_columns()
+
+    def _update_columns(self) -> None:
+        """窄屏时纵向排列面板，保留用户设置的高度。"""
+        if not hasattr(self, "_side_panel"):
+            return
+        wide = self.width() >= 720
+        if wide == self._wide_layout:
+            return
+        self._wide_layout = wide
+        self._form_grid.removeWidget(self._basic_panel)
+        self._form_grid.removeWidget(self._side_scroll)
+        self._form_grid.addWidget(self._basic_panel, 0, 0, Qt.AlignmentFlag.AlignTop)
+        self._form_grid.setColumnStretch(0, 1)
+        self._form_grid.setColumnStretch(1, 0)
+        for row in range(3):
+            self._form_grid.setRowStretch(row, 0)
+        self._form_grid.setRowStretch(0 if wide else 2, 1)
+        # 断点切换时移动同一父对象下的滚动区，避免反复更换父对象影响主题和键盘焦点。
+        self._side_scroll.set_stacked(not wide)
+        if wide:
+            self._form_grid.addWidget(self._side_scroll, 0, 1)
+            self._side_layout.setContentsMargins(20, 0, 0, 0)
+        else:
+            self._form_grid.addWidget(self._side_scroll, 1, 0, Qt.AlignmentFlag.AlignTop)
+            self._side_layout.setContentsMargins(0, 16, 0, 0)
+        self._side_panel.setProperty("stacked", not wide)
+        self._side_panel.style().unpolish(self._side_panel)
+        self._side_panel.style().polish(self._side_panel)
+        self._side_panel.updateGeometry()
