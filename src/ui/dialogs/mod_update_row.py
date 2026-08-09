@@ -606,3 +606,224 @@ class UpdateRow(QWidget):
         apply_icon(source, "external", "accent")
         source.clicked.connect(lambda: self.dialog.open_gb_requested.emit(self.info.local_mod_id))
         self._log_layout.addWidget(source)
+
+    def _toggle_logs(self, checked: bool) -> None:
+        """按需构建日志后切换可见性和箭头图标，并通知父布局行高发生变化。"""
+        if checked:
+            self._build_logs()
+        self._log_margin.setVisible(checked)
+        apply_icon(self.summary, "chevron-down" if checked else "chevron", "muted")
+        self.updateGeometry()
+
+    def set_state(self, state: str, error: str = "") -> None:
+        """将 ready 状态重置为空任务，或把 updating、done、failed 转成对应任务快照；未知非空闲状态抛出 KeyError。"""
+        if state != "ready":
+            self.set_task_snapshot(
+                {
+                    **self.task_snapshot,
+                    "phase": {"updating": "preparing", "done": "done", "failed": "failed"}[state],
+                    "error": error,
+                }
+            )
+            return
+        self.phase = self.state = "ready"
+        self.task_snapshot = {}
+        self._task_margin.hide()
+        self._set_state_appearance()
+
+    def set_task_snapshot(self, snapshot: dict) -> None:
+        """复制任务快照并从阶段派生行状态，然后展示进度区、刷新操作及任务反馈。"""
+        self.task_snapshot = dict(snapshot)
+        self.phase = str(snapshot.get("phase", "preparing"))
+        self.state = (
+            "done"
+            if self.phase == "done"
+            else "failed"
+            if self.phase in {"failed", "canceled", "deferred"}
+            else "updating"
+        )
+        self._task_margin.show()
+        self._set_state_appearance()
+        self._render_task()
+
+    def _set_state_appearance(self) -> None:
+        """同步完成样式、重试文字及活动控制区，停止非活动任务动画并按需重新应用样式。"""
+        state = self.state
+        changed = self.update_button.property("state") != state
+        self.update_button.setProperty("state", state)
+        self.setProperty("complete", state == "done")
+        self.new_version.setProperty("complete", state == "done")
+        text = {"ready": tr("更新"), "updating": tr("更新中"), "done": tr("已更新"), "failed": tr("重试")}[state]
+        self.update_button.setText(tr("继续") if self.phase == "deferred" else text)
+        error = str(self.task_snapshot.get("error") or "")
+        self.update_button.setToolTip(tr("详细信息：\n{error}", error=error) if error else "")
+        if state == "done":
+            apply_icon(self.update_button, "check", "green")
+            status_icon = self.update_button.icon()
+            status_icon.addPixmap(status_icon.pixmap(32, 32), QIcon.Mode.Disabled)
+            self.update_button.setIcon(status_icon)
+        else:
+            self.update_button.setProperty("_themed_icon_name", None)
+            self.update_button.setIcon(QIcon())
+        active = self.phase in ACTIVE_PHASES
+        self._task_controls.setVisible(active)
+        self.update_button.setVisible(not active)
+        self.more.setVisible(not active)
+        self.refresh_actions()
+        if not active:
+            self.pause_button.set_indeterminate(False)
+        if changed:
+            for widget in (self, self.update_button, self.new_version):
+                widget.style().unpolish(widget)
+                widget.style().polish(widget)
+                widget.update()
+
+    def _pause_or_resume(self) -> None:
+        """暂停阶段请求恢复，允许暂停的活动阶段请求暂停，其他阶段不发送操作。"""
+        if self.phase == "paused":
+            self.dialog.resume_update_requested.emit(self.info.local_mod_id)
+        elif self.phase in PAUSABLE_PHASES:
+            self.dialog.pause_update_requested.emit(self.info.local_mod_id)
+
+    def _render_task(self) -> None:
+        """按任务实际阶段或恢复阶段解释进度，分别展示下载字节、速率、剩余时间或文件处理数量。
+
+        同步环形按钮和细进度条的可见性及动画，完成时展示结果，错误摘要与完整诊断分别放在正文和提示中。
+        """
+        snapshot, phase = self.task_snapshot, self.phase
+        basis = progress_phase(snapshot)
+        fraction = progress_fraction(snapshot)
+        paused = phase == "paused"
+        tone = (
+            "green"
+            if phase == "done"
+            else "warning"
+            if phase == "failed"
+            else "secondary"
+            if phase in {"queued", "paused", "canceled", "stopping", "deferred"}
+            else "accent"
+        )
+        phase_text = tr(PHASE_LABELS.get(phase, phase))
+        if paused and basis in PHASE_LABELS:
+            phase_text += f" · {tr(PHASE_LABELS[basis])}"
+        self.task_phase.setText(phase_text)
+        self.task_phase.setToolTip(phase_text)
+        self.task_phase.setStyleSheet(f"color: {color(tone)};")
+        complete = phase == "done"
+        icon_size = (21 if self._short else 25) if complete else 14
+        self.task_icon.setFixedSize(icon_size, icon_size)
+        task_icon = "mod-updates/check-circle" if complete else PHASE_ICONS.get(phase, "mod-updates/info")
+        icons.apply_pixmap(self.task_icon, task_icon, icon_size, f"mod_updates.{tone}")
+        self._task.setMinimumHeight((42 if self._short else 59) if complete else 0)
+        self.task_percent.setText(f"{math.floor(fraction * 100)}%" if fraction is not None and phase != "done" else "")
+        self.progress.set_measurement(fraction, running=phase in PAUSABLE_PHASES | {"stopping"}, tone=tone)
+        self.progress.setAccessibleName(
+            tr("{local_name} · {phase_text}进度", local_name=self.info.local_name, phase_text=phase_text)
+        )
+        self.progress.setVisible(phase != "done" and (phase in ACTIVE_PHASES or fraction is not None))
+        self.pause_button.set_icon("actions/play" if paused else "actions/pause", f"mod_updates.{tone}")
+        self.pause_button.set_ring_color(f"mod_updates.{tone}")
+        self.pause_button.set_progress(fraction * 100 if fraction is not None else -1)
+        self.pause_button.set_indeterminate(fraction is None and phase in PAUSABLE_PHASES)
+        action = tr("继续") if paused else tr("暂停")
+        self.pause_button.setAccessibleName(
+            tr("{action}更新{local_name}", action=action, local_name=self.info.local_name)
+        )
+        self.pause_button.setToolTip(tr("{action}此项更新", action=action))
+        metrics = []
+        if basis == "downloading" and phase != "done":
+            downloaded = max(0, int(finite_number(snapshot.get("downloaded_bytes"))))
+            total = max(0, int(finite_number(snapshot.get("total_bytes"))))
+            metrics.append(
+                f"{format_size(downloaded)} / {format_size(total)}"
+                if total
+                else tr("已下载 {value} · 总大小未知", value=format_size(downloaded))
+            )
+            if phase == "downloading":
+                speed = max(0, int(finite_number(snapshot.get("speed_bps"))))
+                if speed:
+                    metrics.append(f"{format_size(speed)}/s")
+                eta = format_eta(snapshot.get("eta_seconds"))
+                if eta:
+                    metrics.append(eta)
+        elif basis in FILE_PHASES:
+            completed = finite_number(snapshot.get("completed_files"), -1)
+            total = finite_number(snapshot.get("total_files"), -1)
+            if completed >= 0 and total > 0:
+                metrics.append(tr("已处理 {value} / {value_2} 个文件", value=int(completed), value_2=int(total)))
+        file_name = str(snapshot.get("file_name") or "")
+        error = str(snapshot.get("error") or "")
+        detail = (
+            tr("新版已安装 · 即将移出列表")
+            if complete
+            else _update_error_summary(error)
+            if error
+            else str(snapshot.get("detail") or "")
+        )
+        for widget, text in (
+            (self.task_file, file_name),
+            (self.task_metrics, " · ".join(metrics)),
+            (self.task_detail, detail),
+        ):
+            widget.setText(text)
+            widget.setToolTip(text)
+            widget.setVisible(bool(text))
+        if error and not complete:
+            self.task_detail.setToolTip(tr("详细信息：\n{error}", error=error))
+        self.task_file.setVisible(bool(file_name) and phase not in {"queued", "done"} and not self._short)
+        detail_tone = "warning" if phase in {"failed", "deferred"} else "secondary"
+        self.task_detail.setStyleSheet(f"color: {color(detail_tone)};")
+        self._task.setToolTip(
+            "\n".join(text for text in (phase_text, file_name, " · ".join(metrics), error or detail) if text)
+        )
+
+    def retheme(self) -> None:
+        """刷新弹出菜单、行状态及任务进度颜色，并重绘环形按钮和进度轨道。"""
+        self.more.menu().setStyleSheet(menu_stylesheet())
+        self._set_state_appearance()
+        if self.task_snapshot:
+            self._render_task()
+        self.pause_button.retheme()
+        self.progress.update()
+
+    def refresh_actions(self) -> None:
+        """结合宿主操作门禁、检查状态和任务阶段启用更新、暂停、恢复及停止按钮。"""
+        self.update_button.setEnabled(
+            self.dialog.actions_enabled and not self.dialog._checking and self.state not in {"updating", "done"}
+        )
+        self.more.setEnabled(self.state != "updating")
+        self.pause_button.setEnabled(self.dialog.actions_enabled and self.phase in PAUSABLE_PHASES | {"paused"})
+        self.stop_button.setEnabled(self.dialog.actions_enabled and self.phase in PAUSABLE_PHASES | {"paused"})
+
+    def set_compact(self, compact: bool, *, short: bool = False) -> None:
+        """按紧凑和低高度模式调整边距、按钮排列及详情密度，保留当前任务状态并重新计算布局。"""
+        if (self._compact, self._short) == (compact, short):
+            return
+        self._compact, self._short = compact, short
+        self._root.setContentsMargins(2 if compact else 4, 9 if short else 14, 2 if compact else 4, 9 if short else 14)
+        self._root.setSpacing(6 if short else 9 if compact else 12)
+        self._grid.setHorizontalSpacing(8 if compact else 13)
+        self._actions.layout().setDirection(
+            QBoxLayout.Direction.TopToBottom if compact else QBoxLayout.Direction.LeftToRight
+        )
+        self._actions.layout().setContentsMargins(0 if compact else 7, 0, 0, 0)
+        self._actions.layout().setSpacing(1 if compact else 6)
+        self.update_button.setFixedSize(76, 27 if compact else 30)
+        self.more.setFixedSize(26 if compact else 30, 24 if compact else 30)
+        self._actions.layout().setAlignment(self.more, Qt.AlignmentFlag.AlignHCenter)
+        self._version.layout().setSpacing(4 if compact else 7)
+        self._log_margin.layout().setContentsMargins(68 if compact else 73, 0, 0 if compact else 36, 0)
+        self._task_margin.layout().setContentsMargins(68 if compact else 73, 0, 0 if compact else 36, 0)
+        self._task.layout().setSpacing(3 if short else 4)
+        self.setStyleSheet(
+            """
+            QPushButton#updateSingle { min-height: 25px; max-height: 25px; }
+            QPushButton#updateMore { min-height: 22px; max-height: 22px; }
+        """
+            if compact
+            else ""
+        )
+        self.date_hint.setVisible(not compact and not self.info.current_version and not self.info.latest_version)
+        if self.task_snapshot:
+            self._render_task()
+        self.updateGeometry()
