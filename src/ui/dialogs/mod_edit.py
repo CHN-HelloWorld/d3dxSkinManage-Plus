@@ -489,3 +489,187 @@ class ModEditDialog(QDialog):
         self._desc_input.textChanged.connect(self._update_save_note)
         self._rating_combo.currentIndexChanged.connect(self._update_save_note)
         self._sync_folder_checkbox.toggled.connect(self._update_save_note)
+
+    def _apply_style(self) -> None:
+        """记录当前主题并生成编辑窗口局部样式，使用主题 SVG 显示已勾选的磁盘同步选项。"""
+        self._style_theme = theme.current_theme()
+        check_icon = icons.write_themed_svg("meta/check", "text.on_accent")
+        if check_icon:
+            check_icon = check_icon.replace("\\", "/")
+        check_style = (
+            f'QCheckBox#mod-edit-sync::indicator:checked {{ image: url("{check_icon}"); }}' if check_icon else ""
+        )
+        self.setStyleSheet(
+            f"""
+            QWidget[modEditSurface="true"] {{ background: transparent; }}
+            QWidget#mod-edit-heading {{ border-bottom: 1px solid {theme.color("stroke.divider")}; }}
+            QLabel#mod-edit-title, QLabel#mod-edit-subtitle {{ font-size: 18px; font-weight: 600; }}
+            QFrame#mod-edit-title-divider {{ background: {theme.color("stroke.control")}; border: none; }}
+            QLabel#mod-edit-icon {{
+                background: transparent; border: none;
+            }}
+            QLabel#mod-edit-save-note {{
+                color: {theme.color("text.tertiary")}; font-size: 11px;
+            }}
+            QLabel[modEditFieldLabel="true"] {{ font-size: 12px; }}
+            QCheckBox#mod-edit-sync {{ color: {theme.color("text.secondary")}; font-size: 11px; }}
+            {check_style}
+            QWidget#mod-edit-side {{ border-left: 1px solid {theme.color("stroke.divider")}; }}
+            QWidget#mod-edit-side[stacked="true"] {{
+                border-left: none; border-top: 1px solid {theme.color("stroke.divider")};
+            }}
+            QWidget#mod-edit-file-section {{ border-top: 1px solid {theme.color("stroke.divider")}; }}
+            QPushButton#mod-edit-file-toggle {{
+                text-align: left; border: 0; padding: 3px 0;
+                background: transparent; color: {theme.color("text.secondary")}; font-size: 14px;
+            }}
+            QPushButton#mod-edit-file-toggle:hover {{ color: {theme.color("accent")}; }}
+            QLabel#mod-edit-readonly-badge {{
+                color: {theme.color("text.secondary")}; font-size: 12px;
+                border: 1px solid {theme.color("stroke.divider")}; border-radius: 3px; padding: 0 4px;
+            }}
+            QTextEdit#mod-edit-readonly {{
+                color: {theme.color("text.secondary")}; background: {theme.color("bg.subtle")};
+                border: 1px solid {theme.color("stroke.control")}; border-radius: 4px;
+                padding: 0; font-size: 13px;
+            }}
+            QLabel#mod-edit-created {{ color: {theme.color("text.secondary")}; font-size: 13px; }}
+            QWidget#mod-edit-file-info QLabel {{ font-size: 13px; }}
+            QLabel#mod-edit-error {{ color: {theme.color("danger")}; font-size: 11px; }}
+            QWidget#mod-edit-footer {{
+                background: {theme.color("bg.subtle")};
+                border-top: 1px solid {theme.color("stroke.divider")};
+                border-bottom-left-radius: 7px; border-bottom-right-radius: 7px;
+            }}
+            """
+        )
+
+    def _populate_data(self) -> None:
+        """把当前 Mod 元数据填入表单和只读信息区，年龄分级按存储值定位。"""
+        self._name_input.setText(self._mod.name)
+        self._author_input.setText(self._mod.info.author)
+        self._version_input.setText(self._mod.info.version)
+        self._url_input.setText(self._mod.info.url)
+        self._desc_input.setPlainText(self._mod.info.description)
+
+        # 设置年龄分级
+        for i in range(self._rating_combo.count()):
+            if self._rating_combo.itemData(i) == self._mod.info.age_rating.value:
+                self._rating_combo.setCurrentIndex(i)
+                break
+
+        # 文件信息
+        self._id_label.setText(self._mod.mod_id)
+        self._path_label.setText(self._mod.path)
+        self._created_label.setText(self._mod.imported_at[:19].replace("T", " "))
+
+    def _collect_fields(self) -> dict:
+        """返回经过首尾空白清理的表单字段、标签草稿名称及磁盘同步选择，用于比较和保存。"""
+        return {
+            "name": self._name_input.text().strip(),
+            "author": self._author_input.text().strip(),
+            "version": self._version_input.text().strip(),
+            "url": self._url_input.text().strip(),
+            "description": self._desc_input.toPlainText().strip(),
+            "age_rating": self._rating_combo.currentData(),
+            "tags": self.tag_picker.draft.names,
+            "sync_folder": self._sync_folder_checkbox.isChecked(),
+        }
+
+    def set_tag_service(self, service) -> None:
+        """使用标签服务为当前 Mod 创建编辑草稿并交给标签选择器，不立即提交修改。"""
+        self.tag_picker.set_draft(service.begin_edit(self._mod))
+
+    def bind_mod(self, mod: Mod, *, tag_service=None) -> None:
+        """复用表单并创建新的独立草稿开始编辑。"""
+        draft = tag_service.begin_edit(mod) if tag_service is not None else TagDraft.from_mod(mod)
+        if self.discard_dialog is not None:
+            self.discard_dialog.reject()
+            self.discard_dialog.deleteLater()
+            self.discard_dialog = None
+        self._mod = mod
+        self._result = None
+        self._save_handler = None
+        self._saving = False
+        self.setResult(QDialog.DialogCode.Rejected)
+        self.setWindowTitle(tr("编辑 Mod - {display_name}", display_name=mod.display_name))
+        self._heading_subtitle.setText(mod.display_name)
+        self._heading_subtitle.setToolTip(mod.display_name)
+        fields = (
+            self._name_input,
+            self._author_input,
+            self._version_input,
+            self._url_input,
+            self._desc_input,
+            self._rating_combo,
+            self._sync_folder_checkbox,
+            self.tag_picker,
+        )
+        blockers = [QSignalBlocker(field) for field in fields]
+        try:
+            self._populate_data()
+            self.tag_picker.set_draft(draft)
+            self._sync_folder_checkbox.setChecked(True)
+        finally:
+            for blocker in blockers:
+                blocker.unblock()
+        self._info_toggle.setChecked(False)
+        self._save_error.clear()
+        self._save_error.hide()
+        self._save_button.setEnabled(True)
+        self._form_scroll.verticalScrollBar().setValue(0)
+        self._side_scroll.verticalScrollBar().setValue(0)
+        self._original_fields = self._collect_fields()
+        self._update_save_note()
+
+    def set_save_handler(self, handler: Callable[[dict, TagDraft], TagCommitResult]) -> None:
+        """注入接收字段与标签草稿的同步保存回调；回调须返回 TagCommitResult，异常会保留草稿并显示。"""
+        self._save_handler = handler
+
+    def _on_save(self) -> None:
+        """事务成功后才接受对话框，失败时保留可编辑状态。"""
+        active_modal = QApplication.activeModalWidget()
+        if (
+            self._saving
+            or (active_modal is not None and active_modal is not self)
+            or self.tag_picker.has_active_modal
+            or (self.discard_dialog and self.discard_dialog.isVisible())
+        ):
+            return
+        self._form_scroll.ensureWidgetVisible(self.tag_picker.input)
+        if not self.tag_picker.validate():
+            return
+        fields = self._collect_fields()
+        self._save_error.hide()
+        self._saving = True
+        self._save_button.setEnabled(False)
+        try:
+            if self._save_handler is not None:
+                committed = self._save_handler(fields, self.tag_picker.draft)
+                if not isinstance(committed, TagCommitResult):
+                    raise TypeError(tr("保存未返回有效结果，请重试。"))
+                fields["tag_commit_result"] = committed
+        except Exception as exc:  # 数据库错误时保留完整用户草稿。
+            logger.exception("保存 Mod 编辑失败 game=%s mod=%s", self._mod.game_id, self._mod.mod_id)
+            self._save_error.setText(tr("保存失败：{exc}", exc=exc))
+            self._save_error.show()
+            return
+        finally:
+            self._saving = False
+            self._save_button.setEnabled(True)
+        self._result = fields
+        self.tag_picker.hide_popup()
+        self.accept()
+
+    def _update_save_note(self) -> None:
+        """比较初始字段和标签草稿脏状态，显示未修改、未保存或标签随保存生效的提示。"""
+        if not hasattr(self, "_save_note") or not hasattr(self, "_original_fields"):
+            return
+        dirty = self._collect_fields() != self._original_fields or self.tag_picker.is_dirty
+        note = (
+            tr("标签修改随本次保存生效")
+            if self.tag_picker.is_dirty
+            else (tr("有未保存的修改") if dirty else tr("尚未修改"))
+        )
+        self._save_note.setText(note)
+        self._save_note.setToolTip(note)
