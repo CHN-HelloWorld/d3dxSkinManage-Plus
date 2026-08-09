@@ -275,3 +275,334 @@ class UpdateThumbnail(QLabel):
         self._path = path
         self._source = QPixmap(path) if path else QPixmap()
         self._render_preview()
+
+    def _render_preview(self) -> None:
+        """按设备像素比填充裁切圆角预览，纵向偏向图片上部；空源显示占位文字。"""
+        if self._source.isNull():
+            self.setContentsMargins(1, 0, 1, 4 if self.width() < 50 else 8)
+            self.setText(tr("暂无预览"))
+            self.setAccessibleName(tr("暂无 Mod 预览图"))
+        else:
+            self.setContentsMargins(0, 0, 0, 0)
+            ratio = self.devicePixelRatioF()
+            size = QSize(round(self.width() * ratio), round(self.height() * ratio))
+            scaled = self._source.scaled(
+                size, Qt.AspectRatioMode.KeepAspectRatioByExpanding, Qt.TransformationMode.SmoothTransformation
+            )
+            x = max(0, (scaled.width() - size.width()) // 2)
+            y = max(0, round((scaled.height() - size.height()) * 0.21))
+            pm = QPixmap(size)
+            pm.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pm)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+            clip = QPainterPath()
+            clip.addRoundedRect(QRectF(pm.rect()), 7 * ratio, 7 * ratio)
+            painter.setClipPath(clip)
+            painter.drawPixmap(0, 0, scaled.copy(x, y, size.width(), size.height()))
+            painter.end()
+            pm.setDevicePixelRatio(ratio)
+            self.setPixmap(pm)
+        self.update()
+
+    def resizeEvent(self, event) -> None:
+        """控件尺寸变化后从保留的源图重新缩放裁切，避免反复缩放已裁切结果。"""
+        super().resizeEvent(event)
+        if hasattr(self, "_source"):
+            self._render_preview()
+
+    def paintEvent(self, event) -> None:
+        """先绘制圆角底色和边框，再绘制图片或缺图文本，空源额外显示主题图片图标。"""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(color("subtle")))
+        painter.setPen(QPen(QColor(color("line")), 1))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 7, 7)
+        painter.end()
+        super().paintEvent(event)
+        if self._source.isNull():
+            painter = QPainter(self)
+            size = 18 if self.width() < 50 else 23
+            pm = icons.pixmap("mod-updates/image", size, "mod_updates.muted")
+            painter.drawPixmap((self.width() - size) // 2, 8 if self.width() < 50 else 14, pm)
+
+
+class UpdateRow(QWidget):
+    """展示单个 Mod 的更新信息、日志和任务快照，通过所属对话框信号请求实际操作。"""
+
+    def __init__(self, info: UpdateInfo, dialog):
+        """创建版本、缩略图、摘要及任务控件，连接所属窗口的操作信号并初始化为可更新状态。"""
+        super().__init__(dialog)
+        self.setObjectName("updateRow")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        self.setProperty("modId", info.local_mod_id)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self.info = info
+        self.dialog = dialog
+        self.state = "ready"
+        self.phase = "ready"
+        self.task_snapshot: dict = {}
+        self._compact = False
+        self._short = False
+        self._logs_built = False
+        self._root = QVBoxLayout(self)
+        self._root.setContentsMargins(4, 14, 4, 14)
+        self._root.setSpacing(12)
+        self._main = QWidget()
+        self._grid = QGridLayout(self._main)
+        self._grid.setContentsMargins(0, 0, 0, 0)
+        self._grid.setHorizontalSpacing(13)
+        self._grid.setVerticalSpacing(0)
+        self._grid.setColumnStretch(1, 1)
+        self.thumb = UpdateThumbnail(info)
+        self._grid.addWidget(self.thumb, 0, 0, Qt.AlignmentFlag.AlignVCenter)
+        copy = QWidget()
+        copy.setMinimumWidth(0)
+        copy_layout = QVBoxLayout(copy)
+        copy_layout.setContentsMargins(0, 0, 0, 0)
+        copy_layout.setSpacing(0)
+        self.name_label = ElidedLabel(name="updateName")
+        self.name_label.setProperty("modId", info.local_mod_id)
+        copy_layout.addWidget(self.name_label)
+        copy_layout.addSpacing(5)
+        self._version = QWidget()
+        version_layout = TagFlowLayout(self._version, spacing=7)
+        self.old_version = ElidedLabel(name="updateOldVersion", height=TEXT_LINE_HEIGHT + 4)
+        self.old_version.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.old_version.setMaximumWidth(140)
+        version_layout.addWidget(self.old_version)
+        arrow = icon_label("arrow", 13, "muted")
+        arrow.setFixedHeight(TEXT_LINE_HEIGHT + 4)
+        arrow.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        version_layout.addWidget(arrow)
+        self.new_version = ElidedLabel(name="updateNewVersion", height=TEXT_LINE_HEIGHT + 4)
+        self.new_version.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.new_version.setContentsMargins(7, 2, 7, 2)
+        self.new_version.setMaximumWidth(150)
+        version_layout.addWidget(self.new_version)
+        divider_slot = QWidget()
+        divider_slot.setFixedSize(5, TEXT_LINE_HEIGHT + 4)
+        divider = QWidget(divider_slot)
+        divider.setObjectName("updateVersionDivider")
+        divider.setGeometry(2, 6, 1, 10)
+        version_layout.addWidget(divider_slot)
+        self.file_size = label(name="updateFileSize")
+        self.file_size.setFixedHeight(TEXT_LINE_HEIGHT + 4)
+        version_layout.addWidget(self.file_size)
+        self.date_hint = label(tr("按文件日期"), "updateDateHint")
+        self.date_hint.setFixedHeight(TEXT_LINE_HEIGHT + 4)
+        version_layout.addWidget(self.date_hint)
+        self._version.setMinimumHeight(TEXT_LINE_HEIGHT + 4)
+        copy_layout.addWidget(self._version)
+        copy_layout.addSpacing(5)
+        self.summary = SummaryButton()
+        self.summary.setObjectName("updateSummary")
+        self.summary.setProperty("modId", info.local_mod_id)
+        self.summary.setCheckable(True)
+        self.summary.setAutoDefault(False)
+        self.summary.setMinimumWidth(0)
+        self.summary.setFixedHeight(TEXT_LINE_HEIGHT)
+        self.summary.setIconSize(QSize(12, 12))
+        apply_icon(self.summary, "chevron", "muted")
+        self.summary.toggled.connect(self._toggle_logs)
+        copy_layout.addWidget(self.summary)
+        self._grid.addWidget(copy, 0, 1)
+        self._actions = QWidget()
+        actions_layout = QHBoxLayout(self._actions)
+        actions_layout.setContentsMargins(7, 0, 0, 0)
+        actions_layout.setSpacing(6)
+        self.update_button = QPushButton(tr("更新"))
+        self.update_button.setObjectName("updateSingle")
+        self.update_button.setProperty("modId", info.local_mod_id)
+        self.update_button.setFixedSize(76, 30)
+        self.update_button.setIconSize(QSize(14, 14))
+        self.update_button.setAutoDefault(False)
+        self.update_button.clicked.connect(lambda: dialog.update_requested.emit(self.info.local_mod_id))
+        actions_layout.addWidget(self.update_button)
+        self._task_controls = QWidget()
+        task_controls = QHBoxLayout(self._task_controls)
+        task_controls.setContentsMargins(0, 0, 0, 0)
+        task_controls.setSpacing(3)
+        self.pause_button = TaskRingButton()
+        self.pause_button.setObjectName("updateTaskPause")
+        self.pause_button.setProperty("modId", info.local_mod_id)
+        self.pause_button.clicked.connect(self._pause_or_resume)
+        task_controls.addWidget(self.pause_button)
+        self.stop_button = QPushButton()
+        self.stop_button.setObjectName("updateTaskStop")
+        self.stop_button.setProperty("modId", info.local_mod_id)
+        self.stop_button.setProperty("iconOnly", True)
+        self.stop_button.setFixedSize(28, 28)
+        self.stop_button.setIconSize(QSize(15, 15))
+        self.stop_button.setAutoDefault(False)
+        self.stop_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        icons.apply_icon(self.stop_button, "actions/stop", "mod_updates.secondary")
+        self.stop_button.clicked.connect(lambda: dialog.stop_update_requested.emit(self.info.local_mod_id))
+        task_controls.addWidget(self.stop_button)
+        actions_layout.addWidget(self._task_controls)
+        self._task_controls.hide()
+        self.more = QPushButton()
+        self.more.setObjectName("updateMore")
+        self.more.setProperty("modId", info.local_mod_id)
+        self.more.setProperty("iconOnly", True)
+        self.more.setFixedSize(30, 30)
+        self.more.setAutoDefault(False)
+        self.more.setIconSize(QSize(18, 18))
+        self.more.setToolTip(tr("更多操作"))
+        apply_icon(self.more, "more")
+        self._build_menu()
+        actions_layout.addWidget(self.more)
+        self._grid.addWidget(self._actions, 0, 2)
+        self._root.addWidget(self._main)
+        self._build_task_progress()
+        self._log_margin = QWidget()
+        log_margin = QHBoxLayout(self._log_margin)
+        log_margin.setContentsMargins(73, 0, 36, 0)
+        self._log = QWidget()
+        self._log.setObjectName("updateLog")
+        self._log_layout = QVBoxLayout(self._log)
+        self._log_layout.setContentsMargins(15, 1, 0, 6)
+        self._log_layout.setSpacing(10)
+        log_margin.addWidget(self._log)
+        self._root.addWidget(self._log_margin)
+        self._log_margin.hide()
+        self.set_info(info)
+        self.set_state("ready")
+
+    def _build_task_progress(self) -> None:
+        """构建默认隐藏的任务阶段、真实进度、下载指标及错误详情区域。"""
+        self._task_margin = QWidget()
+        margin = QHBoxLayout(self._task_margin)
+        margin.setContentsMargins(73, 0, 36, 0)
+        self._task = QWidget()
+        self._task.setObjectName("updateTaskProgress")
+        self._task.setMinimumWidth(0)
+        content = QVBoxLayout(self._task)
+        content.setContentsMargins(0, 0, 0, 0)
+        content.setSpacing(4)
+        self.task_file = ElidedLabel(name="updateTaskFile")
+        content.addWidget(self.task_file)
+        line = QHBoxLayout()
+        line.setSpacing(5)
+        self.task_icon = label()
+        self.task_icon.setFixedSize(14, 14)
+        line.addWidget(self.task_icon)
+        self.task_phase = ElidedLabel(name="updateTaskPhase")
+        line.addWidget(self.task_phase, 1)
+        self.task_percent = label(name="updateTaskPercent")
+        self.task_percent.setFixedHeight(TEXT_LINE_HEIGHT)
+        line.addWidget(self.task_percent)
+        content.addLayout(line)
+        self.progress = TaskProgressBar()
+        self.progress.setObjectName("updateTaskTrack")
+        content.addWidget(self.progress)
+        self.task_metrics = ElidedLabel(name="updateTaskMetrics")
+        content.addWidget(self.task_metrics)
+        self.task_detail = ElidedLabel(name="updateTaskDetail")
+        content.addWidget(self.task_detail)
+        margin.addWidget(self._task)
+        self._root.addWidget(self._task_margin)
+        self._task_margin.hide()
+
+    def _build_menu(self) -> None:
+        """创建由更多按钮持有的来源和忽略菜单，触发时使用当前更新信息的 Mod 标识。"""
+        menu = QMenu(self.more)
+        menu.setObjectName("modUpdatesMenu")
+        menu.setStyleSheet(menu_stylesheet())
+        menu.setMinimumWidth(205)
+        entries = [
+            (tr("在 GameBanana 查看"), "updateOpenSource", "external", self.dialog.open_gb_requested),
+            (tr("忽略此版本"), "updateIgnoreVersion", "skip", self.dialog.ignore_version_requested),
+            (tr("忽略此 Mod"), "updateIgnoreMod", "bell-off", self.dialog.ignore_mod_requested),
+        ]
+        for index, (text, name, svg, signal) in enumerate(entries):
+            if index == 1:
+                menu.addSeparator()
+            action = menu.addAction(text)
+            action.setObjectName(name)
+            apply_icon(action, svg)
+            action.triggered.connect(lambda _=False, s=signal: s.emit(self.info.local_mod_id))
+        hint = QWidgetAction(menu)
+        hint.setObjectName("updateMenuHint")
+        hint.setEnabled(False)
+        hint.setDefaultWidget(label(tr("忽略 Mod 后，将不再提示其后续更新。")))
+        menu.addAction(hint)
+        self.more.setMenu(menu)
+
+    def set_info(self, info: UpdateInfo) -> None:
+        """替换更新信息并同步名称、版本、预览和摘要；日志变化时作废惰性内容并按展开状态重建。"""
+        changed_logs = self.info.changelog != info.changelog
+        self.info = info
+        name = info.local_name or str(info.gb_mod_id)
+        self.name_label.setText(name)
+        self.name_label.setToolTip(name)
+        self.more.setAccessibleName(tr("{name}的更多操作", name=name))
+        self.update_button.setAccessibleName(tr("更新{name}", name=name))
+        self.stop_button.setAccessibleName(tr("终止更新{name}", name=name))
+        self.stop_button.setToolTip(tr("终止此项更新…"))
+        current, latest = info.current_version, info.latest_version
+        dated = not current and not latest
+        self.old_version.setText(file_date(info.current_file_ts) if dated else current or tr("版本未知"))
+        self.new_version.setText(file_date(info.latest_file.date_added_ts) if dated else latest or tr("新文件"))
+        self.old_version.setToolTip(tr("当前：{value}", value=self.old_version.text()))
+        self.new_version.setToolTip(tr("新版：{value}", value=self.new_version.text()))
+        self.date_hint.setVisible(dated)
+        self.file_size.setText(format_size(info.latest_file.size_bytes))
+        titles = [entry.title for entry in info.changelog if entry.title][:3]
+        summary = "；".join(titles) or tr("作者暂未提供更新日志")
+        self.summary.setText(summary)
+        self.summary.setToolTip(summary)
+        self.thumb.set_source(info.local_preview)
+        if changed_logs and self._logs_built:
+            while self._log_layout.count():
+                item = self._log_layout.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._logs_built = False
+            if self.summary.isChecked():
+                self._build_logs()
+        if self.task_snapshot:
+            self._render_task()
+
+    def _build_logs(self) -> None:
+        """首次展开时构建纯文本发布说明、版本标签及来源链接，后续展开复用已有控件。"""
+        if self._logs_built:
+            return
+        self._logs_built = True
+        for entry in self.info.changelog:
+            block = QWidget()
+            layout = QVBoxLayout(block)
+            layout.setContentsMargins(0, 8, 0, 6)
+            layout.setSpacing(7)
+            header = QHBoxLayout()
+            header.setContentsMargins(0, 0, 0, 0)
+            header.setSpacing(8)
+            header.addWidget(ElidedLabel(entry.title or tr("更新说明"), "updateLogTitle"), 1)
+            header.addWidget(label(file_date(entry.date_added_ts), "updateLogDate"))
+            layout.addLayout(header)
+            tags = [str(value) for value in [entry.version, *entry.tags] if value]
+            if tags:
+                tag_row = QWidget()
+                tag_row.setObjectName("updateLogTags")
+                tag_layout = TagFlowLayout(tag_row, spacing=5)
+                for text in tags:
+                    chip = ElidedLabel(text, "updateLogTag", TEXT_LINE_HEIGHT + 4)
+                    chip.setContentsMargins(6, 1, 6, 1)
+                    chip.setMaximumWidth(160)
+                    chip.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+                    tag_layout.addWidget(chip)
+                layout.addWidget(tag_row)
+            text = release_text(entry.description_html) or entry.title or tr("作者暂未提供详细说明。")
+            layout.addWidget(WrappingLabel(text))
+            self._log_layout.addWidget(block)
+        if not self.info.changelog:
+            self._log_layout.addWidget(WrappingLabel(tr("作者暂未提供更新日志。")))
+        source = QPushButton(tr("查看 GameBanana"))
+        source.setObjectName("updateSourceLink")
+        source.setAutoDefault(False)
+        source.setFixedSize(154, 24)
+        source.setIconSize(QSize(14, 14))
+        source.setLayoutDirection(Qt.LayoutDirection.RightToLeft)
+        apply_icon(source, "external", "accent")
+        source.clicked.connect(lambda: self.dialog.open_gb_requested.emit(self.info.local_mod_id))
+        self._log_layout.addWidget(source)
