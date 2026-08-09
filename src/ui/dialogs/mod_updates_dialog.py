@@ -185,3 +185,260 @@ class _BulkUpdateButton(QPushButton):
         self.initStyleOption(option)
         option.text, option.icon = "", QIcon()
         QStylePainter(self).drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+
+class ModUpdatesDialog(QDialog):
+    """展示更新候选和任务快照，维护成功条目退场及搜索视图，实际任务和关闭决策交由宿主处理。"""
+
+    recheck_requested = Signal()
+    cancel_check_requested = Signal()
+    retry_failed_requested = Signal()
+    open_gb_requested = Signal(str)
+    ignore_version_requested = Signal(str)
+    ignore_mod_requested = Signal(str)
+    update_requested = Signal(str)
+    update_all_requested = Signal()
+    pause_update_requested = Signal(str)
+    resume_update_requested = Signal(str)
+    stop_update_requested = Signal(str)
+    pause_all_requested = Signal()
+    resume_all_requested = Signal()
+    stop_all_requested = Signal()
+
+    def __init__(
+        self,
+        infos: list[UpdateInfo],
+        *,
+        failures: dict[str, str] | None = None,
+        enable_actions: bool = False,
+        config=None,
+        parent=None,
+    ) -> None:
+        """初始化候选、任务和检查状态，恢复可用窗口尺寸并构建自定义边框；是否允许操作由宿主指定。"""
+        super().__init__(parent)
+        self._config = config
+        self.actions_enabled = enable_actions
+        self._rows_by_id: dict[str, UpdateRow] = {}
+        self._task_snapshots: dict[str, dict] = {}
+        self._completed_files: dict[str, tuple[int, int, int, str]] = {}
+        self._row_retirements: dict[str, _SuccessRetirement] = {}
+        self._close_handler: Callable[[], bool] | None = None
+        self._requesting_close = False
+        self._force_closing = False
+        self._dismissed = False
+        self._check_hidden_by_tasks = False
+        self._failures: dict[str, str] = {}
+        self._checking = False
+        self._check_done = 0
+        self._check_total = 0
+        self._check_snapshot: dict = {"phase": "idle", "checking": False}
+        self._pending_check_updates: tuple[list[UpdateInfo], dict[str, str] | None] | None = None
+        self._density: tuple[bool, bool] | None = None
+        self._theme = theme.current_theme()
+        self._undo: Callable[[], bool | None] | None = None
+        self._sized_for_screen = False
+        self.setObjectName("modUpdatesDialog")
+        self.setProperty("customDialogFrame", True)
+        self.setProperty("opaqueDialogSurface", True)
+        self.setWindowTitle(tr("更新 Mod"))
+        self.setWindowFlag(Qt.WindowType.FramelessWindowHint)
+        # 拖动缩小时分层表面可能暂时丢失，保持客户区不透明，由系统提供圆角。
+        self.setAttribute(Qt.WidgetAttribute.WA_OpaquePaintEvent)
+        self.setModal(True)
+        self.setMinimumSize(420, 340)
+        remembered = [848, 626]
+        if config is not None:
+            for index, key in enumerate(("width", "height")):
+                value = config.get(f"ui.mod_updates.{key}", 0)
+                if type(value) is int and value > 0:
+                    remembered[index] = min(value, 16777215)
+        self.resize(*remembered)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(1, 1, 1, 1)
+        outer.setSpacing(0)
+        outer.addWidget(self._build_titlebar())
+        outer.addWidget(self._build_header())
+        outer.addWidget(self._build_body(), 1)
+        outer.addWidget(self._build_footer())
+        self._build_message()
+        self._resize_handles = {
+            edges: _ResizeHandle(self, edges, cursor)
+            for edges, cursor in (
+                (Qt.Edge.LeftEdge, Qt.CursorShape.SizeHorCursor),
+                (Qt.Edge.RightEdge, Qt.CursorShape.SizeHorCursor),
+                (Qt.Edge.TopEdge, Qt.CursorShape.SizeVerCursor),
+                (Qt.Edge.BottomEdge, Qt.CursorShape.SizeVerCursor),
+                (Qt.Edge.LeftEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeFDiagCursor),
+                (Qt.Edge.RightEdge | Qt.Edge.TopEdge, Qt.CursorShape.SizeBDiagCursor),
+                (Qt.Edge.LeftEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeBDiagCursor),
+                (Qt.Edge.RightEdge | Qt.Edge.BottomEdge, Qt.CursorShape.SizeFDiagCursor),
+            )
+        }
+        self.setStyleSheet(stylesheet())
+        self._apply_density()
+        self.set_updates(infos, failures=failures or {})
+        QWidget.setTabOrder(self._search, self._recheck_btn)
+        QWidget.setTabOrder(self._recheck_btn, self._update_all_btn)
+
+    def _button(self, text: str, svg: str = "", *, quiet: bool = False) -> QPushButton:
+        """创建固定高度的更新窗口按钮，按需设置主题图标和轻量样式。"""
+        button = QPushButton(text)
+        button.setAutoDefault(False)
+        button.setFixedHeight(34)
+        button.setProperty("quiet", quiet)
+        button.setIconSize(QSize(15, 15))
+        if svg:
+            apply_icon(button, svg)
+        return button
+
+    def _build_titlebar(self) -> QWidget:
+        """创建共享可拖动标题栏，并保存关闭按钮供布局密度调整。"""
+        bar = DialogTitleBar(self)
+        self._titlebar = bar
+        self._close_btn = bar.close_button
+        self._close_btn.setObjectName("updateClose")
+        return bar
+
+    def _build_header(self) -> QWidget:
+        """构建更新数量标题和重新检查入口，检查动作通过信号交给宿主。"""
+        header = QWidget()
+        self._header = header
+        header.setObjectName("updateHeader")
+        header.setFixedHeight(84)
+        layout = QHBoxLayout(header)
+        layout.setContentsMargins(26, 15, 26, 19)
+        layout.setSpacing(13)
+        badge = icon_label("download", 23, "accent")
+        self._header_badge = badge
+        badge.setObjectName("updateHeaderIcon")
+        badge.setFixedSize(43, 43)
+        badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(badge)
+        copy = QVBoxLayout()
+        self._heading_layout = copy
+        copy.setSpacing(4)
+        title = label(tr("可更新的 Mod"), "updateTitle")
+        self._heading_title = title
+        title.setFixedHeight(31)
+        copy.addWidget(title)
+        self._subtitle = label(name="updateSubtitle")
+        self._subtitle.setFixedHeight(TEXT_LINE_HEIGHT)
+        copy.addWidget(self._subtitle)
+        layout.addLayout(copy, 1)
+        self._recheck_btn = self._button(tr("检测更新"), "refresh", quiet=True)
+        self._recheck_btn.setObjectName("updateRecheck")
+        self._recheck_btn.setFixedWidth(98)
+        self._recheck_btn.clicked.connect(self.recheck_requested.emit)
+        layout.addWidget(self._recheck_btn)
+        return header
+
+    def _build_body(self) -> QWidget:
+        """组合检查反馈、批次控制、搜索和滚动列表，并转发检查取消与重试信号。"""
+        body = QWidget()
+        body.setObjectName("updateBody")
+        layout = QVBoxLayout(body)
+        layout.setContentsMargins(0, 1, 0, 0)
+        layout.setSpacing(0)
+        self._check_panel = UpdateCheckPanel()
+        self._check_panel.cancel_requested.connect(self.cancel_check_requested.emit)
+        self._check_panel.retry_requested.connect(self.retry_failed_requested.emit)
+        self._check_panel.spin_angle_changed.connect(self._spin_check_icon)
+        layout.addWidget(self._check_panel)
+        layout.addWidget(self._build_batch_panel())
+        collection = QWidget()
+        self._collection = collection
+        collection.setFixedHeight(48)
+        collection_layout = QHBoxLayout(collection)
+        collection_layout.setContentsMargins(26, 12, 26, 7)
+        collection_layout.setSpacing(6)
+        self._collection_label = label(tr("更新列表"), "updateCollectionLabel")
+        collection_layout.addWidget(self._collection_label)
+        self._visible_count = label("0", "updateVisibleCount")
+        self._visible_count.setMinimumWidth(21)
+        self._visible_count.setFixedHeight(TEXT_LINE_HEIGHT)
+        self._visible_count.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        collection_layout.addWidget(self._visible_count)
+        collection_layout.addStretch()
+        self._search = QLineEdit()
+        self._search.setObjectName("updateSearch")
+        self._search.setFixedSize(185, 28)
+        self._search.setPlaceholderText(tr("搜索 Mod 名称"))
+        self._search.setAccessibleName(tr("搜索 Mod 名称"))
+        search_icon = self._search.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
+        apply_icon(search_icon, "search", "muted")
+        self._search.textChanged.connect(self._filter_rows)
+        collection_layout.addWidget(self._search)
+        layout.addWidget(collection)
+        self._stack = QStackedWidget()
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("updatesScroll")
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.viewport().setAutoFillBackground(False)
+        self._list = QWidget()
+        self._list.setMinimumWidth(0)
+        self._list_layout = QVBoxLayout(self._list)
+        self._list_layout.setContentsMargins(22, 0, 22, 14)
+        self._list_layout.setSpacing(0)
+        self._list_layout.addStretch()
+        self._scroll.setWidget(self._list)
+        self._stack.addWidget(self._scroll)
+        self._stack.addWidget(self._build_empty())
+        layout.addWidget(self._stack, 1)
+        return body
+
+    def _build_batch_panel(self) -> QWidget:
+        """创建覆盖当前游戏全部任务的批次控制和下载汇总，搜索隐藏的任务仍属于控制范围。"""
+        self._batch_panel = QWidget()
+        self._batch_panel.setObjectName("updateBatchPanel")
+        self._batch_panel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        outer = QVBoxLayout(self._batch_panel)
+        outer.setSpacing(0)
+        self._batch_surface = QWidget()
+        self._batch_surface.setObjectName("updateBatchSurface")
+        self._batch_surface.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        content = QVBoxLayout(self._batch_surface)
+        content.setSpacing(4)
+        top = QHBoxLayout()
+        top.setSpacing(5)
+        self._batch_icon = icon_label("download", 14, "accent")
+        top.addWidget(self._batch_icon)
+        self._batch_title = ElidedLabel(name="updateBatchTitle")
+        top.addWidget(self._batch_title, 1)
+        controls = (
+            ("pause", tr("全部暂停"), self.pause_all_requested),
+            ("play", tr("全部继续"), self.resume_all_requested),
+            ("stop", tr("全部终止"), self.stop_all_requested),
+        )
+        buttons = []
+        for action, text, signal in controls:
+            button = QPushButton(text)
+            button.setObjectName(f"updateBatch{action.title()}")
+            button.setProperty("batchControl", True)
+            button.setAutoDefault(False)
+            button.setFixedHeight(24)
+            button.setIconSize(QSize(12, 12))
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setAccessibleName(tr("{text}当前游戏的更新任务", text=text))
+            button.setToolTip(
+                tr("{text}当前游戏所有未结束的更新（包括搜索隐藏的任务）", text=text)
+                + ("…" if action == "stop" else "")
+            )
+            icons.apply_icon(button, f"actions/{action}", "mod_updates.secondary")
+            button.clicked.connect(signal.emit)
+            top.addWidget(button)
+            buttons.append(button)
+        self._pause_all_btn, self._resume_all_btn, self._stop_all_btn = buttons
+        content.addLayout(top)
+        self._batch_counts = ElidedLabel(name="updateBatchCounts")
+        content.addWidget(self._batch_counts)
+        self._batch_transfer = ElidedLabel(name="updateBatchTransfer")
+        content.addWidget(self._batch_transfer)
+        self._batch_progress = TaskProgressBar()
+        self._batch_progress.setObjectName("updateBatchTrack")
+        self._batch_progress.setAccessibleName(tr("全部更新任务的下载进度"))
+        content.addWidget(self._batch_progress)
+        outer.addWidget(self._batch_surface)
+        self._batch_panel.hide()
+        return self._batch_panel
