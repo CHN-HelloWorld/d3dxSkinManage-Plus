@@ -193,3 +193,85 @@ class _ReleaseText(HTMLParser):
         """仅在非脚本和非样式区域收集文本内容。"""
         if not self.skipped:
             self.parts.append(data)
+
+
+def release_text(html: str) -> str:
+    """解析发布说明并合并连续空白行，返回去除首尾空白的纯文本。"""
+    parser = _ReleaseText()
+    parser.feed(html or "")
+    return re.sub(r"\n[ \t\n]*\n", "\n", "".join(parser.parts)).strip()
+
+
+class WrappingLabel(QLabel):
+    """提供可控行距的纯文本标签，支持不含分隔符的长文件名。"""
+
+    def __init__(self, text: str, name: str = "updateLogText") -> None:
+        """为纯文本创建控件持有的 QTextDocument，固定行距并允许无分隔符长文本换行。"""
+        super().__init__(text)
+        self.setObjectName(name)
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setWordWrap(True)
+        self.setMinimumWidth(0)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        self._document = QTextDocument(self)
+        self._document.setDocumentMargin(0)
+        option = QTextOption()
+        option.setWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self._document.setDefaultTextOption(option)
+        self._document.setPlainText(text)
+        cursor = QTextCursor(self._document)
+        cursor.select(QTextCursor.SelectionType.Document)
+        block = QTextBlockFormat()
+        block.setLineHeight(TEXT_LINE_HEIGHT, QTextBlockFormat.LineHeightTypes.FixedHeight.value)
+        cursor.mergeBlockFormat(block)
+
+    def _measure(self, width: int) -> int:
+        """按当前字体和指定宽度重新排版内部文档，返回向上取整并留有余量的高度。"""
+        self._document.setDefaultFont(self.font())
+        self._document.setTextWidth(max(1, width))
+        return math.ceil(self._document.size().height()) + 2
+
+    def heightForWidth(self, width: int) -> int:
+        """将指定布局宽度转换为文档实际所需高度，供父布局按宽度分配空间。"""
+        return self._measure(width)
+
+    def sizeHint(self) -> QSize:
+        """以二百四十像素宽度计算默认建议尺寸。"""
+        return QSize(240, self._measure(240))
+
+    def minimumSizeHint(self) -> QSize:
+        """不为长文本设置额外最小宽高，允许父布局按可用空间重新排版。"""
+        return QSize(0, 0)
+
+    def paintEvent(self, event) -> None:
+        """按实际宽度排版内部文档并使用控件调色板绘制纯文本。"""
+        self._measure(self.width())
+        painter = QPainter(self)
+        context = self._document.documentLayout().PaintContext()
+        context.palette = self.palette()
+        self._document.documentLayout().draw(painter, context)
+
+
+class UpdateThumbnail(QLabel):
+    """持有本地预览 QPixmap 并按更新行尺寸裁切，缺图时展示占位说明和图标。"""
+
+    def __init__(self, info: UpdateInfo):
+        """创建固定尺寸的预览控件，加载更新信息中的本地图片路径。"""
+        super().__init__()
+        self.setObjectName("updateThumb")
+        self.setFixedSize(60, 66)
+        self.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignBottom)
+        self.setContentsMargins(1, 0, 1, 8)
+        self.setAccessibleName(tr("Mod 外观预览"))
+        self._path = None
+        self._source = QPixmap()
+        self.set_source(info.local_preview)
+
+    def set_source(self, path: str) -> None:
+        """路径变化时在界面线程加载源 QPixmap 并重新渲染，同一路径复用已加载图像。"""
+        path = (path or "").strip()
+        if path == self._path:
+            return
+        self._path = path
+        self._source = QPixmap(path) if path else QPixmap()
+        self._render_preview()
