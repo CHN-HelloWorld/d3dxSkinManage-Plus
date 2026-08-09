@@ -551,3 +551,73 @@ class ModUpdatesDialog(QDialog):
             and not self.pending_ids()
             and all(snapshot.get("phase") == "done" for snapshot in self._task_snapshots.values())
         )
+
+    def set_close_handler(self, callback: Callable[[], bool]) -> None:
+        """用户关闭前先由所有者结算活动工作。"""
+        self._close_handler = callback
+
+    def prepare_for_open(self, infos: list[UpdateInfo], *, failures: dict[str, str]) -> None:
+        """复用静态界面并恢复服务当前状态。"""
+        self._message_timer.stop()
+        self._dismiss_message()
+        self._search.clear()
+        for mid in list(self._row_retirements):
+            self._cancel_retirement(mid)
+        self._task_snapshots.clear()
+        self._completed_files.clear()
+        self._pending_check_updates = None
+        self._checking = False
+        self._check_done = self._check_total = 0
+        self._check_snapshot = {"phase": "idle", "checking": False}
+        self._dismissed = False
+        self.setResult(QDialog.DialogCode.Rejected)
+        for row in self._rows_by_id.values():
+            row.set_state("ready")
+        self.set_updates(infos, failures=failures)
+        self._scroll.verticalScrollBar().setValue(0)
+
+    def force_close(self) -> None:
+        """游戏切换和应用退出直接执行生命周期清理，不再次询问普通关闭操作。"""
+        self._force_closing = True
+        try:
+            self.done(QDialog.DialogCode.Rejected)
+        finally:
+            self._force_closing = False
+
+    def _update_all_clicked(self) -> None:
+        """批次已全部完成时接受窗口，否则向宿主请求启动全部待更新项目。"""
+        if self.is_batch_complete():
+            self.accept()
+        else:
+            self.update_all_requested.emit()
+
+    @staticmethod
+    def _file_identity(info: UpdateInfo) -> tuple[int, int, int, str]:
+        """提取来源、文件标识、发布时间和大小写无关校验和，作为已完成文件的比较身份。"""
+        file = info.latest_file
+        return info.gb_mod_id, file.file_id, file.date_added_ts, (file.md5_checksum or "").casefold()
+
+    def _is_newer_update(self, info: UpdateInfo, completed: tuple[int, int, int, str]) -> bool:
+        """来源变化视为新候选；同来源必须时间更新，且可比较校验和或文件标识发生变化才重新显示。"""
+        source, file_id, timestamp, checksum = self._file_identity(info)
+        old_source, old_id, old_timestamp, old_checksum = completed
+        if source != old_source:
+            return True
+        if timestamp <= old_timestamp:
+            return False
+        return checksum != old_checksum if checksum and old_checksum else file_id != old_id
+
+    def _schedule_retirement(self, mid: str, row: UpdateRow) -> None:
+        """记录完成文件身份并按剩余阅读时间安排退场，已超过停留期的后台结果立即移除。"""
+        self._completed_files.setdefault(mid, self._file_identity(row.info))
+        if mid not in self._row_retirements:
+            completed_at = finite_number(self._task_snapshots.get(mid, {}).get("completed_at"))
+            elapsed_ms = max(0, int((monotonic() - completed_at) * 1000)) if completed_at > 0 else 0
+            remaining_ms = _SUCCESS_HOLD_MS - elapsed_ms
+            if remaining_ms <= 0:
+                # 重新打开时不重放已经在后台收起的结果提示。
+                self._retire_success_row(mid)
+                return
+            retirement = _SuccessRetirement(row, self, hold_ms=remaining_ms)
+            self._row_retirements[mid] = retirement
+            retirement.finished.connect(self._retire_success_row)
