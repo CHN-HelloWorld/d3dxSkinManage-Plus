@@ -134,3 +134,62 @@ class ElidedLabel(QLabel):
     def minimumSizeHint(self) -> QSize:
         """返回零最小宽度和固定行高，使长名称不反向扩大窗口。"""
         return QSize(0, self.height())
+
+    def paintEvent(self, event) -> None:
+        """按内容区宽度绘制尾部省略文本，保留控件原始完整文本。"""
+        painter = QPainter(self)
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.contentsRect().width())
+        painter.drawText(self.contentsRect(), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, text)
+
+
+class SummaryButton(QPushButton):
+    """以可压缩宽度显示更新日志摘要，保留按钮交互及完整工具提示。"""
+
+    def sizeHint(self) -> QSize:
+        """返回固定文本行高及零建议宽度，由父布局分配摘要所需空间。"""
+        return QSize(0, TEXT_LINE_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        """允许摘要按钮横向收缩而保持一行高度。"""
+        return QSize(0, TEXT_LINE_HEIGHT)
+
+    def paintEvent(self, event) -> None:
+        """在按钮原生样式中绘制尾部省略的摘要，并预留图标空间。"""
+        option = QStyleOptionButton()
+        self.initStyleOption(option)
+        option.text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, max(0, self.width() - 20))
+        painter = QStylePainter(self)
+        painter.drawControl(QStyle.ControlElement.CE_PushButton, option)
+
+
+class _ReleaseText(HTMLParser):
+    """把发布说明 HTML 提取为适合只读展示的纯文本，忽略脚本和样式内容。"""
+
+    def __init__(self) -> None:
+        """启用字符实体转换，初始化文本片段及脚本、样式跳过层数。"""
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self.skipped = 0
+
+    def handle_starttag(self, tag, attrs):
+        """进入脚本或样式时暂停收集文本，其他块级标签插入换行，列表项附加项目符号。"""
+        if tag in {"script", "style"}:
+            self.skipped += 1
+        elif not self.skipped:
+            if tag == "li":
+                self.parts.append("\n• ")
+            elif tag in {"p", "div", "br", "h1", "h2", "h3", "h4", "tr"}:
+                self.parts.append("\n")
+
+    def handle_endtag(self, tag):
+        """离开脚本或样式区域时恢复收集，其余块级结束标签补充换行。"""
+        if tag in {"script", "style"}:
+            self.skipped = max(0, self.skipped - 1)
+        elif not self.skipped and tag in {"p", "div", "li", "h1", "h2", "h3", "h4", "tr"}:
+            self.parts.append("\n")
+
+    def handle_data(self, data):
+        """仅在非脚本和非样式区域收集文本内容。"""
+        if not self.skipped:
+            self.parts.append(data)
