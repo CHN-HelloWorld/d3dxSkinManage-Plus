@@ -343,3 +343,171 @@ class ShortcutEditDialog(_PrototypeDialog):
         if hasattr(self, "_breathe"):
             self._breathe.stop()
         super().hideEvent(event)
+
+    def _draw_recording(self):
+        """按候选有效性、重复绑定、冲突及失焦状态更新反馈、保存条件与等待动画。"""
+        conflicts = (
+            self.settings.conflicts(self.command.id, self.candidate) if self.candidate and not self._error else []
+        )
+        same = self.candidate is not None and self.candidate == self.settings.binding(self.command.id)
+        self.keys.set_binding(self.candidate)
+        self.keys.setVisible(bool(self.candidate))
+        self.placeholder.setVisible(not self.candidate)
+        self.caption.setText(
+            tr("已暂停录制，回到此窗口后继续")
+            if self._suspended
+            else tr("继续按键可更换候选，也可点击「重新录制」")
+            if self.candidate
+            else tr("支持 Ctrl / Alt / Shift 与单个按键组合")
+        )
+        tone = "danger" if self._error else "warning" if conflicts else "accent"
+        background = "bg.base" if self._error else "warning.subtle" if conflicts else "accent.subtle"
+        self.capture.setStyleSheet(
+            f"#shortcutCapture {{ background: {color(background)};"
+            f" border: 1px solid {color(tone)}; border-radius: 8px; }}"
+        )
+        self.save_button.setText(tr("替换并保存") if conflicts else tr("保存快捷键"))
+        self.save_button.setEnabled(bool(self.candidate) and not (self._error or same or self._suspended))
+        self.reset_button.setEnabled(
+            self.settings.binding(self.command.id) != self.command.default
+            and self.candidate != self.command.default
+            and not self._suspended
+        )
+        if self._suspended:
+            self.feedback.show_status(tr("窗口已失焦，候选尚未保存。"), paused=True)
+        elif self._error:
+            self.feedback.show_status(self._error, "danger")
+        elif not self.candidate:
+            self.feedback.show_status(tr("录制期间不会执行快捷键对应的操作。"))
+        elif same:
+            self.feedback.show_status(tr("与当前绑定相同，无需保存。"))
+        elif conflicts:
+            self.feedback.show_status(
+                tr("这个组合键已被 {count} 项操作使用", count=len(conflicts)),
+                "warning",
+                conflicts=conflicts,
+                detail=tr(
+                    "替换后，以上操作将变为<b>未绑定</b>；「{value}」将使用新按键。",
+                    value=escape(self.command.display_title),
+                ),
+                shared=any(command.group == "general" for command in conflicts),
+            )
+        else:
+            self.feedback.show_status(tr("可以使用，确认后立即生效"), "success")
+        if hasattr(self, "_breathe"):
+            if self.candidate or self._error or self._suspended:
+                self._breathe.stop()
+                self.capture_icon.graphicsEffect().setOpacity(1.0)
+            elif self.isVisible():
+                self._breathe.start()
+        self.card.updateGeometry()
+
+    def set_candidate(self, binding: str):
+        """保存候选键位并按目标命令校验，随后刷新可保存状态和冲突反馈。"""
+        self.candidate = binding
+        self._error = validate_binding(binding, self.command)
+        self._draw_recording()
+
+    def record_again(self):
+        """清空候选及校验错误并聚焦录制区，已持久化绑定不变。"""
+        self.candidate = None
+        self._error = ""
+        self._draw_recording()
+        self.capture.setFocus()
+
+    def reset_candidate(self):
+        """恢复默认操作可用时将默认键位设为待确认候选，仍需显式保存。"""
+        if self.reset_button.isEnabled():
+            self.set_candidate(self.command.default)
+            self.capture.setFocus()
+
+    def save(self):
+        """重新检查冲突并提交候选绑定，成功后记录替换数量并接受，失败则保留窗口显示错误。"""
+        if not self.save_button.isEnabled() or not self.candidate:
+            return
+        conflicts = self.settings.conflicts(self.command.id, self.candidate)
+        if not self.settings.save_binding(self.command.id, self.candidate, replace=bool(conflicts)):
+            self.feedback.show_status(self.settings.last_error, "danger")
+            return
+        self.saved_conflict_count = len(conflicts)
+        self.accept()
+
+    def eventFilter(self, watched, event):
+        """仅处理本窗口及其后代的录制事件，保留焦点导航并拦截快捷键执行。
+
+        失焦或输入法组合期间暂停录制，拒绝系统键组合；有效按键转为候选，Esc 取消，回车执行确认。
+        """
+        if watched is self and event.type() in (QEvent.Type.WindowActivate, QEvent.Type.WindowDeactivate):
+            self._suspended = event.type() == QEvent.Type.WindowDeactivate
+            self._draw_recording()
+        if not isinstance(watched, QWidget) or not (watched is self or self.isAncestorOf(watched)):
+            return False
+        kind = event.type()
+        if watched is self.capture and kind in (QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+            self.content.update()
+        if kind == QEvent.Type.InputMethod:
+            self._composing = bool(event.preeditString())
+            if self._composing:
+                self.candidate = None
+                self._error = tr("请结束输入法组合输入后，再录制快捷键。")
+                self._draw_recording()
+            return True
+        if kind not in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            return False
+        if kind == QEvent.Type.ShortcutOverride:
+            event.accept()
+            return True
+        if kind == QEvent.Type.KeyRelease:
+            if self.candidate is None and not event.modifiers():
+                self._draw_recording()
+            return False
+        if self._suspended:
+            return True
+        key = event.key()
+        modified = event.modifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.MetaModifier
+        )
+        if not modified:
+            if key == Qt.Key.Key_Escape:
+                self.reject()
+                return True
+            if key in (Qt.Key.Key_Tab, Qt.Key.Key_Backtab):
+                return False
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                if watched is self.capture:
+                    self.save()
+                elif isinstance(watched, QAbstractButton):
+                    watched.click()
+                return True
+            if key == Qt.Key.Key_Space and isinstance(watched, QAbstractButton):
+                return False
+        if event.isAutoRepeat() or self._composing:
+            return True
+        if key == Qt.Key.Key_Meta or event.modifiers() & Qt.KeyboardModifier.MetaModifier:
+            self.candidate = None
+            self._error = tr("Windows 键组合由系统使用，请选择 Ctrl、Alt 或 Shift。")
+            self._draw_recording()
+            return True
+        if key in (Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift):
+            if not self.candidate:
+                parts = [
+                    name
+                    for flag, name in (
+                        (Qt.KeyboardModifier.ControlModifier, "Ctrl"),
+                        (Qt.KeyboardModifier.AltModifier, "Alt"),
+                        (Qt.KeyboardModifier.ShiftModifier, "Shift"),
+                    )
+                    if event.modifiers() & flag
+                ]
+                self.keys.set_parts(parts + ["…"])
+                self.keys.show()
+                self.placeholder.hide()
+            return True
+        binding = binding_from_event(event)
+        if binding:
+            self.set_candidate(binding)
+        else:
+            self.candidate = None
+            self._error = tr("暂不支持这个按键，请试试字母、数字或功能键。")
+            self._draw_recording()
+        return True
