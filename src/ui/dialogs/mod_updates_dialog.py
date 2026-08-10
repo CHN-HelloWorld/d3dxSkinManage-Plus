@@ -967,3 +967,60 @@ class ModUpdatesDialog(QDialog):
         resume_phase = previous.get("resume_phase") if previous.get("phase") == "paused" else previous.get("phase")
         self.set_task_snapshot(mid, {**previous, "phase": "failed", "error": error, "resume_phase": resume_phase})
         self.show_message(tr("更新失败：{error}", error=error))
+
+    def set_task_snapshot(self, mid: str, snapshot: dict) -> None:
+        """显示服务状态，包括早于列表条目到达的快照。"""
+        previous_phase = self._task_snapshots.get(mid, {}).get("phase")
+        self._task_snapshots[mid] = dict(snapshot)
+        if snapshot.get("phase") != "done":
+            self._cancel_retirement(mid)
+            self._completed_files.pop(mid, None)
+        row = self._rows_by_id.get(mid)
+        if row is not None:
+            row.set_task_snapshot(snapshot)
+            if row.state == "done":
+                self._schedule_retirement(mid, row)
+        if previous_phase != snapshot.get("phase"):
+            self._filter_rows()
+        self._update_counts()
+
+    def _empty_action_clicked(self) -> None:
+        """搜索导致空列表且批次未完成时清除搜索，否则请求重新检查更新。"""
+        if self._search.text().strip() and not self.is_batch_complete():
+            self._search.clear()
+            self._search.setFocus()
+        else:
+            self.recheck_requested.emit()
+
+    def show_message(self, text: str, *, undo: Callable[[], bool | None] | None = None) -> None:
+        """显示临时提示并替换撤销回调，有撤销操作时停留八秒，否则停留四点二秒。"""
+        self._undo = undo
+        self._message_text.setText(text)
+        self._undo_btn.setVisible(undo is not None)
+        self._position_message()
+        self._message.show()
+        self._message.raise_()
+        self._message_timer.start(8000 if undo else 4200)
+
+    def _undo_clicked(self) -> None:
+        """取出并清空撤销回调后执行一次，仅显式返回假视为撤销失败，并显示对应结果。"""
+        callback, self._undo = self._undo, None
+        if callback is not None:
+            restored = callback()
+            self.show_message(
+                tr("已撤销忽略。") if restored is not False else tr("无法撤销：当前游戏或 Mod 已发生变化。")
+            )
+
+    def _dismiss_message(self) -> None:
+        """隐藏临时提示并释放撤销回调，防止过期操作被继续执行。"""
+        self._message.hide()
+        self._undo = None
+
+    def _position_message(self) -> None:
+        """按窗口宽度限制提示层尺寸，并将其居中放置于底栏上方。"""
+        self._message.setFixedWidth(min(540, self.width() - 44))
+        self._message.adjustSize()
+        self._message.move(
+            max(8, (self.width() - self._message.width()) // 2),
+            max(8, self.height() - self._footer.height() - self._message.height() - 14),
+        )
