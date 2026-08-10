@@ -1024,3 +1024,203 @@ class ModUpdatesDialog(QDialog):
             max(8, (self.width() - self._message.width()) // 2),
             max(8, self.height() - self._footer.height() - self._message.height() - 14),
         )
+
+    def paintEvent(self, event) -> None:
+        """未启用亚克力时绘制不透明主题表面与圆角边框，避免缩放过程中客户区透明缺失。"""
+        if self.property("_dialog_acrylic"):
+            return
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(color("surface")))
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setBrush(QColor(color("surface")))
+        painter.setPen(QPen(QColor(color("control")), 1))
+        painter.drawRoundedRect(QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5), 10, 10)
+
+    def resizeEvent(self, event) -> None:
+        """控件初始化完成后同步布局密度、边缘拖动区、条目排列和提示层位置。"""
+        super().resizeEvent(event)
+        if not hasattr(self, "_resize_handles"):
+            return
+        self._apply_density()
+        self._position_resize_handles()
+        compact, short = self.width() <= 562, self.height() <= 422
+        for row in self._rows_by_id.values():
+            row.set_compact(compact, short=short)
+        self._position_message()
+
+    def _apply_density(self) -> None:
+        """按窗口宽高断点调整标题、列表和底栏密度，仅在模式变化时重排并刷新数量。"""
+        compact, short = self.width() <= 562, self.height() <= 422
+        if self._density == (compact, short):
+            return
+        self._density = compact, short
+        self._titlebar.setFixedHeight(25 if short else 31)
+        self._titlebar.layout().setContentsMargins(13 if short else 16, 0, 0, 0)
+        self._close_btn.setFixedSize(34 if short else 42, 24 if short else 30)
+        self._close_btn.setStyleSheet(f"min-height: {22 if short else 28}px; max-height: {22 if short else 28}px;")
+        self._header.setFixedHeight(56 if short else 74 if compact else 84)
+        self._header.layout().setContentsMargins(
+            12 if short else 13 if compact else 26,
+            4 if short else 10 if compact else 11,
+            12 if short else 13 if compact else 26,
+            6 if short else 12 if compact else 15,
+        )
+        self._header.layout().setSpacing(8 if compact else 13)
+        self._header_badge.setVisible(not compact)
+        self._heading_layout.setSpacing(2 if short else 4)
+        self._heading_title.setFixedHeight(22 if short else 25 if compact else 31)
+        self._header.setStyleSheet(f"""
+            QLabel#updateTitle {{ font-size: {16 if short else 18 if compact else 22}px; }}
+        """)
+        self._recheck_btn.setFixedWidth(84 if compact else 98)
+        self._check_panel.set_density(compact=compact, short=short)
+        self._batch_panel.layout().setContentsMargins(
+            12 if compact else 24, 4 if short else 7, 12 if compact else 24, 0
+        )
+        self._batch_surface.layout().setContentsMargins(
+            8 if compact else 11, 3 if short else 8, 8 if compact else 11, 3 if short else 8
+        )
+        self._batch_surface.layout().setSpacing(2 if short else 4)
+        for button, verb in (
+            (self._pause_all_btn, tr("暂停")),
+            (self._resume_all_btn, tr("继续")),
+            (self._stop_all_btn, tr("终止")),
+        ):
+            button.setText(verb if compact else tr("全部{verb}", verb=verb))
+            button.setFixedWidth(51 if compact else 78)
+        self._collection.setFixedHeight(37 if short else 41 if compact else 47)
+        self._collection.layout().setContentsMargins(
+            13 if compact else 26,
+            5 if short else 8 if compact else 12,
+            13 if compact else 26,
+            4 if short else 5 if compact else 7,
+        )
+        self._search.setFixedSize(145 if compact else 185, 28)
+        self._list_layout.setContentsMargins(11 if compact else 22, 0, 11 if compact else 22, 10 if compact else 14)
+        self._footer.setFixedHeight(56 if short else 64 if compact else 75)
+        self._footer.layout().setContentsMargins(
+            11 if short else 12 if compact else 25,
+            5 if short else 9 if compact else 15,
+            11 if short else 12 if compact else 25,
+            5 if short else 9 if compact else 15,
+        )
+        self._footer.layout().setSpacing(7 if compact else 10)
+        self._footer_icon.setVisible(not compact)
+        self._later.setVisible(not compact)
+        self._footer.setStyleSheet(f"""
+            QPushButton#updateAll {{ min-height: {26 if short else 28 if compact else 34}px;
+                                     max-height: {26 if short else 28 if compact else 34}px; }}
+        """)
+        self._update_all_btn._minimum_width = 112 if compact else 132
+        self._update_all_btn.layout().setContentsMargins(9 if compact else 13, 0, 9 if compact else 13, 0)
+        self._update_all_btn.setFixedHeight(28 if short else 30 if compact else 36)
+        self._update_counts()
+
+    def _position_resize_handles(self) -> None:
+        """布置四边及四角的缩放命中区域，最大化或全屏时隐藏这些手柄。"""
+        width, height = self.width(), self.height()
+        border, corner = 6, 12
+        geometries = {
+            Qt.Edge.LeftEdge: (0, corner, border, height - corner * 2),
+            Qt.Edge.RightEdge: (width - border, corner, border, height - corner * 2),
+            Qt.Edge.TopEdge: (corner, 0, width - corner * 2, border),
+            Qt.Edge.BottomEdge: (corner, height - border, width - corner * 2, border),
+            Qt.Edge.LeftEdge | Qt.Edge.TopEdge: (0, 0, corner, corner),
+            Qt.Edge.RightEdge | Qt.Edge.TopEdge: (width - corner, 0, corner, corner),
+            Qt.Edge.LeftEdge | Qt.Edge.BottomEdge: (0, height - corner, corner, corner),
+            Qt.Edge.RightEdge | Qt.Edge.BottomEdge: (width - corner, height - corner, corner, corner),
+        }
+        visible = not (self.isMaximized() or self.isFullScreen())
+        for edges, handle in self._resize_handles.items():
+            handle.setGeometry(*geometries[edges])
+            handle.setVisible(visible)
+            handle.raise_()
+
+    def showEvent(self, event) -> None:
+        """首次显示时约束窗口尺寸，应用原生圆角并聚焦搜索；非系统自发显示时播放入场动画。"""
+        self._dismissed = False
+        if not self._sized_for_screen:
+            available = self.screen().availableGeometry()
+            self.resize(
+                min(self.width(), max(420, available.width() - 40)),
+                min(self.height(), max(340, available.height() - 60)),
+            )
+            self._sized_for_screen = True
+        super().showEvent(event)
+        from src.ui.win_effects import apply_rounded_corners, disable_open_close_transition
+
+        disable_open_close_transition(self)
+        apply_rounded_corners(self)
+        self._search.setFocus(Qt.FocusReason.OtherFocusReason)
+        if not event.spontaneous():
+            anim.slide_in(self, dy=16, duration=150)
+
+    def done(self, result: int) -> None:
+        """统一处理关闭并防止重入，先由宿主决定是否允许关闭，再收起完成条目并保存正常窗口尺寸。
+
+        强制关闭跳过宿主确认和退场动画；普通可见窗口在动画完成后交给 Qt 结束。
+        """
+        # 所有用户关闭入口统一进入完成处理，避免重复确认。
+        if self._dismissed and self._force_closing:
+            previous = getattr(self, "_slide_anim", None)
+            if previous is not None:
+                try:
+                    previous.stop()
+                except RuntimeError:
+                    pass
+            super().done(result)
+            return
+        if self._dismissed or (self._requesting_close and not self._force_closing):
+            return
+        if self._close_handler is not None and not self._force_closing:
+            self._requesting_close = True
+            try:
+                permitted = self._close_handler()
+            finally:
+                self._requesting_close = False
+            if not permitted or self._dismissed:
+                return
+        self._dismissed = True
+        for mid in list(self._row_retirements):
+            self._retire_success_row(mid)
+        # 仅关闭时保存普通窗口尺寸，缩放过程中不反复写入，最大化状态不替换用户尺寸。
+        if self._config is not None and self._sized_for_screen:
+            size = self.normalGeometry().size() if self.isMaximized() or self.isMinimized() else self.size()
+            if size.isValid():
+                self._config.set("ui.mod_updates", {"width": size.width(), "height": size.height()})
+        if self._force_closing or not self.isVisible() or not anim.is_enabled():
+            previous = getattr(self, "_slide_anim", None)
+            if previous is not None:
+                try:
+                    previous.stop()
+                except RuntimeError:
+                    pass
+            super().done(result)
+            return
+        resting = self.geometry()
+
+        def finish_close():
+            """退场动画结束后设置对话框结果并恢复原几何，避免复用窗口时累积位移。"""
+            QDialog.done(self, result)
+            self.setGeometry(resting)
+
+        anim.slide_out(self, dy=40, duration=110, on_finished=finish_close)
+
+    def changeEvent(self, event) -> None:
+        """窗口状态变化时更新缩放手柄，主题变化时刷新局部样式、图标、任务行和统计反馈。"""
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.WindowStateChange and hasattr(self, "_resize_handles"):
+            self._position_resize_handles()
+        if event.type() in {QEvent.Type.StyleChange, QEvent.Type.PaletteChange} and hasattr(self, "_theme"):
+            if self._theme != theme.current_theme():
+                self._theme = theme.current_theme()
+                self.setStyleSheet(stylesheet())
+                icons.retheme_icons(self)
+                self._check_panel.retheme()
+                if self._checking:
+                    self._spin_check_icon(0)
+                for row in self._rows_by_id.values():
+                    row.retheme()
+                self._filter_rows()
+                self._update_counts()
+                self.update()
