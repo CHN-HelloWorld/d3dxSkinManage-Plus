@@ -807,3 +807,163 @@ class ModUpdatesDialog(QDialog):
         elif self._check_hidden_by_tasks:
             self._check_hidden_by_tasks = False
             self._check_panel.set_snapshot(self._check_snapshot, available=len(self.pending_ids()))
+
+    def _update_batch(self) -> Counter:
+        """汇总全部任务快照，行可见性不影响任务范围。"""
+        snapshots = list(self._task_snapshots.values())
+        phases = Counter(str(value.get("phase", "preparing")) for value in snapshots)
+        self._batch_panel.setVisible(bool(snapshots))
+        running = sum(phases.get(phase, 0) for phase in PAUSABLE_PHASES)
+        paused = phases.get("paused", 0)
+        self._pause_all_btn.setEnabled(self.actions_enabled and running > 0)
+        self._resume_all_btn.setEnabled(self.actions_enabled and paused > 0)
+        self._stop_all_btn.setEnabled(self.actions_enabled and running + paused > 0)
+        if not snapshots:
+            self._batch_progress.set_measurement(None, running=False)
+            return phases
+        count, done = len(snapshots), phases.get("done", 0)
+        active = running + paused + phases.get("stopping", 0)
+        title = (
+            tr("更新任务 · {done} / {count} 已更新", done=done, count=count)
+            if active
+            else tr("全部更新完成 · {done} 项", done=done)
+            if done == count
+            else tr("本轮更新已结束")
+        )
+        self._batch_title.setText(title)
+        self._batch_title.setToolTip(title)
+        labels = {
+            "queued": tr("排队"),
+            "preparing": tr("准备"),
+            "downloading": tr("下载"),
+            "verifying": tr("校验"),
+            "extracting": tr("解压"),
+            "installing": tr("安装"),
+            "paused": tr("暂停"),
+            "stopping": tr("终止中"),
+            "done": tr("已更新"),
+            "failed": tr("失败"),
+            "canceled": tr("已终止"),
+            "deferred": tr("等待继续"),
+        }
+        counts = " · ".join(f"{text} {phases[phase]}" for phase, text in labels.items() if phases.get(phase))
+        self._batch_counts.setText(counts)
+        self._batch_counts.setToolTip(counts)
+        tone = "accent" if active else "green" if done == count else "warning" if phases.get("failed") else "secondary"
+        icons.apply_pixmap(
+            self._batch_icon,
+            "mod-updates/check" if done == count else "mod-updates/download",
+            14,
+            f"mod_updates.{tone}",
+        )
+        self._batch_title.setStyleSheet(f"color: {color(tone)};")
+        downloaded = sum(max(0, int(finite_number(value.get("downloaded_bytes")))) for value in snapshots)
+        totals = [max(0, int(finite_number(value.get("total_bytes")))) for value in snapshots]
+        total = sum(totals) if all(totals) else 0
+        has_measurements = any(finite_number(value.get("downloaded_bytes"), -1) >= 0 for value in snapshots)
+        transfer = (
+            tr("总下载 {value} / {value_2}", value=format_size(downloaded), value_2=format_size(total))
+            if total
+            else tr("已下载 {value} · 总大小未知", value=format_size(downloaded))
+        )
+        speed = sum(
+            max(0, int(finite_number(value.get("speed_bps"))))
+            for value in snapshots
+            if value.get("phase") == "downloading"
+        )
+        if speed:
+            transfer += f" · {format_size(speed)}/s"
+        self._batch_transfer.setText(transfer if has_measurements else "")
+        self._batch_transfer.setToolTip(transfer if has_measurements else "")
+        self._batch_transfer.setVisible(has_measurements and self.height() > 422)
+        self._batch_progress.set_measurement(
+            min(1.0, downloaded / total) if total else None, running=bool(running), tone=tone
+        )
+        self._batch_progress.setVisible(bool(active))
+        self._batch_surface.setToolTip("\n".join((title, counts, transfer if has_measurements else "")))
+        return phases
+
+    def set_checking(self, checking: bool) -> None:
+        """把简化的检查开始或结束状态转换为带时间和失败数量的快照，交由统一快照入口处理。"""
+        if checking == self._checking:
+            return
+        if checking:
+            now = monotonic()
+            state = dict(
+                checking=True,
+                phase="connecting",
+                started_at=now,
+                last_progress_at=now,
+                finished_at=0.0,
+                total=0,
+                done=0,
+                found=0,
+                failed=0,
+                retry_only=False,
+            )
+        else:
+            failures = (self._pending_check_updates[1] if self._pending_check_updates else self._failures) or {}
+            state = {
+                **self._check_snapshot,
+                "checking": False,
+                "finished_at": monotonic(),
+                "phase": "partial" if failures else "done",
+                "failed": len(failures),
+            }
+        self.set_check_snapshot(state)
+
+    def set_check_snapshot(self, snapshot: dict) -> None:
+        """复制检查快照并同步操作状态；结束时发布暂存候选，取消时丢弃暂存候选以保留原列表。"""
+        checking = bool(snapshot.get("checking"))
+        changed = checking != self._checking
+        self._check_snapshot = dict(snapshot)
+        self._check_done = snapshot.get("done", 0)
+        self._check_total = snapshot.get("total", 0)
+        self._checking = checking
+        if not checking and self._pending_check_updates is not None:
+            pending, self._pending_check_updates = self._pending_check_updates, None
+            if snapshot.get("phase") != "cancelled":
+                self.set_updates(pending[0], failures=pending[1])
+        phase = snapshot.get("phase", "idle")
+        self._recheck_btn.setText(tr("检测中…") if checking else tr("检测更新") if phase == "idle" else tr("重新检测"))
+        self._recheck_btn.setEnabled(not checking)
+        self._empty_action.setEnabled(not checking)
+        self._collection_label.setText(tr("上次检测结果") if checking else tr("更新列表"))
+        if changed:
+            for row in self._rows_by_id.values():
+                row.refresh_actions()
+        if not checking:
+            apply_icon(self._recheck_btn, "refresh")
+        elif changed:
+            self._spin_check_icon(0)
+        self._filter_rows()
+        self._update_counts()
+        self._check_panel.set_snapshot(snapshot, available=len(self.pending_ids()))
+        self._sync_task_feedback()
+
+    def _spin_check_icon(self, angle: float) -> None:
+        """仅在检查运行时将反馈面板的旋转角度同步到重新检查按钮。"""
+        if self._checking:
+            self._recheck_btn.setIcon(refresh_icon(angle, "accent"))
+
+    def set_check_progress(self, done: int, total: int) -> None:
+        """检查运行时更新有界完成数量及最近进展时间，其他状态忽略迟到进度。"""
+        if self._checking:
+            self.set_check_snapshot(
+                {
+                    **self._check_snapshot,
+                    "phase": "checking",
+                    "total": max(0, total),
+                    "done": max(0, min(done, total)),
+                    "last_progress_at": monotonic(),
+                }
+            )
+
+    def set_update_failed(self, mid: str, error: str) -> None:
+        """为已有行记录失败及可恢复阶段，通过统一任务快照更新界面并显示错误提示。"""
+        if mid not in self._rows_by_id:
+            return
+        previous = self._task_snapshots.get(mid, {})
+        resume_phase = previous.get("resume_phase") if previous.get("phase") == "paused" else previous.get("phase")
+        self.set_task_snapshot(mid, {**previous, "phase": "failed", "error": error, "resume_phase": resume_phase})
+        self.show_message(tr("更新失败：{error}", error=error))
