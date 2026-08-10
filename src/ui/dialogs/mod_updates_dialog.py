@@ -621,3 +621,189 @@ class ModUpdatesDialog(QDialog):
             retirement = _SuccessRetirement(row, self, hold_ms=remaining_ms)
             self._row_retirements[mid] = retirement
             retirement.finished.connect(self._retire_success_row)
+
+    def _cancel_retirement(self, mid: str) -> None:
+        """移除并取消指定条目的退场控制器，恢复其透明度与原有尺寸约束。"""
+        retirement = self._row_retirements.pop(mid, None)
+        if retirement is not None:
+            retirement.cancel()
+
+    def _retire_success_row(self, mid: str) -> None:
+        """仅移除仍处于完成状态的条目，取消动画并延迟销毁控件，任务历史继续保留。"""
+        self._cancel_retirement(mid)
+        row = self._rows_by_id.get(mid)
+        if row is None or row.state != "done":
+            return
+        del self._rows_by_id[mid]
+        self._list_layout.removeWidget(row)
+        row.hide()
+        row.deleteLater()
+        self._filter_rows()
+        self._update_counts()
+
+    def set_updates(self, infos: list[UpdateInfo], *, failures: dict[str, str] | None = None) -> None:
+        """合并候选列表并复用现有行，保留活动任务及完成反馈，已完成文件仅在出现更新身份后重新展示。
+
+        检查期间暂存候选，完整检查结束后再发布；更新时保留滚动位置并同步失败提示和数量。
+        """
+        if self._checking:
+            # 完整检查结果发布前保留原列表。
+            self._pending_check_updates = (list(infos), None if failures is None else dict(failures))
+            return
+        incoming = {info.local_mod_id: info for info in infos}
+        position = self._scroll.verticalScrollBar().value()
+        for mid, row in list(self._rows_by_id.items()):
+            if mid not in incoming and row.state not in {"done", "updating"}:
+                self._list_layout.removeWidget(row)
+                row.hide()
+                row.deleteLater()
+                del self._rows_by_id[mid]
+                self._task_snapshots.pop(mid, None)
+        for mid, info in incoming.items():
+            completed = self._completed_files.get(mid)
+            if completed is not None:
+                if not self._is_newer_update(info, completed):
+                    continue
+                self._cancel_retirement(mid)
+                del self._completed_files[mid]
+                self._task_snapshots.pop(mid, None)
+            row = self._rows_by_id.get(mid)
+            if row is None:
+                row = UpdateRow(info, self)
+                self._rows_by_id[mid] = row
+                self._list_layout.insertWidget(self._list_layout.count() - 1, row)
+                if mid in self._task_snapshots:
+                    row.set_task_snapshot(self._task_snapshots[mid])
+            else:
+                row.set_info(info)
+                if row.state == "done":
+                    self._task_snapshots.pop(mid, None)
+                    row.set_state("ready")
+            row.set_compact(self.width() <= 562, short=self.height() <= 422)
+            if row.state == "done":
+                self._schedule_retirement(mid, row)
+        if failures is not None:
+            self._failures = dict(failures)
+        if self._failures and self._check_snapshot.get("phase") == "idle":
+            self._check_snapshot = dict(phase="partial", checking=False, total=0, done=0, failed=len(self._failures))
+        self._check_panel.detail.setToolTip("\n".join(self._failures.values()))
+        self._filter_rows()
+        self._update_counts()
+        self._check_panel.set_snapshot(self._check_snapshot, available=len(self.pending_ids()))
+        self._sync_task_feedback()
+        self._scroll.verticalScrollBar().setValue(position)
+
+    def _filter_rows(self, _text: str = "") -> None:
+        """按名称忽略大小写筛选可见行并更新末行样式，根据检查、完成或失败状态选择空列表提示。"""
+        query = self._search.text().strip().casefold()
+        visible = 0
+        matching = []
+        for row in self._rows_by_id.values():
+            matches = query in (row.info.local_name or str(row.info.gb_mod_id)).casefold()
+            row.setVisible(matches)
+            visible += matches
+            if matches:
+                matching.append(row)
+        for row in matching:
+            last = row is matching[-1]
+            if row.property("last") != last:
+                row.setProperty("last", last)
+                row.style().unpolish(row)
+                row.style().polish(row)
+                row.update()
+        self._visible_count.setText(str(visible))
+        self._stack.setCurrentIndex(0 if visible else 1)
+        if self._checking and not visible:
+            title, description, action, svg = (
+                tr("正在检测更新"),
+                tr("检测完成后，可用更新会显示在这里。"),
+                tr("检测中…"),
+                "refresh",
+            )
+        elif self.is_batch_complete():
+            count = len(self._task_snapshots)
+            title, description, action, svg = (
+                tr("全部更新完成"),
+                tr("本次 {count} 个 Mod 已完成安装。", count=count),
+                tr("重新检查"),
+                "check",
+            )
+        elif query and not visible:
+            title, description, action, svg = (
+                tr("没有找到匹配的 Mod"),
+                tr("试试其他名称，或清除当前搜索。"),
+                tr("清除搜索"),
+                "search",
+            )
+        elif self._check_snapshot.get("phase") == "failed":
+            title, description, action, svg = (
+                tr("检查尚未完成"),
+                self._check_snapshot.get("error") or tr("无法读取本地更新信息。"),
+                tr("重新检查"),
+                "warning",
+            )
+        elif self._failures:
+            title, description, action, svg = (
+                tr("部分 Mod 尚未检查完成"),
+                tr("检查失败的 Mod 状态尚不确定，可以重新检查。"),
+                tr("重新检查"),
+                "warning",
+            )
+        else:
+            title, description, action, svg = (
+                tr("暂无可用更新"),
+                tr("下次有新版本时会在这里显示。"),
+                tr("重新检查"),
+                "check",
+            )
+        self._empty_title.setText(title)
+        self._empty_description.setText(description)
+        self._empty_action.setText(action)
+        complete = self.is_batch_complete()
+        apply_icon(self._empty_action, "close" if query and not complete else "refresh", "accent")
+        self._empty_icon.setProperty("complete", complete)
+        self._empty_icon.style().unpolish(self._empty_icon)
+        self._empty_icon.style().polish(self._empty_icon)
+        icons.apply_pixmap(
+            self._empty_icon, f"mod-updates/{svg}", 29, "mod_updates.green" if complete else "mod_updates.accent"
+        )
+
+    def _update_counts(self) -> None:
+        """基于全部待处理条目和任务阶段更新底栏数量、容量及批量操作门禁，不受搜索可见性影响。"""
+        pending = self.pending_ids()
+        count = len(pending)
+        phases = self._update_batch()
+        busy = any(phases.get(phase, 0) for phase in ACTIVE_PHASES)
+        complete = self.is_batch_complete()
+        self._subtitle.setText(tr("{count} 个可用更新  ·  来自 GameBanana", count=count))
+        if count:
+            self._footer_count.setText(
+                tr(
+                    '<span style="font-weight:600;color:{value}">{count} 个 Mod</span> 可更新',
+                    value=color("text"),
+                    count=count,
+                )
+            )
+            total = sum(self._rows_by_id[mid].info.latest_file.size_bytes for mid in pending)
+            self._download_size.setText(tr("预计下载 {value}", value=format_size(total)))
+        else:
+            self._footer_count.setText(tr("本次更新已完成") if complete else tr("暂无待处理更新"))
+            self._download_size.setText(tr("所有任务已完成安装") if complete else tr("可以稍后重新检查"))
+        self._update_all_btn.setEnabled(
+            complete or (self.actions_enabled and count > 0 and not busy and not self._checking)
+        )
+        running = sum(phases.get(phase, 0) for phase in PAUSABLE_PHASES)
+        status = tr("正在更新…") if running else tr("正在终止…") if phases.get("stopping") else tr("已全部暂停")
+        self._update_all_btn.set_count(count, busy, status, complete=complete)
+        self._recheck_btn.setEnabled(not busy and not self._checking)
+        self._sync_task_feedback()
+
+    def _sync_task_feedback(self) -> None:
+        """已有更新任务且未在检查时隐藏检查结果提示，为任务控制保留空间；重新检查时恢复提示。"""
+        # 开始更新后收起已完成的检查提示，为活动控制保留空间；正在检查时仍可取消。
+        if self._task_snapshots and not self._checking:
+            self._check_hidden_by_tasks = True
+            self._check_panel.hide()
+        elif self._check_hidden_by_tasks:
+            self._check_hidden_by_tasks = False
+            self._check_panel.set_snapshot(self._check_snapshot, available=len(self.pending_ids()))
