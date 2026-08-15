@@ -463,3 +463,168 @@ class MainWindow(QMainWindow):
             widget.isVisible() and widget.isModal() and widget.objectName() != "pluginDialogSurface"
             for widget in QApplication.topLevelWidgets()
         )
+
+    @_invalidates_library_probe
+    def _on_plugin_activity_changed(self, busy: bool) -> None:
+        """插件任务期间锁定游戏设置，结束后恢复延后的部署、安装、来源监控与变体操作。"""
+        host_deploying = bool(getattr(self, "_deploy_workers", None) or getattr(self, "_deploy_active", None))
+        self._game_page.setEnabled(not (busy or host_deploying))
+        self._game_page.setToolTip(tr("插件操作完成后可切换游戏或修改部署目录。") if busy else "")
+        if not busy:
+            if self._deploy_environment_dirty:
+                self._deploy_environment_dirty = False
+                call_later(0, self, self._apply_migoto_for_current_game)
+            if self._pending_gb_installs:
+                call_later(0, self, self._drain_gb_installs)
+            if self._watcher_changed_paths:
+                self._plugin_watcher_pending = True
+                self._watcher_debounce.start()
+            if getattr(self, "_plugin_intake_pending", None) is not None:
+                call_later(0, self, self._resume_plugin_deferred_intake)
+            if getattr(self, "_plugin_variant_pending", False):
+                call_later(0, self, self._resume_pending_variant_capture)
+            if getattr(self, "_deferred_enable_ids", {}):
+                self._schedule_deferred_enables()
+
+    def _on_plugin_operation_finished(self, result) -> None:
+        """汇总插件操作结果，并仅为当前游戏刷新受影响页面、商店与预设状态。"""
+        panel = getattr(self, "_plugin_progress", None)
+        if panel is not None:
+            panel.finish(
+                tr("插件操作已完成") if result.ok else tr("插件操作未完成"),
+                result.error
+                or tr(
+                    "成功 {count} 项，失败 {count_2} 项，取消 {count_3} 项",
+                    count=len(result.succeeded_ids),
+                    count_2=len(result.failed_ids),
+                    count_3=len(result.cancelled_ids),
+                ),
+                ok=result.ok,
+            )
+        if result.game_id == self._mod_manager.current_game_id and result.succeeded_ids:
+            self._suppress_watcher()
+            self._reload_overview_level(result.game_id)
+            if self._stack.currentIndex() == self.PAGE_GALLERY:
+                self._refresh_gallery()
+            self._refresh_store_installed_state()
+        if result.game_id == self._mod_manager.current_game_id and (result.succeeded_ids or result.preset_id):
+            self._refresh_preset_combo()
+        if not result.ok and result.error:
+            self._ensure_toast().done(result.error, ok=False, hold_ms=2500)
+
+    def _on_plugin_operation_started(self, operation: str, ids) -> None:
+        """创建或复用插件任务面板，按操作类型初始化批次进度并连接停止请求。"""
+        if getattr(self, "_plugin_progress", None) is None:
+            self._plugin_progress = TaskCenterPanel(self._stack, stack=self._panel_stack)
+            self._plugin_progress.stop_requested.connect(self._plugin_operations.cancel_all)
+        labels = {
+            "disable_all": tr("禁用 Mod"),
+            "delete_mod": tr("删除 Mod"),
+            "set_enabled": tr("切换 Mod 状态"),
+            "toggle_mod": tr("切换 Mod 状态"),
+        }
+        self._plugin_progress.start_batch(
+            len(ids),
+            labels.get(operation, tr("插件操作")),
+            stop_tooltip=tr("停止后续插件操作"),
+            cancelled_title=tr("插件操作已停止"),
+            done_text=tr("已完成"),
+        )
+
+    def _on_plugin_operation_progress(self, mod_id: str, fraction: float) -> None:
+        """把插件操作的零到一进度转换为任务面板百分比。"""
+        self._plugin_progress.update_progress(fraction * 100, tr("正在处理 Mod"), "")
+
+    def _init_plugins(self) -> None:
+        """初始化插件运行时及界面扩展。"""
+        try:
+            from src.core.mod_operations import ModOperationService
+            from src.plugins import PluginManager
+
+            self._plugin_operations = ModOperationService(
+                self._mod_manager,
+                self,
+                host_busy=self._plugin_host_busy,
+                error_sink=lambda owner, error: self._plugin_manager._on_plugin_error(
+                    owner, "operation callback", error
+                ),
+            )
+            self._plugin_operations.activity_changed.connect(self._on_plugin_activity_changed)
+            self._plugin_operations.finished.connect(self._on_plugin_operation_finished)
+            self._plugin_operations.started.connect(self._on_plugin_operation_started)
+            self._plugin_operations.progress.connect(self._on_plugin_operation_progress)
+            self._plugin_manager = PluginManager(self._mod_manager, operations=self._plugin_operations)
+            from src.plugins.runtime.tasks import BackgroundTaskRunner
+            from src.ui.plugin_tasks import PluginTaskDispatcher
+
+            self._plugin_task_dispatcher = PluginTaskDispatcher(self)
+            self._plugin_manager.set_event_dispatcher(self._plugin_task_dispatcher.post)
+            self._plugin_manager.set_task_runner(
+                BackgroundTaskRunner(
+                    self._plugin_task_dispatcher.post, error_sink=self._plugin_manager._on_plugin_error
+                )
+            )
+            from src.plugins.runtime.shortcuts import PluginShortcutHost
+
+            self._plugin_manager.set_shortcut_host(
+                PluginShortcutHost(self._shortcut_settings, self._shortcut_dispatcher)
+            )
+            # 预设应用是 Qt 信号（非 ModManager 动作点），在此桥接进插件事件总线
+            self._mod_manager.preset_manager.preset_applied.connect(
+                lambda ids: self._plugin_manager.emit(
+                    "preset_applied", affected_ids=list(ids), game_id=self._mod_manager.current_game_id
+                )
+            )
+            # 插件变化后刷新工具页扩展按钮。
+            self._plugin_manager.add_change_listener(self._refresh_plugin_tools)
+            # 注册 Mod 卡片右键菜单提供者。
+            from src.ui import plugin_menu
+
+            plugin_menu.set_provider(self._build_mod_context_actions)
+            # 加载插件前注入页面、对话框及通知的界面宿主。
+            from src.ui.plugin_ui_host import PluginUIHost
+
+            self._plugin_ui_host = PluginUIHost(self)
+            self._plugin_manager.set_ui_host(self._plugin_ui_host)
+            self._plugins_page.set_manager(self._plugin_manager)
+            self._plugin_manager.load_all()
+        except Exception:
+            logger.exception("插件系统初始化失败（不影响主程序）")
+            self._plugin_manager = None
+
+    def _build_mod_context_actions(self, location: str, context_id: str) -> list:
+        """按位置收集插件菜单项和回调。
+
+        Mod 菜单传入 mod_id，类别菜单传入 node_id，全局菜单不传上下文对象。
+        """
+        pm = getattr(self, "_plugin_manager", None)
+        if pm is None:
+            return []
+        out: list = []
+        if location == "global":
+            # 全局菜单 = 所有插件命令（命令面板式入口）
+            for c in pm.contributions.commands():
+                cmd = c.command
+                if cmd:
+                    out.append(
+                        (
+                            tr("{plugin_name}：{title}", plugin_name=c.plugin_name, title=c.title),
+                            lambda _cmd=cmd: pm.execute_command(_cmd),
+                        )
+                    )
+            return out
+
+        kwarg = {"mod-context": "mod_id", "character-context": "node_id"}.get(location)
+        for c in pm.contributions.menus(location):
+            when = str(c.data.get("when", "")).strip()
+            if when and when not in ("always", "modSelected", "characterSelected"):
+                continue
+            cmd = c.command
+            if not cmd:
+                continue
+            title = c.title if c.title else cmd
+            if kwarg:
+                out.append((title, lambda _cmd=cmd, _v=context_id, _k=kwarg: pm.execute_command(_cmd, **{_k: _v})))
+            else:
+                out.append((title, lambda _cmd=cmd: pm.execute_command(_cmd)))
+        return out
