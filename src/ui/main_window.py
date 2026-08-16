@@ -1806,3 +1806,153 @@ class MainWindow(QMainWindow):
                 # 导航 viewport 尺寸变化（首次布局/折叠/缩放）→ 重定位选中指示条
                 self._update_nav_indicator(animate=False)
         return super().eventFilter(obj, event)
+
+    def _update_nav_indicator(self, animate: bool = True) -> None:
+        """把选中指示条定位/滑动到当前导航项左侧（Fluent 竖条）。
+
+        几何用 ``visualItemRect``（viewport 坐标）；首次显示直接落位，后续选中变化
+        用几何动画平滑滑动（``animate=True``）。无选中时隐藏。
+        """
+        ind = getattr(self, "_nav_indicator", None)
+        if ind is None:
+            return
+        # 直接定位、隐藏或返回当前位置时也须取消旧目标动画。
+        previous = getattr(ind, "_geom_anim", None)
+        if previous is not None:
+            try:
+                previous.stop()
+            except RuntimeError:
+                pass
+            ind._geom_anim = None
+        row = self._nav.currentRow()
+        item = self._nav.item(row) if row >= 0 else None
+        if item is None:
+            ind.hide()
+            return
+        rect = self._nav.visualItemRect(item)
+        if rect.height() <= 0:
+            return
+        bar_h = max(14, int(rect.height() * 0.55))
+        y = rect.y() + (rect.height() - bar_h) // 2
+        target = QRect(3, y, 3, bar_h)
+        if not ind.isVisible():
+            ind.setGeometry(target)
+            ind.show()
+            ind.raise_()
+            return
+        if animate:
+            anim.animate_geometry(ind, target)
+        else:
+            ind.setGeometry(target)
+        ind.raise_()
+
+    def _clear_game_views(self) -> None:
+        """取消激活/无激活游戏时清空 总览/画廊/预设/商店 的残留数据。
+
+        页面显示空状态并叠加激活提示，清除上个游戏的角色树、Mod 和预设。
+        数据源已由 _mod_manager.set_game("") 复位，后续 F5、切页和 watcher 刷新均获取空数据。
+        """
+        try:
+            self._file_watcher.stop()
+            self._deploy_watcher.stop()
+            self._deploy_state_poll.stop()
+            self._source_state_poll.stop()
+        except Exception:
+            pass
+        ov = self._overview_page
+        ov.set_current_game("")
+        ov._selected_mod = None
+        ov._selected_category = None
+        ov._selected_ids.clear()
+        ov.set_characters([], force_root=True)
+        ov.set_current_mods([], [])
+        ov.set_presets([], "")
+        ov._hide_panel()
+        self._gallery_refresh.cancel()
+        self._gallery_page.set_mods([])
+        # Mod 商店：隐藏详情浮窗 + 列表回到空态（安全调用，失败不影响主流程）
+        store = getattr(self, "_gb_store_page", None)
+        if store is not None:
+            try:
+                # 清空网格、_all_records 和 _gb_game_id，避免 show_grid 重新显示上个游戏的卡片。
+                store.reset_to_empty()
+            except Exception:
+                pass
+
+    def _on_nav_changed(self, row: int) -> None:
+        """校验游戏页待保存设置后切换导航页面，补做延迟主题更新并同步锁定覆盖层。"""
+        if row < 0:
+            return
+        item = self._nav.item(row)
+        if not item:
+            return
+        # 切到顶部导航项 → 取消底部「关于」按钮的选中态
+        page_index = item.data(Qt.ItemDataRole.UserRole)
+        current_page = self._stack.currentIndex()
+        if (
+            current_page == self.PAGE_GAME
+            and page_index != self.PAGE_GAME
+            and not self._game_page.confirm_pending_changes()
+        ):
+            self._restore_nav_selection(self.PAGE_GAME)
+            return
+        self._set_about_current(False)
+        # 显示前更新失效的主题样式。
+        pending = getattr(self, "_pending_retheme", None)
+        if pending and page_index in pending:
+            pending.discard(page_index)
+            self._retheme_one_page(page_index)
+        if page_index == self.PAGE_GALLERY:
+            self._refresh_gallery()
+        # 页面同步切换，旧页快照淡出以展示新页；动画不参与页面状态更新。
+        anim.cross_fade(self._stack, lambda: self._stack.setCurrentIndex(page_index))
+        # 选中指示条滑到新菜单项（菜单项之间的过渡动画）
+        self._update_nav_indicator(animate=True)
+        self._update_lock_overlay()
+
+    def _on_about_clicked(self) -> None:
+        """底部「关于」按钮：切到关于页，清掉顶部导航选中态。"""
+        if self._stack.currentIndex() == self.PAGE_GAME and not self._game_page.confirm_pending_changes():
+            return
+        self._set_about_current(True)
+        # 清掉顶部列表选中（setCurrentRow(-1) 触发 _on_nav_changed(row<0) 直接返回）
+        self._nav.blockSignals(True)
+        self._nav.setCurrentRow(-1)
+        self._nav.blockSignals(False)
+        self._update_nav_indicator(animate=False)  # 无选中 → 指示条隐藏
+        # 显示前按需刷新主题样式。
+        pending = getattr(self, "_pending_retheme", None)
+        if pending and self.PAGE_ABOUT in pending:
+            pending.discard(self.PAGE_ABOUT)
+            self._retheme_one_page(self.PAGE_ABOUT)
+        anim.cross_fade(self._stack, lambda: self._stack.setCurrentIndex(self.PAGE_ABOUT))
+        self._about_page.play_intro()  # 分区交错淡入
+        self._update_lock_overlay()
+
+    def _set_about_current(self, on: bool) -> None:
+        """切换底部「关于」按钮的选中态（QSS current 属性）。"""
+        btn = getattr(self, "_about_btn", None)
+        if btn is None:
+            return
+        if bool(btn.property("current")) == bool(on):
+            return
+        btn.setProperty("current", bool(on))
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+
+    def switch_to_mod_store_with_query(self, query: str) -> None:
+        """切换至 Mod 商店并预填搜索词，供类别页入口调用。"""
+        if self._stack.currentIndex() == self.PAGE_GAME and not self._game_page.confirm_pending_changes():
+            return
+        self._stack.setCurrentIndex(self.PAGE_STORE)
+        # 同步 nav 选中状态
+        for i in range(self._nav.count()):
+            if self._nav.item(i).data(Qt.ItemDataRole.UserRole) == self.PAGE_STORE:
+                self._nav.setCurrentRow(i)
+                break
+        # 预填搜索词
+        if query and hasattr(self._gb_store_page, "filter_bar"):
+            self._gb_store_page.filter_bar.search_box.setText(query)
+            # 立即执行搜索，不等待输入防抖。
+            if hasattr(self._gb_store_page, "_on_search"):
+                self._gb_store_page._on_search(query)
