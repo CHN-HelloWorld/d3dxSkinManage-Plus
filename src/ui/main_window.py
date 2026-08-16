@@ -2644,3 +2644,201 @@ class MainWindow(QMainWindow):
         )
         self._pending_deploy_ids.append(mod_id)
         self._start_pending_deploys()
+
+    def _start_pending_deploys(self) -> None:
+        """按点击顺序和当前并发设置调度，已运行的任务自然完成。"""
+        if self._deploy_stopping or not self._pending_deploy_ids:
+            return
+        concurrency = effective_deploy_concurrency(self._config.get("mods.deploy_concurrency"))
+        while self._pending_deploy_ids and len(self._deploy_active) < concurrency:
+            mod_id = self._pending_deploy_ids.popleft()
+            worker = self._deploy_workers.get(mod_id)
+            if worker is None:
+                continue
+            self._deploy_active.add(mod_id)
+            worker.start(QThread.Priority.LowPriority)
+
+    @_invalidates_library_probe
+    def _on_async_deploy_finished(self, mod_id: str, worker, disabled_ids: list[str]) -> None:
+        """先提交真实启用态，再结束卡片 / 列表反馈，避免提前显示成功。"""
+        if self._deploy_workers.get(mod_id) is not worker:
+            # 关窗等待线程结束后可能已经补提交；忽略随后投递的 queued finished。
+            # 用线程身份校验，旧请求不能误结算同一 Mod 后来的重试。
+            return
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and worker.result[0] and not getattr(worker, "configuration_prepared", False):
+            publication.enqueue(mod_id, worker, disabled_ids)
+            return
+        self._deploy_workers.pop(mod_id)
+        ok, _deploy_path = worker.result
+        switched_ids = list(getattr(worker, "switched_ids", ()))
+        published = False
+        try:
+            if not ok:
+                error = (
+                    tr("已取消启用，Mod 保持禁用。")
+                    if self._deploy_stopping
+                    else tr("部署失败，Mod 保持禁用。请检查压缩包和部署目录后重试，详细原因见日志。")
+                )
+                self._overview_page.finish_deploy_overlay(mod_id, success=False, error=error)
+                from src.core.operation_preflight import OperationPreflightError
+
+                if isinstance(getattr(worker, "error", None), OperationPreflightError):
+                    self._mod_manager.report_operation_failure(worker.error)
+                elif not self._deploy_stopping:
+                    QMessageBox.warning(self, t("错误"), error)
+                return
+            try:
+                if getattr(worker, "configuration_error", None) is not None:
+                    raise worker.configuration_error
+                receipt = getattr(worker, "source_receipt", None)
+                if receipt is not None:
+                    receipt.recheck()
+                if disabled_ids and not getattr(worker, "configuration_prepared", False):
+                    from dataclasses import replace
+
+                    entries = self._mod_manager.prepare_disable_batch(disabled_ids)
+                    if len(entries) != len(disabled_ids):
+                        return
+                    results = []
+                    for entry in entries:
+                        result = self._mod_manager.disable_batch_step(replace(entry, park=True))
+                        results.append(result)
+                        if not result.ok:
+                            break
+                    switched_ids = self._mod_manager.commit_disable_batch(results)
+                    if len(switched_ids) != len(entries):
+                        return
+                if getattr(worker, "_stage_only", False) and not getattr(worker, "configuration_prepared", False):
+                    if receipt is not None:
+                        receipt.recheck()
+                    name = self._mod_manager._storage.active_name_from_parked(_deploy_path, mod_id)
+                    restored = self._mod_manager._storage.restore_parked_deployment(_deploy_path, name)
+                    if restored is None:
+                        raise OSError(tr("无法启用已准备好的部署文件"))
+                    _deploy_path = str(restored)
+                preparation = getattr(worker, "enable_preparation", None)
+                options = {"preparation": preparation} if preparation is not None else {}
+                toggled = self._mod_manager.finalize_enable(
+                    mod_id, deploy_ok=True, deploy_path=_deploy_path, source_receipt=receipt, **options
+                )
+            except Exception as exc:
+                logger.exception("提交 Mod 启用状态失败 (%s)", mod_id)
+                error = tr("无法确认 Mod 启用状态：{exc}", exc=exc)
+                self._overview_page.finish_deploy_overlay(mod_id, success=False, error=error)
+                from src.core.operation_preflight import OperationPreflightError
+
+                if isinstance(exc, OperationPreflightError):
+                    self._mod_manager.report_operation_failure(exc)
+                elif not self._deploy_stopping:
+                    QMessageBox.warning(self, t("错误"), error)
+                return
+            if not toggled:
+                self._overview_page.finish_deploy_overlay(
+                    mod_id, success=False, error=tr("无法确认 Mod 启用状态，请检查 Mod 与部署目录后重试。")
+                )
+                return
+            self._overview_page.update_mod_toggle_in_place(mod_id, toggled, disabled_ids)
+            published = True
+            self._overview_page.finish_deploy_overlay(mod_id)
+            chars = self._mod_manager.get_characters_for_ui(self._game_service.current_game_id)
+            self._overview_page.set_characters(chars, refresh=False)
+        finally:
+            if not published and not getattr(worker, "rollback_managed", False):
+                # 只撤销本操作的部署变化，资源缺失清理由后台对账负责。
+                if ok and _deploy_path:
+                    storage = self._mod_manager._storage
+                    try:
+                        storage._check_deployment_identity(_deploy_path, mod_id)
+                        if getattr(worker, "created_deployment", False):
+                            storage.remove_deploy_path(_deploy_path)
+                        elif not Path(_deploy_path).name.upper().startswith("DISABLED"):
+                            storage.park_deployment(_deploy_path, mod_id)
+                    except (OSError, ValueError) as rollback_error:
+                        logger.warning("撤销本次部署失败: %s", rollback_error)
+                for previous_id in switched_ids:
+                    self._mod_manager.toggle_mod(previous_id)
+            self._mod_manager.release_library_operation("deploy:" + mod_id)
+            self._deploy_active.discard(mod_id)
+            worker.deleteLater()
+            if not self._deploy_workers and not self._deploy_active:
+                publication_busy = publication is not None and publication.busy
+                self._game_page.setEnabled(not publication_busy)
+                if not publication_busy:
+                    apply_deferred_environment = self._deploy_environment_dirty and not self._deploy_close_pending
+                    self._deploy_environment_dirty = False
+                    self._deploy_stopping = False
+                    self._deploy_close_pending = False
+                    self._deploy_game_id = ""
+                    self._game_page.setToolTip("")
+                    if apply_deferred_environment:
+                        call_later(0, self, self._apply_migoto_for_current_game)
+            # 留一个事件循环间隙，让鼠标/绘制先得到响应，再开始下一项。
+            call_later(0, self, self._start_pending_deploys)
+            self._schedule_deferred_enables()
+
+    def _stop_async_deploys(self, timeout_ms: int = 5000) -> bool:
+        """退出时取消排队项、协作停止解压；已物化的成功结果仍在主线程补提交。"""
+        for mod_id in tuple(getattr(self, "_deferred_enable_ids", {})):
+            self._overview_page.finish_deploy_overlay(mod_id, success=False, error=tr("已取消排队的启用请求"))
+        getattr(self, "_deferred_enable_ids", {}).clear()
+        if not self._deploy_workers:
+            return True
+        self._deploy_stopping = True
+        self._deploy_close_pending = True
+        pending = list(self._pending_deploy_ids)
+        self._pending_deploy_ids.clear()
+        for mod_id in pending:
+            worker = self._deploy_workers.get(mod_id)
+            if worker is not None:
+                self._on_async_deploy_finished(mod_id, worker, [])
+
+        workers = list(self._deploy_workers.items())
+        for _mod_id, worker in workers:
+            worker.requestInterruption()
+        deadline = time.monotonic() + timeout_ms / 1000
+        for _mod_id, worker in workers:
+            remaining_ms = max(0, int((deadline - time.monotonic()) * 1000))
+            if not worker.wait(remaining_ms):
+                # 不销毁仍在写盘的线程；窗口保持打开，finished 稍后正常收尾。
+                self._deploy_close_pending = False
+                return False
+        for mod_id, worker in workers:
+            self._on_async_deploy_finished(mod_id, worker, list(getattr(worker, "disabled_ids", ())))
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and publication.busy:
+            self._enable_publication_close_pending = True
+            publication.close()
+            return False
+        return True
+
+    def _on_ini_synced_from_deploy(self, mod_id: str) -> None:
+        """按键相关 ini 同步后（watchdog 线程经信号 marshal 到主线程）刷新按键面板。
+
+        同步器已过滤不含按键的 ini；此处再由 OverviewPage 判断该 Mod 是否正被选中，
+        仅在确有可见按键内容可能变化时就地重建，无需用户重新选择卡片。
+        """
+        try:
+            self._overview_page.refresh_keys_if_selected(mod_id)
+        except Exception as e:
+            logger.debug("刷新按键面板失败 (%s): %s", mod_id, e)
+
+    def _connect_variant_controller(self) -> None:
+        """创建变体控制器，将 INI 与核心事件桥接到界面线程并连接忙碌及停止信号。"""
+        from src.ui.mod_variant_controller import ModVariantController
+
+        self._variant_controller = ModVariantController(
+            self._overview_page,
+            self._mod_manager,
+            enable_callback=self._on_overview_mod_toggle,
+            notify=lambda message, ok: self._ensure_toast().done(message, ok=ok, hold_ms=5000),
+            parent=self,
+        )
+        # 核心回调可能来自工作线程，通过绑定槽将采集和局部预览刷新转到所有者线程。
+        self._plugin_variant_pending = False
+        self._pending_variant_event = None
+        self.user_ini_changed.connect(self._on_user_ini_changed)
+        self.variant_event_received.connect(self._on_variant_event)
+        self._mod_manager.variants.set_change_notify(self.user_ini_changed.emit)
+        self._variant_controller.activity_changed.connect(self._on_variant_activity_changed)
+        self._variant_controller.stopped.connect(self._on_variant_stopped)
