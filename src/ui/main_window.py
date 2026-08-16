@@ -1603,3 +1603,123 @@ class MainWindow(QMainWindow):
                 self._overview_page.update_mod_in_view(mod)
             except Exception:
                 pass
+        # status_changed 已由 service 发出 → 角标/计数自动刷新
+
+    @_invalidates_library_probe
+    def _on_update_failed(self, local_mod_id: str, err: str) -> None:
+        """为当前 Mod 显示最新失败快照或错误文案，并记录更新失败日志。"""
+        if not self._is_current_mod_update(local_mod_id):
+            return
+        snapshot = self._restore_mod_update_task(local_mod_id)
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if snapshot is None and dlg is not None and dlg.property("gameId") == self._mod_manager.current_game_id:
+            dlg.set_update_failed(local_mod_id, err)
+        self._overview_page.set_update_status_text(tr("更新失败：{err}", err=err))
+        logger.warning("Mod 更新失败 %s: %s", local_mod_id, err)
+
+    @_invalidates_library_probe
+    def _on_update_cancelled(self, local_mod_id: str) -> None:
+        """同步已取消任务快照，并提示更新终止且保留旧版内容。"""
+        if not self._is_current_mod_update(local_mod_id):
+            return
+        self._restore_mod_update_task(local_mod_id)
+        self._overview_page.set_update_status_text(tr("已终止更新，旧版 Mod 已保留"))
+
+    @_invalidates_library_probe
+    def _on_update_deferred(self, local_mod_id: str) -> None:
+        """恢复当前任务状态，并提示更新文件已保留、需返回原游戏后重试。"""
+        if not self._is_current_mod_update(local_mod_id):
+            return
+        self._restore_mod_update_task(local_mod_id)
+        mod = self._mod_manager.get_mod(local_mod_id)
+        name = mod.display_name if mod is not None else "Mod"
+        self._ensure_toast().done(
+            tr("{name} 的更新文件已保留，请切回原游戏后重试。", name=name), ok=False, hold_ms=5000
+        )
+
+    # 导航
+
+    def _on_nav_splitter_moved(self, pos: int, index: int) -> None:
+        """拖动导航分隔条时保存有效的展开宽度，折叠状态不写入。"""
+        if self._nav_collapsed or self._nav_animating:
+            return
+        sizes = self._main_splitter.sizes()
+        if sizes and sizes[0] > 60:  # >60 视作真实展开宽度（排除折叠态的 52）
+            self._nav_expanded_width = int(sizes[0])
+            Config.instance().set("ui.nav_expanded_width", int(sizes[0]))
+
+    def _toggle_nav_collapse(self) -> None:
+        """折叠/展开导航栏（宽度平滑过渡）"""
+        self._nav_collapsed = not self._nav_collapsed
+        # 动画起点 = 当前实际宽度（即便上一轮过渡未完，width 也是当前帧值 → 平滑接力）
+        start_w = self._nav_container.width()
+        # 折叠态下让导航项/启动按钮的 SVG 图标水平居中（QSS 据 collapsed 属性切换对齐）
+        for w in (self._nav, self._launch_loader_btn, self._launch_game_btn, self._about_btn, self._plugin_cmd_btn):
+            w.setProperty("collapsed", self._nav_collapsed)
+            w.style().unpolish(w)
+            w.style().polish(w)
+        # 导航项的图标居中由自绘代理负责（QSS 的 padding 管不到样式自带的图标边距）
+        self._nav_delegate.collapsed = self._nav_collapsed
+        self._nav.viewport().update()
+        if self._nav_collapsed:
+            # 记录展开宽度以便恢复
+            if not self._nav_animating:
+                self._nav_expanded_width = start_w
+                Config.instance().set("ui.nav_expanded_width", int(start_w))
+            self._nav_animating = True
+            # 只显示图标（清空文字，SVG 图标保留）
+            for i in range(self._nav.count()):
+                item = self._nav.item(i)
+                item.setText("")
+                # 34 = 52(折叠宽) - 1(右边框) - 12(QSS padding) - 4(spacing)：让行盒放得进
+                # 视口，hover/选中的圆角底块才不会被右边缘裁成平口（图标居中另由代理保证）
+                item.setSizeHint(QSize(34, 40))
+            # 底部启动按钮同步只显示图标
+            for btn, _full, _icon in self._launch_buttons:
+                btn.setText("")
+            icons.apply_icon(self._collapse_btn, "actions/chevron-right")
+
+            def _after_collapse() -> None:
+                """在折叠动画结束后固定导航占用宽度，并解除动画状态。"""
+                self._nav_animating = False
+                # 收起后把余量给右侧栈（动画期间 min/max 已驱动宽度，这里回退处理一次）
+                self._main_splitter.setSizes([52, max(0, self._main_splitter.width() - 52)])
+
+            # 宽度 start_w → 52 平滑过渡（同时动 min/max 以驱动 QSplitter 内的子控件）
+            anim.animate_fixed_width(self._nav_container, start_w, 52, on_finished=_after_collapse)
+        else:
+            # 恢复完整文本
+            for i in range(self._nav.count()):
+                item = self._nav.item(i)
+                full_text = item.data(Qt.ItemDataRole.UserRole + 2) or ""
+                item.setText(full_text)
+                item.setSizeHint(QSize(140, 40))
+            # 底部启动按钮恢复完整文本
+            for btn, full, _icon in self._launch_buttons:
+                btn.setText(full)
+            icons.apply_icon(self._collapse_btn, "actions/menu")
+            target = max(self._nav_expanded_width, self._nav_container.minimumSizeHint().width())
+            self._nav_animating = True
+
+            def _after_expand() -> None:
+                # 展开完成后恢复原尺寸约束，让文字和按钮决定拖动下限。
+                """在展开动画结束后恢复导航可调宽度，并提交目标分隔比例。"""
+                self._nav_container.setMinimumWidth(0)
+                self._nav_container.setMaximumWidth(16777215)  # QWIDGETSIZE_MAX
+                self._main_splitter.setSizes([target, max(0, self._main_splitter.width() - target)])
+                self._nav_animating = False
+
+            # 宽度 52 → 展开宽度 平滑过渡
+            anim.animate_fixed_width(self._nav_container, start_w, target, on_finished=_after_expand)
+        # 重设导航文字后，恢复总览更新计数
+        if hasattr(self, "_mod_update_service"):
+            self._set_overview_update_count(len(self._mod_update_service.updatable_ids()))
+        # 折叠/展开后导航项尺寸变化 → 重定位选中指示条（不动画，跟随宽度过渡）
+        self._update_nav_indicator(animate=False)
+
+    def _select_nav_page(self, page_index: int) -> None:
+        """选中导航中映射到 page_index 的行。"""
+        for i in range(self._nav.count()):
+            if self._nav.item(i).data(Qt.ItemDataRole.UserRole) == page_index:
+                self._nav.setCurrentRow(i)
+                return
