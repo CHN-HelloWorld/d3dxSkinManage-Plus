@@ -2242,3 +2242,76 @@ class MainWindow(QMainWindow):
             self._load_characters(self._game_service.current_game_id)
             self._suppress_watcher()  # 跳过 watcher 二次重建
             logger.info("批量添加类别完成: %d 个", count)
+
+    @_invalidates_library_probe
+    def _on_character_batch_delete(self, char_ids: list) -> None:
+        """批量删除类别。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if self._preset_apply_worker is not None:
+            return
+        count = 0
+        for char_id in char_ids:
+            if self._mod_manager.delete_character(char_id):
+                count += 1
+        if count > 0:
+            self._reload_overview_level(self._game_service.current_game_id)
+            self._suppress_watcher()  # 跳过 watcher 二次重建
+            logger.info("批量删除类别完成: %d 个", count)
+            self._refresh_store_installed_state()
+
+    def _refresh_store_installed_state(self) -> None:
+        """让 Mod 商店重新比对所有可见卡片的「已安装」徽章。
+
+        character 级联删除等场景不方便逐个收集 gb_mod_id，调本方法即可。
+        """
+        store = getattr(self, "_gb_store_page", None)
+        if store is None or not hasattr(store, "refresh_installed_state"):
+            return
+        try:
+            store.refresh_installed_state()
+        except Exception as exc:
+            logger.warning("refresh_store_installed_state 失败: %s", exc)
+
+    # Overview 混合视图操作
+
+    def _overview_query_key(self) -> tuple:
+        """返回当前游戏、分类和全部筛选条件组成的总览请求键，用于隔离过期加载。"""
+        page = self._overview_page
+        return (
+            self._game_service.current_game_id,
+            page._current_parent_id,
+            page._search_input.text().strip(),
+            tuple(sorted(page._tag_filter.selected_ids)),
+            page._type_filter.currentData(),
+            page._age_filter.currentData(),
+        )
+
+    def _on_overview_navigated(self, parent_id: str) -> None:
+        """OverviewPage 导航到新层级 → 加载该层级的 Mod"""
+        self._library_probe.yield_to_local_events()
+        overview = self._overview_page
+        self._overview_root_presented = not parent_id and not overview._search_input.text().strip()
+        if self._overview_root_presented:
+            # 根分类已经可用，不因准备后代搜索数据而阻塞导航。
+            overview.set_current_mods([], [])
+        self._overview_refresh.schedule()
+
+    def _refresh_overview_mods(self) -> None:
+        """刷新 OverviewPage 当前层级的 Mod"""
+        self._overview_root_presented = False
+        self._overview_refresh.schedule()
+
+    def _apply_overview_mods(self, mods, subtree_mods) -> None:
+        """发布总览直接项与子树列表，避免重复刷新已呈现根视图，并为局部事件处理让行。"""
+        self._library_probe.yield_to_local_events()
+        overview = self._overview_page
+        root_presented = (
+            getattr(self, "_overview_root_presented", False)
+            and not overview._current_parent_id
+            and not overview._search_input.text().strip()
+            and not overview._tag_filter.selected_ids
+        )
+        self._overview_root_presented = False
+        overview.set_current_mods(mods, subtree_mods, refresh_view=not root_presented)
+        self._defer_source_reconcile()
