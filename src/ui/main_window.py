@@ -2842,3 +2842,67 @@ class MainWindow(QMainWindow):
         self._mod_manager.variants.set_change_notify(self.user_ini_changed.emit)
         self._variant_controller.activity_changed.connect(self._on_variant_activity_changed)
         self._variant_controller.stopped.connect(self._on_variant_stopped)
+
+    def _on_variant_activity_changed(self, busy) -> None:
+        """变体写入期间锁定游戏与组合选择，任务结束后恢复延后的库环境操作。"""
+        selector = getattr(self._overview_page, "_preset_selector", None)
+        if selector is not None:
+            selector.setEnabled(not busy)
+            if busy:
+                selector._popup.hide()
+        self._game_page.setEnabled(not busy)
+        if not busy and not self._variant_controller._closing:
+            self._resume_deferred_library_environment()
+
+    def _on_variant_stopped(self) -> None:
+        """清除变体关闭等待标记，并在下一轮事件循环继续关闭窗口。"""
+        if getattr(self, "_variant_close_pending", False):
+            self._variant_close_pending = False
+            call_later(0, self, self.close)
+
+    def _notify_variant_data_not_ready(self, error) -> None:
+        """记录变体读取错误并停止监控，异步提示原文件保留及后续检查方式。"""
+        logger.warning("变体数据尚未就绪: %s", error)
+        stop = getattr(self._mod_manager.variants, "stop_watch", None)
+        if callable(stop):
+            stop()
+        message = tr("外观工作状态无法读取，原文件已保留。请检查文件或备份后重试。")
+        call_later(0, self, lambda: self._ensure_toast().done(message, ok=False, hold_ms=8000))
+
+    def _collect_startup_variants(self) -> bool:
+        """启动时收集变体配置，读取失败转为保留原文件的提示并返回 False。"""
+        try:
+            self._mod_manager.variants.collect(trigger="startup")
+            return True
+        except (OSError, ValueError) as error:
+            self._notify_variant_data_not_ready(error)
+            return False
+
+    def _resume_pending_variant_capture(self) -> None:
+        # 插件和部署完成都可能请求重试，只消费一次最新事件。
+        """插件操作曾推迟 INI 采集时重新进入用户配置变化处理。"""
+        if getattr(self, "_plugin_variant_pending", False):
+            self._on_user_ini_changed()
+
+    @_invalidates_library_probe
+    def _on_user_ini_changed(self, event=None) -> None:
+        """在主线程响应 d3dx_user.ini 的文件变更并采集运行时变体。
+
+        加载器重载配置和游戏退出均会写入该文件，无需依赖特定快捷键或检测游戏进程。
+        only_if_changed 排除程序自身写入的内容；成功后只刷新当前 Mod 的变体页。
+        """
+        if event is not None:
+            self._pending_variant_event = event
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            self._plugin_variant_pending = True
+            return
+        event = getattr(self, "_pending_variant_event", None)
+        self._pending_variant_event = None
+        self._plugin_variant_pending = False
+        try:
+            report = self._mod_manager.variants.collect(trigger="user_ini_watch", only_if_changed=True, event=event)
+        except Exception as e:
+            logger.warning("d3dx_user.ini 变更后采集变体失败: %s", e)
+            return
+        if report is not None and report.changed:
+            logger.info("d3dx_user.ini 变更：已采集 %d 个 Mod 的变体状态", len(report.attributed))
