@@ -1424,3 +1424,132 @@ class MainWindow(QMainWindow):
             return
         self._overview_page.set_update_status_text(tr("正在更新…"))
         svc.apply_update(local_mod_id, chosen_file=chosen_file)
+
+    def _on_update_all(self) -> None:
+        """收集待更新条目并统一确认多文件候选，重新核验游戏和候选有效性后逐项启动。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        svc = self._mod_update_service
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        pending = dlg.pending_ids() if dlg is not None else list(svc.updatable_ids())
+        available = svc.get_update_status()
+        active = set(svc.active_update_ids())
+        infos = [available[mid] for mid in pending if mid in available and mid not in active]
+        if not infos:
+            return
+        game_id = self._mod_manager.current_game_id
+        chosen = {}
+        if any(len(info.candidate_files) > 1 for info in infos):
+            from src.ui.dialogs.mod_update_file_dialog import ModUpdateBatchFileDialog
+
+            original_names = {}
+            for info in infos:
+                mod = self._mod_manager.get_mod(info.local_mod_id)
+                original_names[info.local_mod_id] = mod.folder_name if mod is not None else ""
+            picker = ModUpdateBatchFileDialog(infos, local_original_names=original_names, parent=dlg or self)
+            if not picker.exec():
+                return
+            chosen = picker.selected_files()
+        # 选择文件期间可能刷新或切换游戏，不能将旧选择用于新版本，也不能启动不完整批次。
+        if game_id != self._mod_manager.current_game_id:
+            return
+        current = svc.get_update_status()
+        for mid, file in chosen.items():
+            info = current.get(mid)
+            candidates = (info.candidate_files or [info.latest_file]) if info is not None else []
+            if file not in candidates:
+                self._ensure_toast().done(tr("可用更新已变化，请重新确认更新文件。"), ok=False, hold_ms=3500)
+                return
+        for info in infos:
+            self._start_mod_update(info.local_mod_id, chosen_file=chosen.get(info.local_mod_id))
+
+    def _request_mod_updates_close(self, dlg) -> bool:
+        """依据活动任务决定阻止关闭或转入后台；批次完成时确认结果并清除总览状态文字。"""
+        svc = self._mod_update_service
+        game_id = self._mod_manager.current_game_id
+        if dlg.property("gameId") != game_id:
+            return True
+        if svc.active_update_ids():
+            from src.ui.mod_update_actions import confirm_close_updates
+
+            choice = confirm_close_updates(dlg, svc)
+            if game_id != self._mod_manager.current_game_id:
+                return True
+            if choice == "back":
+                return False
+            if choice == "background":
+                self._mod_update_background_games.add(self._mod_manager.current_game_id)
+                self._sync_mod_update_notification()
+            return True
+        if dlg.is_batch_complete() and svc.acknowledge_completed_updates():
+            self._overview_page.set_update_status_text("")
+        return True
+
+    def _ensure_mod_update_notification(self):
+        """创建或复用后台更新通知面板，并连接查看、隐藏、暂停、继续与停止动作。"""
+        panel = getattr(self, "_mod_update_progress", None)
+        if panel is None:
+            from src.ui.widgets.mod_update_notification import ModUpdateNotification
+
+            if getattr(self, "_panel_stack", None) is None:
+                self._panel_stack = TaskCenterStack()
+            panel = ModUpdateNotification(self._stack, stack=self._panel_stack)
+            self._mod_update_progress = panel
+            panel.view_requested.connect(self._open_mod_updates_center)
+            panel.dismiss_requested.connect(self._dismiss_mod_update_notification)
+            panel.pause_requested.connect(lambda: self._control_mod_update_notification("pause"))
+            panel.resume_requested.connect(lambda: self._control_mod_update_notification("resume"))
+            panel.stop_requested.connect(lambda: self._control_mod_update_notification("stop"))
+        return panel
+
+    def _sync_mod_update_notification(self) -> None:
+        """仅为当前游戏已转入后台的更新呈现任务快照，无快照或上下文不匹配时收起通知。"""
+        game_id = self._mod_manager.current_game_id
+        panel = getattr(self, "_mod_update_progress", None)
+        if game_id not in getattr(self, "_mod_update_background_games", set()):
+            if panel is not None and panel.isVisible() and panel.game_id != game_id:
+                panel.dismiss(animate=False)
+            return
+        snapshots = self._mod_update_service.update_task_snapshots()
+        if not snapshots:
+            if panel is not None:
+                panel.dismiss()
+            return
+        infos = self._mod_update_service.update_task_infos()
+        names = {}
+        for mid in snapshots:
+            info = infos.get(mid)
+            mod = self._mod_manager.get_mod(mid)
+            names[mid] = (
+                info.local_name
+                if info is not None and info.local_name
+                else mod.display_name
+                if mod is not None
+                else mid
+            )
+        self._ensure_mod_update_notification().present(game_id, snapshots, names)
+
+    def _control_mod_update_notification(self, action: str) -> None:
+        """校验通知所属游戏后执行全部暂停、继续或停止，再刷新通知状态。"""
+        panel = getattr(self, "_mod_update_progress", None)
+        if panel is None or panel.game_id != self._mod_manager.current_game_id:
+            return
+        svc = self._mod_update_service
+        if action == "pause":
+            svc.pause_all_updates()
+        elif action == "resume":
+            svc.resume_all_updates()
+        elif action == "stop":
+            self._on_stop_mod_updates()
+        self._sync_mod_update_notification()
+
+    def _dismiss_mod_update_notification(self) -> None:
+        """仅在当前游戏更新全部结束后确认批次结果并收起后台通知。"""
+        panel = getattr(self, "_mod_update_progress", None)
+        svc = self._mod_update_service
+        if panel is None or panel.game_id != self._mod_manager.current_game_id or svc.active_update_ids():
+            return
+        self._mod_update_background_games.discard(panel.game_id)
+        if svc.acknowledge_completed_updates():
+            self._overview_page.set_update_status_text("")
+        panel.dismiss()
