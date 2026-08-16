@@ -1956,3 +1956,184 @@ class MainWindow(QMainWindow):
             # 立即执行搜索，不等待输入防抖。
             if hasattr(self._gb_store_page, "_on_search"):
                 self._gb_store_page._on_search(query)
+
+    def _on_escape(self) -> None:
+        # 先让 OverviewPage 处理 Esc（取消剪切等），再处理导航回退。
+        """在总览存在剪切选择时取消剪切状态。"""
+        if self._stack.currentIndex() == self.PAGE_OVERVIEW:
+            if self._overview_page._clipboard_cat_ids or self._overview_page._clipboard_mod_ids:
+                self._overview_page._cancel_cut()
+                return
+
+    # 游戏切换
+
+    def _open_game_settings(self) -> None:
+        """通过导航项的 UserRole，从商店的未收录游戏提示跳转到游戏管理页。"""
+        self._select_nav_page(self.PAGE_GAME)
+
+    def _open_local_mod_in_overview(self, local_mod_id: str) -> None:
+        """定位下载历史中选定的实际安装文件。"""
+        mod = self._mod_manager.get_mod(local_mod_id)
+        if mod is None or not Path(mod.path).exists():
+            return
+        self._select_nav_page(self.PAGE_OVERVIEW)
+        if mod.node_id and hasattr(self._overview_page, "_navigate_to"):
+            self._overview_page._navigate_to(mod.node_id)
+
+    @_invalidates_library_probe
+    def _on_game_changed(self, game_id: str) -> None:
+        """在部署、变体、插件或预设事务期间恢复原游戏选择，空闲时切换管理器和页面上下文。
+
+        索引不可用时先尝试恢复；有效游戏切换后重新绑定部署环境、文件监控和审计，取消激活时清空相关视图。"""
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and publication.busy:
+            # 游戏页先修改共享服务再通知，配置回滚结束前仍保留原操作所有者。
+            self._game_service.current_game_id = self._deploy_game_id
+            self._game_page.setEnabled(False)
+            self._game_page.reload()
+            self._ensure_toast().done(tr("Mod 部署完成后可切换游戏"), ok=False, hold_ms=2500)
+            return
+        variants = getattr(self, "_variant_controller", None)
+        if variants is not None and variants.busy:
+            self._game_service.current_game_id = variants.game_id
+            self._game_page.reload()
+            return
+        if getattr(self, "_preset_delete_preparing", False) or getattr(self, "_preset_delete_worker", None) is not None:
+            self._game_service.current_game_id = self._preset_delete_game_id
+            self._game_page.reload()
+            return
+        if _plugin_operation_busy(self):
+            self._game_service.current_game_id = self._plugin_operations.game_id
+            self._game_page.reload()
+            return
+        if (
+            self._preset_apply_worker is not None
+            or getattr(self, "_preset_apply_preparing", False)
+            or getattr(self, "_disable_worker", None) is not None
+        ):
+            owner = getattr(self, "_preset_apply_game_id", "") or getattr(self, "_disable_game_id", "")
+            if owner:
+                self._game_service.current_game_id = owner
+                self._game_page.reload()
+            return
+        if self._deploy_workers or self._deploy_active:
+            # GamePage 会先改共享 GameService 再发信号。晚到的激活事件必须还原，
+            # 否则队列里的旧游戏 Mod 会写进新目录，并以新 game_id 提交到索引。
+            self._game_service.current_game_id = self._deploy_game_id
+            if game_id != self._deploy_game_id:
+                self._game_page.reload()
+                self._ensure_toast().done(tr("Mod 部署完成后可切换游戏"), ok=False, hold_ms=2500)
+            return
+        cleanup = getattr(self, "_library_source_cleanup", None)
+        if cleanup is not None:
+            cleanup.stop()
+        if game_id and not self._mod_manager.index_healthy:
+            self._maybe_recover_index()
+            if not self._mod_manager.index_healthy:
+                self._game_service.current_game_id = ""
+                self._game_page.reload()
+                self._apply_nav_gating()
+                return
+        if not game_id:
+            # 取消激活（如删除了当前激活的游戏）→ 复位数据源 + 清空残留视图 + 提示遮罩
+            self._game_service.current_game_id = ""
+            self._game_store.set_last_game_id("")
+            self._mod_manager.set_game("")  # 复位索引指向，后续刷新只会获取空数据
+            self._apply_migoto_for_current_game()
+            self._clear_game_views()
+            self._apply_nav_gating()
+            logger.info("已取消游戏激活")
+            return
+        self._game_service.current_game_id = game_id
+        # 记住当前环境，下次启动自动恢复
+        self._game_store.set_last_game_id(game_id)
+        self._mod_manager.set_game(game_id)
+        self._apply_migoto_for_current_game()
+        # 先显示目标游戏索引，再异步检查路径和新增内容，覆盖程序未运行期间的外部变更。
+        self._start_file_watcher(game_id)
+        self._schedule_activation_reconcile(game_id, "game_switch")
+        self._load_characters(game_id, force_root=True)
+        self._refresh_preset_combo()
+        # 切换 Mod Store 面向的游戏（已知 → 重拉分类；未知 → 切空态视图）
+        if hasattr(self, "_gb_store_page") and self._gb_store_page is not None:
+            self._gb_store_page.set_game(game_id)
+        self._apply_nav_gating()
+        logger.info("已切换到游戏: %s", game_id)
+
+    @contextmanager
+    def _game_settings_save(self, old_game: GameConfig | None, new_game: GameConfig) -> Iterator[None]:
+        """路径变更期间暂停当前环境，配置提交或取消后按实际保存的路径恢复监控。"""
+        if old_game is None or (
+            (GameService._sanitize_id(new_game.name_en, new_game.name) or new_game.id) == old_game.resource_dir
+            and new_game.mods_path == old_game.mods_path
+            and new_game.migoto_path == old_game.migoto_path
+        ):
+            yield
+            return
+        if self._plugin_host_busy() or _plugin_operation_busy(self) or self._deployment_activation.running:
+            raise RuntimeError(tr("当前任务完成后可保存游戏路径设置。"))
+        if old_game.id != self._game_service.current_game_id:
+            yield
+            return
+
+        self._game_settings_saving = True
+        try:
+            self._library_probe.pause()
+            self._library_discovery.reset_scope()
+            self._library_local_discovery.reset_scope()
+            self._overview_refresh.cancel()
+            self._gallery_refresh.cancel()
+            self._deployment_activation.cancel()
+            for timer in (
+                self._source_state_poll,
+                self._deploy_state_poll,
+                self._watcher_debounce,
+                self._deploy_watcher_debounce,
+                self._source_cleanup_retry,
+            ):
+                timer.stop()
+            cleanup = getattr(self, "_library_source_cleanup", None)
+            if cleanup is not None:
+                cleanup.stop()
+            self._file_watcher.stop()
+            self._deploy_watcher.stop()
+            self._deploy_changed_paths.clear()
+            self._deployment_events = []
+            self._mod_manager.variants.stop_watch()
+            if self._mod_manager._ini_sync is not None:
+                self._mod_manager._ini_sync.reconcile_all()
+            self._mod_manager.stop_ini_sync()
+            yield
+        except ResourceDirectoryMigrationError:
+            # 未完整恢复的资源只保留实际位置；取消激活，避免旧配置触发自动修复或重新建库。
+            self._game_service.current_game_id = ""
+            self._game_store.set_last_game_id("")
+            self._mod_manager.set_game("")
+            self._clear_game_views()
+            self._apply_nav_gating()
+            self._update_launch_buttons()
+            raise
+        finally:
+            self._game_settings_saving = False
+            if self._game_service.current_game_id == old_game.id:
+                self._mod_manager.variants.invalidate()
+                self._library_probe.reset_failure()
+                self._deployment_root_watch.sync_games()
+                self._start_file_watcher(old_game.id)
+                self._apply_migoto_for_current_game()
+                self._load_characters(old_game.id)
+                self._refresh_gallery()
+                self._schedule_source_cleanup_retry()
+
+    @_invalidates_library_probe
+    def _on_games_changed(self) -> None:
+        """游戏列表被增删改/排序：刷新数据与门禁；激活由「游戏」页显式决定，不自动激活。"""
+        self._game_service.reload_games()
+        self._deployment_root_watch.sync_games()
+        # 游戏配置保存后同步新的部署与加载器路径，使后续操作使用最新目录。
+        self._apply_migoto_for_current_game()
+        # 配置变化可能包含英文名修改，须重新匹配当前游戏的在线商店信息。
+        gid = self._game_service.current_game_id
+        if gid and getattr(self, "_gb_store_page", None) is not None:
+            self._gb_store_page.set_game(gid, force=True)
+        self._apply_nav_gating()
