@@ -1039,3 +1039,159 @@ class MainWindow(QMainWindow):
         self._overview_page.install_shortcuts(self._shortcut_dispatcher)
         install_window_shortcuts(self, self._shortcut_dispatcher)
         QShortcut(QKeySequence("Escape"), self, self._on_escape)
+
+    # 初始化数据
+
+    def _init_data(self) -> None:
+        """初始化游戏列表和角色数据"""
+        # 索引自检须先于事务恢复、变体采集和后台对账，
+        # 使损坏索引能够进入恢复流程，而不在读取事务日志时中断初始化。
+        self._maybe_recover_index()
+        index_ready = self._mod_manager.index_healthy
+        # 获取可恢复的游戏列表
+        games = self._game_service.get_game_list_for_ui()
+
+        # 加载游戏：仅恢复上次「已激活」的游戏环境。无有效上次激活
+        # （首次使用 / 该游戏被删 / 从未激活）→ 不自动激活；门禁锁住画廊/总览/商店，
+        # 引导用户先到「游戏」页双击/启用一个游戏（激活是显式动作）。
+        ids = [g["id"] for g in games]
+        last_id = self._game_store.get_last_game_id()
+        if index_ready and last_id and last_id in ids:
+            target_game_id = last_id
+            self._game_service.current_game_id = target_game_id
+            self._game_store.set_last_game_id(target_game_id)
+            self._mod_manager.set_game(target_game_id)
+            self._apply_migoto_for_current_game()
+            # 启动时先回滚未完成的预设事务，包括部署步骤和运行时变体修改，
+            # 再允许新的预设切换与 Mod 启停。
+            self._recover_pending_preset_applies(target_game_id)
+            # 冷启动必须**先采集再清理部署记录**：软件关闭期间用户在游戏里改的变体只存在
+            # d3dx_user.ini 里，先对账会让部署记录失效、归属索引认不出那些键，最终被旧
+            # 快照覆盖。启动只采集当前文件，绝不主动写回历史快照。
+            self._collect_startup_variants()
+            # 启动时核对程序关闭期间的删除和新增，再将新增内容交给后台纳管。
+            self._start_file_watcher(target_game_id)
+            self._schedule_activation_reconcile(target_game_id, "startup")
+            self._overview_page.set_current_game(target_game_id)
+            self._load_characters(target_game_id)
+            # 同步商店的目标游戏，网络加载延迟至商店首次可见。
+            store = getattr(self, "_gb_store_page", None)
+            if store is not None:
+                store.prime_initial_game(target_game_id)
+            # 初始化预设下拉框
+            self._refresh_preset_combo()
+        else:
+            self._game_service.current_game_id = ""
+            # 拒绝恢复或恢复失败时保留上次游戏配置，但不启动任何依赖索引的业务。
+            if index_ready:
+                self._apply_migoto_for_current_game()  # 无游戏→禁用启动按钮
+
+        # 同步门禁 + 游戏卡片激活态 + 落点页
+        self._apply_nav_gating()
+        self._game_page.reload()
+        self._select_nav_page(self.PAGE_OVERVIEW if self._game_service.has_active_game() else self.PAGE_GAME)
+
+        # 启动后空闲触发一次后台更新检查（带节流）
+        self._maybe_startup_update_check()
+
+    def _load_characters(self, game_id: str, force_root: bool = False) -> None:
+        """将当前游戏的分类加载到总览，无激活游戏时清空。
+
+        底层空游戏编号表示查询全部数据，因此在界面入口拦截空值，避免显示其他游戏内容。
+        """
+        if not game_id or not self._game_service.has_active_game():
+            self._overview_page.set_current_game("")
+            self._overview_page.set_characters([], force_root=True)
+            return
+        self._overview_page.set_current_game(game_id)
+        chars = self._mod_manager.get_characters_for_ui(game_id)
+        self._overview_page.set_characters(chars, force_root=force_root)
+        if force_root:
+            # 分类卡片已经显示，后代记录只补充搜索数据，不重复重建根视图。
+            self._overview_root_presented = True
+            self._overview_refresh.schedule()
+        self._overview_refresh.prefetch(
+            game_id,
+            [
+                node["id"]
+                for node in sorted(chars, key=lambda item: item.get("mod_count", 0), reverse=True)
+                if node.get("mod_count", 0) >= 256
+            ],
+        )
+
+    # Mod 自动更新接线
+
+    def _maybe_startup_update_check(self) -> None:
+        """启动后空闲触发一次后台检查（带 24h 节流），仅在开关开启时。"""
+        from PySide6.QtCore import QTimer
+
+        # 程序自身更新：启动后静默检查（管理器内部判总开关/启动开关/24h 节流）。
+        # 用父子绑定的一次性定时器，避免裸 singleShot 在窗口早销毁后悬空触发。
+        self._app_update_startup_timer = QTimer(self)
+        self._app_update_startup_timer.setSingleShot(True)
+        self._app_update_startup_timer.timeout.connect(
+            lambda: getattr(self, "_app_update_manager", None) and self._app_update_manager.check_on_startup()
+        )
+        self._app_update_startup_timer.start(5000)
+
+        if not self._config.get("gamebanana.enabled", True):
+            return
+        uc = "gamebanana.update_check"
+        if not self._config.get(f"{uc}.enabled", True):
+            return
+        if not self._config.get(f"{uc}.on_startup", True):
+            return
+        # 父子绑定的一次性定时器，不能用裸 QTimer.singleShot：后者不归 window
+        # 所有，window 在 3s 内被销毁后定时器仍挂在全局事件循环上，之后触发会调到
+        # 已析构的 ModUpdateService（C++ 对象已删）→ RuntimeError。父子绑定后定时器
+        # 随 window 一起销毁、不会悬空触发。与 _apply_periodic_update_timer 同一模式。
+        self._startup_update_timer = QTimer(self)
+        self._startup_update_timer.setSingleShot(True)
+        self._startup_update_timer.timeout.connect(lambda: self._on_check_mod_updates(force=False))
+        self._startup_update_timer.start(3000)
+
+    def _connect_mod_update_service(self) -> None:
+        """初始化更新通知状态，并订阅检测进度、任务变化和安装结果信号。"""
+        svc = self._mod_update_service
+        self._mod_update_background_games: set[str] = set()
+        self._mod_update_progress = None
+        svc.status_changed.connect(self._on_update_status_changed)
+        svc.check_started.connect(self._on_update_check_started)
+        svc.progress.connect(self._on_update_check_progress)
+        svc.check_finished.connect(self._on_update_check_finished)
+        svc.update_task_changed.connect(self._on_update_task_changed)
+        svc.update_applied.connect(self._on_update_applied)
+        svc.update_failed.connect(self._on_update_failed)
+        svc.update_cancelled.connect(self._on_update_cancelled)
+        svc.update_deferred.connect(self._on_update_deferred)
+
+    def _on_check_mod_updates(self, *, force: bool, only_failed: bool = False) -> None:
+        """启动或接续更新检测，手动请求打开更新中心；调度拒绝时恢复此前检测状态。"""
+        svc = getattr(self, "_mod_update_service", None)
+        if svc is None:
+            return
+        was_manual = getattr(self, "_update_check_is_manual", False)
+        if svc.is_checking():
+            if force:
+                self._update_check_is_manual = True
+                self._open_mod_updates_center()
+            return
+        self._update_check_is_manual = force
+        if force:
+            # 先显示窗口，再收集任务或等待网络，避免嵌套事件循环。
+            self._open_mod_updates_center()
+            self._mod_updates_dialog.set_checking(True)
+        schedule = getattr(svc, "schedule_check_updates", svc.check_updates)
+        if schedule(force=force, only_failed=only_failed) is False:
+            self._update_check_is_manual = was_manual
+            dlg = getattr(self, "_mod_updates_dialog", None)
+            if dlg is not None:
+                dlg.set_check_snapshot(svc.check_snapshot())
+
+    # 程序自身更新接线
+
+    def _on_app_update_check_requested(self) -> None:
+        """设置页「立即检查程序更新」——非静默，会反馈「已是最新/失败」。"""
+        mgr = getattr(self, "_app_update_manager", None)
+        if mgr is not None:
+            mgr.check_for_updates(silent=False)
