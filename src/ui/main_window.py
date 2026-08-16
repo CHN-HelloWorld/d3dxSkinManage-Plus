@@ -1288,3 +1288,139 @@ class MainWindow(QMainWindow):
                 base = item.data(Qt.ItemDataRole.UserRole + 2) or label
                 item.setText(f"{base}  ({n})" if n > 0 else base)
                 return
+
+    def _open_mod_updates_center(self) -> None:
+        """复用当前游戏的更新中心，合并可用更新与任务快照，恢复后台任务的可见操作入口。"""
+        background_games = getattr(self, "_mod_update_background_games", set())
+        background_games.discard(self._mod_manager.current_game_id)
+        panel = getattr(self, "_mod_update_progress", None)
+        if panel is not None:
+            panel.dismiss()
+        existing = getattr(self, "_mod_updates_dialog", None)
+        if existing is not None:
+            if existing.property("gameId") == self._mod_manager.current_game_id:
+                existing.raise_()
+                existing.activateWindow()
+                return
+            existing.force_close()
+        svc = self._mod_update_service
+        available = svc.get_update_status(completed_only=True)
+        task_infos = svc.update_task_infos()
+        infos = {**task_infos, **available}
+        dlg = getattr(self, "_mod_updates_cached_dialog", None)
+        # 关闭确认中可能切换游戏，旧对话框保留到其关闭处理返回。
+        if dlg is not None and dlg.property("gameId") not in (None, "", self._mod_manager.current_game_id):
+            dlg.deleteLater()
+            dlg = None
+        if dlg is None:
+            dlg = MainWindow._create_mod_updates_dialog(self)
+            self._mod_updates_cached_dialog = dlg
+        dlg.setProperty("gameId", self._mod_manager.current_game_id)
+        self._mod_updates_dialog = dlg
+        dlg.prepare_for_open(list(infos.values()), failures=svc.failures())
+        dlg.set_check_snapshot(svc.check_snapshot())
+        active = set(svc.active_update_ids())
+        for mid, snapshot in svc.update_task_snapshots().items():
+            # 完成任务后可能发现更新的文件版本，保留新操作入口，不恢复旧历史状态。
+            if (
+                mid not in active
+                and mid in available
+                and mid in task_infos
+                and available[mid].latest_file.file_id != task_infos[mid].latest_file.file_id
+            ):
+                continue
+            dlg.set_task_snapshot(mid, snapshot)
+        dlg.open()
+
+    def _create_mod_updates_dialog(self):
+        """创建更新中心并连接检测、忽略、安装和暂停停止动作，设置关闭决策回调。"""
+        from src.ui.dialogs.mod_updates_dialog import ModUpdatesDialog
+
+        svc = self._mod_update_service
+        dlg = ModUpdatesDialog([], enable_actions=True, config=self._config, parent=self)
+        dlg.set_close_handler(lambda: self._request_mod_updates_close(dlg))
+        dlg.recheck_requested.connect(lambda: self._on_check_mod_updates(force=True))
+        dlg.retry_failed_requested.connect(lambda: self._on_check_mod_updates(force=True, only_failed=True))
+        dlg.cancel_check_requested.connect(svc.cancel_check)
+        dlg.ignore_version_requested.connect(lambda mid: self._on_ignore_mod_update(mid, version=True))
+        dlg.ignore_mod_requested.connect(lambda mid: self._on_ignore_mod_update(mid, version=False))
+        dlg.open_gb_requested.connect(self._open_gb_for_local_mod)
+        dlg.update_requested.connect(self._on_apply_update)
+        dlg.update_all_requested.connect(self._on_update_all)
+        dlg.pause_update_requested.connect(svc.pause_update)
+        dlg.resume_update_requested.connect(svc.resume_update)
+        dlg.stop_update_requested.connect(self._on_stop_mod_updates)
+        dlg.pause_all_requested.connect(svc.pause_all_updates)
+        dlg.resume_all_requested.connect(svc.resume_all_updates)
+        dlg.stop_all_requested.connect(self._on_stop_mod_updates)
+
+        def dismissed(_result: int) -> None:
+            """仅在关闭的是当前更新中心时清除活动对话框引用。"""
+            if getattr(self, "_mod_updates_dialog", None) is dlg:
+                self._mod_updates_dialog = None
+
+        dlg.finished.connect(dismissed)
+        return dlg
+
+    def _on_ignore_mod_update(self, local_mod_id: str, *, version: bool) -> None:
+        """忽略指定版本或整个 Mod，并在更新中心提供可撤销提示。"""
+        svc = self._mod_update_service
+        token = svc.ignore_version(local_mod_id) if version else svc.ignore_mod(local_mod_id)
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if token is not None and dlg is not None:
+            text = tr("已忽略此版本，发布新版本时仍会提醒。") if version else tr("已忽略此 Mod 的更新。")
+            dlg.show_message(text, undo=lambda: svc.undo_ignore(token))
+
+    def _open_gb_for_local_mod(self, local_mod_id: str) -> None:
+        """读取本地 Mod 的 GameBanana 来源标识，并在浏览器打开来源页面。"""
+        mod = self._mod_manager.get_mod(local_mod_id)
+        if not mod:
+            return
+        gb_id = self._extract_gb_mod_id(mod)
+        if gb_id:
+            import webbrowser
+
+            url = ((mod.info.custom_data or {}).get("gamebanana") or {}).get(
+                "page_url"
+            ) or f"https://gamebanana.com/mods/{gb_id}"
+            webbrowser.open(url)
+
+    @_invalidates_library_probe
+    def _on_apply_update(self, local_mod_id: str) -> None:
+        """为未运行的单项更新按需选择候选文件，然后转交统一更新启动入口。"""
+        svc = self._mod_update_service
+        if local_mod_id in svc.active_update_ids():
+            return
+        info = svc.get_update_status().get(local_mod_id)
+        if info is None:
+            return
+        chosen = None
+        # 多文件变体 → 弹选择器（场景：丰满版/标准版，不能闭眼下第一个）
+        if info is not None and len(info.candidate_files) > 1:
+            from src.ui.dialogs.mod_update_file_dialog import ModUpdateFileDialog
+
+            mod = self._mod_manager.get_mod(local_mod_id)
+            original = mod.folder_name if mod else ""
+            picker = ModUpdateFileDialog(
+                info.candidate_files,
+                local_original_name=original,
+                parent=getattr(self, "_mod_updates_dialog", None) or self,
+            )
+            if not picker.exec():
+                return
+            chosen = picker.selected_file()
+        self._start_mod_update(local_mod_id, chosen_file=chosen)
+
+    def _start_mod_update(self, local_mod_id: str, *, chosen_file=None) -> None:
+        """检查插件、部署及更新冲突后启动单项更新，正在部署的 Mod 给出延后提示。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        svc = self._mod_update_service
+        if local_mod_id in svc.active_update_ids() or local_mod_id not in svc.updatable_ids():
+            return
+        # 完成信号排队和最终发布期间继续持锁，不能只按线程运行状态判断。
+        if local_mod_id in self._deploy_workers or local_mod_id in self._deploy_active:
+            self._ensure_toast().done(tr("该 Mod 正在部署，请在部署完成后更新。"), ok=False, hold_ms=2500)
+            return
+        self._overview_page.set_update_status_text(tr("正在更新…"))
+        svc.apply_update(local_mod_id, chosen_file=chosen_file)
