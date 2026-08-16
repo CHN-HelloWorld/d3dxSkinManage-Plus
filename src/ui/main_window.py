@@ -628,3 +628,414 @@ class MainWindow(QMainWindow):
             else:
                 out.append((title, lambda _cmd=cmd: pm.execute_command(_cmd)))
         return out
+
+    def _refresh_plugin_tools(self) -> None:
+        """将插件工具页扩展同步到界面。"""
+        pm = getattr(self, "_plugin_manager", None)
+        if pm is None:
+            return
+        try:
+            self._tools_page.refresh_plugin_tools(pm.contributions.tools_page(), pm.execute_command)
+        except Exception:
+            logger.exception("刷新插件工具按钮失败")
+        # 存在插件命令时显示导航入口。
+        try:
+            has_cmds = bool(pm.contributions.commands())
+            self._plugin_cmd_btn.setVisible(has_cmds)
+        except Exception:
+            pass
+
+    def _show_plugin_command_menu(self) -> None:
+        """导航「插件命令」按钮：弹出所有插件命令（global 菜单位置）。"""
+        from PySide6.QtWidgets import QMenu
+
+        actions = self._build_mod_context_actions("global", "")
+        if not actions:
+            return
+        menu = QMenu(self)
+        act_map = {}
+        for title, cb in actions:
+            act_map[menu.addAction(title)] = cb
+        try:
+            from src.ui import win_effects
+
+            menu.winId()
+            win_effects.apply_rounded_corners(menu, small=True)
+        except Exception:
+            pass
+        btn = self._plugin_cmd_btn
+        chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+        if chosen in act_map:
+            act_map[chosen]()
+
+    # UI 构建
+
+    def _setup_ui(self) -> None:
+        """构建导航、页面栈、背景和任务浮层，并恢复窗口与预览设置。
+
+        同时初始化共享商店服务、Mod 更新服务和程序更新管理器，连接页面切换、部署同步与导航尺寸持久化。"""
+        self.setWindowTitle(APP_DISPLAY_NAME)
+        self.setMinimumSize(MIN_WINDOW_WIDTH, MIN_WINDOW_HEIGHT)
+        # 恢复窗口尺寸时遵守最小尺寸；最大化状态在首次显示后单独恢复。
+        _ww = int(self._config.get("ui.window_width", 0) or 0)
+        _wh = int(self._config.get("ui.window_height", 0) or 0)
+        if _ww >= MIN_WINDOW_WIDTH and _wh >= MIN_WINDOW_HEIGHT:
+            self.resize(_ww, _wh)
+        self._restore_maximized = bool(self._config.get("ui.window_maximized", False))
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        self._central = central
+        # 背景位于中央控件底层，忽略鼠标事件并随窗口更新几何。
+        self._bg_overlay = BackgroundOverlay(central)
+        from src.ui.backgrounds.controller import BackgroundController
+
+        self._background_controller = BackgroundController(self._bg_overlay, self)
+        self._background_controller.state_changed.connect(self._on_bg_state_changed)
+        self._background_controller.preview_ready.connect(self._on_bg_preview_ready)
+        self._background_controller.active_changed.connect(self._on_bg_active_changed)
+        self._bg_overlay.lower()
+        # 背景模糊滑块拖动的节流器（模糊重算偏重，~40ms 合并一次，防逐帧高斯模糊卡顿）
+        self._pending_bg_blur = 0
+        self._bg_blur_throttle = QTimer(self)
+        self._bg_blur_throttle.setSingleShot(True)
+        self._bg_blur_throttle.timeout.connect(self._flush_bg_blur)
+        main_layout = QVBoxLayout(central)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
+
+        # 左侧导航容器
+        self._nav_container = QWidget()
+        self._nav_container.setObjectName("navContainer")
+        nav_container_layout = QVBoxLayout(self._nav_container)
+        nav_container_layout.setContentsMargins(0, 0, 0, 0)
+        nav_container_layout.setSpacing(0)
+
+        self._nav = QListWidget()
+        self._nav.setObjectName("navList")
+        self._nav.setIconSize(QSize(20, 20))
+        self._nav.setSpacing(2)
+        self._nav.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._nav_expanded_width = max(80, int(Config.instance().get("ui.nav_expanded_width", 160)))
+        self._nav_collapsed = False
+        self._nav_animating = False
+
+        # 导航文本和图标（图标为 Fluent SVG 的语义名）
+        self._nav_items_data = [
+            ("actions/game", t("游戏"), self.PAGE_GAME),
+            ("navigation/overview", t("类别总览"), self.PAGE_OVERVIEW),
+            ("navigation/gallery", t("画廊"), self.PAGE_GALLERY),
+            ("navigation/store", t("在线 Mod"), self.PAGE_STORE),
+            ("navigation/settings", t("设置"), self.PAGE_SETTINGS),
+            ("navigation/tools", t("工具箱"), self.PAGE_TOOLS),
+            ("navigation/plugins", t("插件"), self.PAGE_PLUGINS),
+        ]
+        for icon_name, label, idx in self._nav_items_data:
+            item = QListWidgetItem(label)
+            icons.apply_icon(item, icon_name)
+            item.setData(Qt.ItemDataRole.UserRole, idx)
+            item.setData(Qt.ItemDataRole.UserRole + 1, icon_name)  # 保存图标名
+            item.setData(Qt.ItemDataRole.UserRole + 2, label)  # 保存完整文本
+            item.setSizeHint(QSize(140, 40))
+            self._nav.addItem(item)
+
+        self._nav.currentRowChanged.connect(self._on_nav_changed)
+        # 折叠态图标居中（详见 _NavItemDelegate）
+        self._nav_delegate = _NavItemDelegate(self._nav)
+        self._nav.setItemDelegate(self._nav_delegate)
+        # 导航指示条使用视口坐标跟随选中项移动，并在布局或尺寸变化后重新定位。
+        self._nav_indicator = QWidget(self._nav.viewport())
+        self._nav_indicator.setObjectName("navIndicator")
+        self._nav_indicator.setFixedWidth(3)
+        self._nav_indicator.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        self._nav_indicator.hide()
+        self._nav.viewport().installEventFilter(self)
+        nav_container_layout.addWidget(self._nav, 1)
+
+        # 底部快捷启动按钮
+        # 「启动Mod加载器」「启动游戏」均使用当前游戏在「游戏管理」中的配置，
+        # 随游戏环境切换自动指向新游戏（见 _apply_migoto_for_current_game →
+        # _update_launch_buttons）。折叠菜单时只显示图标。
+        self._launch_buttons: list[tuple[QPushButton, str, str]] = []
+
+        # 关于按钮（导航底部独立入口）
+        # 关于页低频，放在主导航列表「下方」（列表 stretch=1 撑开，按钮被推到底部，
+        # 与高频导航项以空白分隔）。复用 navLaunchBtn 外观/折叠/图标自动重涂机制；
+        # 选中态由动态属性 current 驱动（见 fluent.qss #navLaunchBtn[current="true"]）。
+        self._about_btn = QPushButton(t("关于"))
+        self._about_btn.setObjectName("navLaunchBtn")
+        self._about_btn.setProperty("current", False)
+        icons.apply_icon(self._about_btn, "status/info")
+        self._about_btn.setIconSize(QSize(18, 18))
+        self._about_btn.clicked.connect(self._on_about_clicked)
+        nav_container_layout.addWidget(self._about_btn)
+        self._launch_buttons.append((self._about_btn, t("关于"), "status/info"))
+
+        # 全局命令按钮展示已注册插件命令；无命令时隐藏，导航折叠时仅显示图标。
+        self._plugin_cmd_btn = QPushButton(t("插件命令"))
+        self._plugin_cmd_btn.setObjectName("navLaunchBtn")
+        icons.apply_icon(self._plugin_cmd_btn, "navigation/plugins")
+        self._plugin_cmd_btn.setIconSize(QSize(18, 18))
+        self._plugin_cmd_btn.clicked.connect(self._show_plugin_command_menu)
+        self._plugin_cmd_btn.hide()
+        nav_container_layout.addWidget(self._plugin_cmd_btn)
+        self._launch_buttons.append((self._plugin_cmd_btn, t("插件命令"), "navigation/plugins"))
+
+        self._launch_loader_btn = QPushButton(t("启动Mod加载器"))
+        self._launch_loader_btn.setObjectName("navLaunchBtn")
+        icons.apply_icon(self._launch_loader_btn, "actions/launch")
+        self._launch_loader_btn.setIconSize(QSize(18, 18))
+        self._launch_loader_btn.clicked.connect(self._on_launch_migoto)
+        nav_container_layout.addWidget(self._launch_loader_btn)
+        self._launch_buttons.append((self._launch_loader_btn, t("启动Mod加载器"), "actions/launch"))
+
+        self._launch_game_btn = QPushButton(t("启动游戏"))
+        self._launch_game_btn.setObjectName("navLaunchBtn")
+        icons.apply_icon(self._launch_game_btn, "actions/game")
+        self._launch_game_btn.setIconSize(QSize(18, 18))
+        self._launch_game_btn.clicked.connect(self._on_launch_game)
+        nav_container_layout.addWidget(self._launch_game_btn)
+        self._launch_buttons.append((self._launch_game_btn, t("启动游戏"), "actions/game"))
+
+        # 折叠按钮
+        self._collapse_btn = QPushButton()
+        self._collapse_btn.setObjectName("navCollapseBtn")
+        icons.apply_icon(self._collapse_btn, "actions/menu")
+        self._collapse_btn.setIconSize(QSize(18, 18))
+        self._collapse_btn.setFixedHeight(32)
+        self._collapse_btn.setToolTip(tr("折叠/展开菜单"))
+        self._collapse_btn.clicked.connect(self._toggle_nav_collapse)
+        nav_container_layout.addWidget(self._collapse_btn)
+
+        # 使用 QSplitter 让导航栏可调宽度
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter.setChildrenCollapsible(False)
+        self._main_splitter.addWidget(self._nav_container)
+
+        # 右侧页面栈
+        self._stack = QStackedWidget()
+
+        self._overview_page = OverviewPage()
+        self._overview_page._mod_manager = self._mod_manager  # 注入，供按键面板/override 编辑
+        self._stack.addWidget(self._overview_page)  # 0
+
+        # 部署 INI 同步可能来自工作线程，仅发出信号，由主线程刷新按键面板。
+        self.ini_synced_from_deploy.connect(self._on_ini_synced_from_deploy)
+        self._mod_manager.set_ini_sync_notify(self.ini_synced_from_deploy.emit)
+
+        self._connect_variant_controller()
+
+        self._gallery_page = GalleryPage()
+        self._stack.addWidget(self._gallery_page)  # 1
+
+        # 恢复上次的成人级Mod预览模式（show|hide|blur），两页保持一致
+        _adult_mode = self._config.get("ui.adult_preview_mode", "show")
+        self._overview_page.set_adult_mode(_adult_mode)
+        self._gallery_page.set_adult_mode(_adult_mode)
+
+        self._settings_page = SettingsPage(shortcuts=self._shortcut_settings)
+        self._stack.addWidget(self._settings_page)  # 2
+
+        self._tools_page = ToolsPage()
+        self._stack.addWidget(self._tools_page)  # 3
+
+        # GameBanana Mod Store 页
+        self._gb_store_page = self._build_gb_store_page()
+        self._stack.addWidget(self._gb_store_page)  # 4
+
+        # 游戏管理页（独立顶级页，PAGE_GAME）
+        self._game_page = GamePage(save_context=self._game_settings_save)
+        self._stack.addWidget(self._game_page)  # 5
+        self._game_page.game_changed.connect(self._on_game_changed)
+        self._game_page.games_changed.connect(self._on_games_changed)
+        self._game_page.deployment_directory_selected.connect(self._on_deployment_directory_selected)
+        self._game_page.deploy_dir_cleared.connect(self._on_deploy_dir_cleared)
+
+        # 插件管理页（PAGE_PLUGINS）
+        self._plugins_page = PluginsPage()
+        self._stack.addWidget(self._plugins_page)  # 6
+
+        # 关于页（PAGE_ABOUT，导航底部入口）
+        self._about_page = AboutPage()
+        self._stack.addWidget(self._about_page)  # 7
+
+        # 无激活游戏时仍允许进入内容页，由 _stack 子控件覆盖显示激活提示。
+        # _update_lock_overlay 按当前页和激活状态控制显隐，随 _stack 尺寸变化同步几何。
+        self._lock_overlay = LockOverlay(self._stack)
+        self._lock_overlay.go_to_game_requested.connect(lambda: self._select_nav_page(self.PAGE_GAME))
+        self._lock_overlay.hide()
+        self._stack.installEventFilter(self)
+
+        self._main_splitter.addWidget(self._stack)
+        self._nav_expanded_width = max(self._nav_expanded_width, self._nav_container.minimumSizeHint().width())
+        self._main_splitter.setSizes([self._nav_expanded_width, 800])
+        # 用户拖动导航分隔条时保存展开宽度，程序调用 setSizes 不触发该信号。
+        self._main_splitter.splitterMoved.connect(self._on_nav_splitter_moved)
+        self._main_splitter.setStretchFactor(0, 0)
+        self._main_splitter.setStretchFactor(1, 1)
+        main_layout.addWidget(self._main_splitter, 1)
+
+        # 任务浮层按进入顺序由下向上排列；某层收起时，其上方的可见面板下移补位。
+        self._panel_stack = TaskCenterStack()
+        self._intake_progress = TaskCenterPanel(self._stack, stack=self._panel_stack)
+        self._intake_progress.stop_requested.connect(self._on_panel_stop_requested)
+        self._export_progress = TaskCenterPanel(self._stack, stack=self._panel_stack)
+        # 任务中心与页面、锁定覆盖层同属堆栈。切页及过渡快照会提升页面层级，
+        # 因此监听 currentChanged 恢复任务中心层级，并在过渡结束后再次确认。
+        self._stack.currentChanged.connect(self._on_stack_page_changed)
+
+        # Mod 自动更新服务（复用共享 GB 客户端 + 商店页的长寿命 GB loop）
+        from src.core.mod_update_service import ModUpdateService
+
+        self._mod_update_service = ModUpdateService(
+            self._mod_manager,
+            self._config,
+            self._gb_client,
+            parent=self,
+            # 更新检查与商店共享长期事件循环，确保 HTTP 连接池始终在其所属循环使用。
+            submit=self._gb_store_page.submit_coro,
+        )
+        try:
+            self._mod_update_service.set_download_manager(self._gb_store_page._download_manager)
+        except Exception:
+            pass
+        self._connect_mod_update_service()
+        self._mod_update_service.load_status()  # 恢复上次保存的更新检查结果。
+        self._apply_periodic_update_timer()  # 按设置启动定时检查（若开启）
+
+        # 程序自身自动更新管理器（区别于上面的「Mod」更新服务）
+        from src.services.app_update import AppUpdateManager
+
+        self._app_update_manager = AppUpdateManager(self, self._config)
+
+    def _build_gb_store_page(self) -> QWidget:
+        """构建 GameBanana Mod Store 页面（懒加载 services 资源）"""
+        from src.services.gamebanana.cache import ImageCache
+        from src.services.gamebanana.client import GameBananaClient
+        from src.services.gamebanana.image_loader import ImageLoader
+        from src.ui.pages.gamebanana_store import GameBananaStorePage
+        from src.utils.proxy import get_active_proxy_url
+
+        self._gb_client = GameBananaClient(
+            max_concurrency=int(self._config.get("gamebanana.max_concurrency", 8)),
+            request_interval_ms=int(self._config.get("gamebanana.request_interval_ms", 200)),
+            proxy=get_active_proxy_url(self._config),
+        )
+        self._gb_image_cache = ImageCache()
+        self._gb_image_loader = ImageLoader(self._gb_image_cache, parent=self)
+        page = GameBananaStorePage(
+            client=self._gb_client,
+            image_loader=self._gb_image_loader,
+            local_game_id=self._game_service.current_game_id,
+            mod_index=self._mod_manager,
+            parent=self,
+        )
+        page.open_settings_requested.connect(self._open_game_settings)
+        page.open_local_mod_in_overview_requested.connect(self._open_local_mod_in_overview)
+        # 下载完成后的安装：走与手动导入同一条后台流水线（见 _on_gb_install_requested）
+        page.mod_install_requested.connect(self._on_gb_install_requested)
+        return page
+
+    # 信号连接
+
+    def _connect_signals(self) -> None:
+        # 变体持久化事件经 Qt 信号回到主线程，仅更新当前预览和配置写入提示。
+        """将页面操作连接到主窗口事务入口，并桥接核心事件、文件监控、外观设置与预设通知。"""
+        self._mod_manager.add_event_listener(self._on_core_event)
+        self.operation_failed.connect(self._show_operation_failure, Qt.ConnectionType.QueuedConnection)
+        from src.ui.operation_check import run_file_check
+
+        self._mod_manager.operation_check_runner = lambda work: run_file_check(work, self)
+        # 总览页。
+        self._overview_page.game_changed.connect(self._on_game_changed)
+        self._overview_page.character_add_requested.connect(self._on_character_add)
+        self._overview_page.character_edit_requested.connect(self._on_character_edit)
+        self._overview_page.character_delete_requested.connect(self._on_character_delete)
+        self._overview_page.character_batch_add_requested.connect(self._on_character_batch_add)
+        self._overview_page.character_batch_delete_requested.connect(self._on_character_batch_delete)
+        self._overview_page.category_preset_import_requested.connect(
+            lambda: self._open_category_presets(start_import=True)
+        )
+        # 混合视图 Mod 操作
+        self._overview_page.mod_toggle_requested.connect(self._on_overview_mod_toggle)
+        self._overview_page.mod_delete_requested.connect(self._on_overview_mod_delete)
+        self._overview_page.mod_batch_delete_requested.connect(self._on_overview_mod_batch_delete)
+        self._overview_page.batch_disable_requested.connect(self._on_overview_batch_disable)
+        self._overview_page.items_export_requested.connect(self._on_overview_items_export)
+        self._overview_page.mod_import_requested.connect(self._on_overview_import_requested)
+        self._overview_page.files_dropped_for_import.connect(self._on_overview_files_dropped)
+        # 导航
+        self._overview_page.category_navigated.connect(self._on_overview_navigated)
+        # 剪切/粘贴
+        self._overview_page.items_move_requested.connect(self._on_items_move)
+        # 总览页预览面板信号。
+        self._overview_page.preview_image_dropped.connect(self._on_overview_preview_dropped)
+        self._overview_page.category_preview_dropped.connect(self._on_category_preview_dropped)
+        self._overview_page.mod_edit_requested.connect(self._on_mod_edit)
+        self._overview_page.mod_preview_delete_requested.connect(self._on_overview_preview_delete)
+        self._overview_page.mod_preview_delete_all_requested.connect(self._on_overview_preview_delete_all)
+        self._overview_page.mod_preview_reorder_requested.connect(self._on_overview_preview_reorder)
+
+        # Mod 更新
+        self._overview_page.check_updates_requested.connect(lambda: self._on_check_mod_updates(force=True))
+
+        # 图库页。
+        self._gallery_page.mod_selected.connect(self._on_gallery_mod_selected)
+        self._gallery_page.mod_toggle_requested.connect(self._on_gallery_mod_toggle)
+        # 同步成人级Mod预览模式（画廊 ↔ 总览），并持久化到 config
+        self._gallery_page.adult_mode_changed.connect(self._overview_page.set_adult_mode)
+        self._overview_page.adult_mode_changed.connect(self._gallery_page.set_adult_mode)
+        self._gallery_page.adult_mode_changed.connect(self._persist_adult_mode)
+        self._overview_page.adult_mode_changed.connect(self._persist_adult_mode)
+
+        # 设置页。
+        self._settings_page.settings_changed.connect(self._on_settings_changed)
+        self._settings_page.theme_changed.connect(self._on_theme_changed)
+        self._settings_page.font_changed.connect(self._on_font_changed)
+        self._settings_page.language_changed.connect(self._on_language_changed)
+        self._settings_page.background_changed.connect(self._on_background_changed)
+        self._settings_page.bg_overlay_refresh.connect(self._refresh_bg_overlay)
+        self._settings_page.bg_playback_requested.connect(self._background_controller.playback)
+        self._settings_page.bg_scrim_live.connect(self._on_bg_scrim_live)
+        self._settings_page.bg_blur_live.connect(self._on_bg_blur_live)
+        self._settings_page.app_update_check_requested.connect(self._on_app_update_check_requested)
+        self._wire_settings_downloads(self._settings_page)
+
+        # 工具页。
+        self._tools_page.rebuild_index_requested.connect(self._on_rebuild_index)
+        self._tools_page.view_logs_requested.connect(self._on_view_logs)
+        self._tools_page.category_preset_import_requested.connect(
+            lambda: self._open_category_presets(start_import=True)
+        )
+        self._tools_page.category_preset_export_requested.connect(
+            lambda: self._open_category_presets(start_export=True)
+        )
+        self._tools_page.manage_plugins_requested.connect(lambda: self._select_nav_page(self.PAGE_PLUGINS))
+
+        # 同时接收具体路径和通用变化信号，分别支持局部对账及范围未知时的检查。
+        self._file_watcher.path_changed.connect(self._on_source_change)
+        self._deploy_watcher.path_changed.connect(self._on_deployment_change)
+
+        # 预设
+        self._overview_page.preset_apply_requested.connect(self._on_preset_apply)
+        self._overview_page.preset_rename_requested.connect(self._on_preset_rename)
+        self._overview_page.preset_create_requested.connect(self._on_preset_create)
+        self._overview_page.preset_delete_requested.connect(self._on_preset_delete_batch)
+        self._overview_page.preset_duplicate_requested.connect(self._on_preset_duplicate_batch)
+        self._mod_manager.preset_manager.preset_list_changed.connect(
+            self._refresh_preset_combo,
+        )
+        self._mod_manager.preset_manager.preset_applied.connect(self._on_preset_applied)
+
+    # 键盘快捷键
+
+    def _setup_shortcuts(self) -> None:
+        """创建窗口快捷键分发器，注册导入、刷新和页面上下文动作，并绑定 Escape 处理。"""
+        from src.ui.window_shortcuts import install_window_shortcuts
+
+        self._shortcut_dispatcher = ShortcutDispatcher(self._shortcut_settings, self)
+        self._shortcut_dispatcher.register_window_action("mod.import", self._on_overview_import_requested)
+        self._shortcut_dispatcher.register_window_action("view.refresh", lambda: self._refresh_current(manual=True))
+        self._overview_page.install_shortcuts(self._shortcut_dispatcher)
+        install_window_shortcuts(self, self._shortcut_dispatcher)
+        QShortcut(QKeySequence("Escape"), self, self._on_escape)
