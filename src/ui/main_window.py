@@ -1195,3 +1195,96 @@ class MainWindow(QMainWindow):
         mgr = getattr(self, "_app_update_manager", None)
         if mgr is not None:
             mgr.check_for_updates(silent=False)
+
+    def _apply_periodic_update_timer(self) -> None:
+        """按 periodic_hours 设置启停后台定时检查（force=False，带节流）。"""
+        from PySide6.QtCore import QTimer
+
+        hours = int(self._config.get("gamebanana.update_check.periodic_hours", 0))
+        if not hasattr(self, "_periodic_update_timer"):
+            self._periodic_update_timer = QTimer(self)
+            self._periodic_update_timer.timeout.connect(lambda: self._on_check_mod_updates(force=False))
+        self._periodic_update_timer.stop()
+        if hours > 0 and self._config.get("gamebanana.update_check.enabled", True):
+            self._periodic_update_timer.start(hours * 3600 * 1000)
+
+    def _on_update_check_started(self, total: int) -> None:
+        """初始化检测进度并同步更新中心快照，有检测对象时显示总览状态文字。"""
+        self._update_check_progress = (0, total)
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if dlg is not None:
+            dlg.set_check_snapshot(self._mod_update_service.check_snapshot())
+        if total > 0:
+            self._overview_page.set_update_status_text(tr("正在检查 {total} 个 Mod 的更新…", total=total))
+
+    def _on_update_check_progress(self, done: int, total: int) -> None:
+        """保存当前检测完成数与总数，并把服务快照同步到已打开的更新中心。"""
+        self._update_check_progress = (done, total)
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if dlg is not None:
+            dlg.set_check_snapshot(self._mod_update_service.check_snapshot())
+
+    def _on_update_check_finished(self, counts: dict) -> None:
+        """依据检测结果和通知设置更新状态文字，并将已完成结果、失败项和快照交给更新中心。"""
+        found = counts.get("found", 0)
+        failed = counts.get("failed", 0)
+        snapshot = self._mod_update_service.check_snapshot()
+        # 后台徽章模式只更新标记；手动检查或徽章加提示模式同时显示状态文字。
+        toast = self._config.get("gamebanana.update_check.notify_style", "badge") == "badge_toast"
+        manual = getattr(self, "_update_check_is_manual", False)
+        self._update_check_is_manual = False
+        show_text = toast or manual
+        if counts.get("error"):
+            if show_text:
+                self._overview_page.set_update_status_text(tr("检查准备失败：{value}", value=counts["error"]))
+        elif counts.get("cancelled"):
+            if show_text:
+                self._overview_page.set_update_status_text(tr("已取消检测，上次检测结果已保留"))
+        elif found > 0:
+            if show_text:
+                self._overview_page.set_update_status_text(tr("{found} 个 Mod 有可用更新", found=found))
+        elif failed:
+            if show_text:
+                self._overview_page.set_update_status_text(tr("{failed} 个 Mod 检查失败，请重试", failed=failed))
+        else:
+            if show_text:
+                self._overview_page.set_update_status_text(
+                    tr("都是最新版") if snapshot.get("total", 0) else tr("暂无可检测的 Mod")
+                )
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if dlg is not None:
+            svc = self._mod_update_service
+            dlg.set_updates(list(svc.get_update_status(completed_only=True).values()), failures=svc.failures())
+            dlg.set_check_snapshot(snapshot)
+
+    def _on_update_status_changed(self) -> None:
+        """同步总览更新标记和后台通知；更新中心游戏上下文变化时重建对应内容。"""
+        svc = self._mod_update_service
+        ids = svc.updatable_ids()
+        self._overview_page.set_updatable(ids)
+        self._set_overview_update_count(len(ids))
+        self._sync_mod_update_notification()
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if dlg is not None:
+            if dlg.property("gameId") != self._mod_manager.current_game_id:
+                dlg.force_close()
+                self._open_mod_updates_center()
+                return
+            snapshot = svc.check_snapshot()
+            if not snapshot["checking"]:
+                dlg.set_updates(list(svc.get_update_status(completed_only=True).values()), failures=svc.failures())
+            dlg.set_check_snapshot(snapshot)
+
+    def _set_overview_update_count(self, n: int) -> None:
+        """在导航「总览」项文字后挂一个计数（无现成 badge 机制时的最简实现）。"""
+        for i, (icon_name, label, page_idx) in enumerate(self._nav_items_data):
+            if page_idx == self.PAGE_OVERVIEW:
+                item = self._nav.item(i)
+                if item is None:
+                    return
+                if getattr(self, "_nav_collapsed", False):
+                    item.setText("")  # 折叠态只显示图标
+                    return
+                base = item.data(Qt.ItemDataRole.UserRole + 2) or label
+                item.setText(f"{base}  ({n})" if n > 0 else base)
+                return
