@@ -3334,3 +3334,170 @@ class MainWindow(QMainWindow):
         if not dest_dir:
             return
         self._start_export(dest_dir, export_items=items)
+
+    @staticmethod
+    def _invalid_metadata_summary(paths: list[str]) -> str:
+        """对损坏容器路径去重并生成摘要，最多展示五项，其余数量引导查看日志。"""
+        unique_paths = list(dict.fromkeys(paths))
+        if not unique_paths:
+            return ""
+        shown = unique_paths[:5]
+        lines = "\n".join(f"- {path}" for path in shown)
+        if len(unique_paths) > len(shown):
+            lines += tr("\n- 另有 {value} 个，详见日志", value=len(unique_paths) - len(shown))
+        return tr("\n\n未恢复的损坏 Mod 容器（{count} 个）：\n{lines}", count=len(unique_paths), lines=lines)
+
+    @_invalidates_library_probe
+    def _on_rebuild_index(self) -> None:
+        """工具页「重建索引」：确认 → 进度对话框（哈希在后台、DB 在主线程）→ 差异报告。
+
+        见 RebuildProgressDialog：plan/apply 在主线程（ModIndex sqlite 连接线程绑定），
+        重活 hash 在 worker 线程并显示进度条，主窗口不冻结。
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        from PySide6.QtWidgets import QMessageBox
+
+        from src.ui.dialogs.rebuild_progress import RebuildProgressDialog
+
+        # 启动时选择暂不恢复后，工具页仍须能隔离坏库，而不是要求先激活游戏。
+        if not self._mod_manager.index_healthy:
+            self._maybe_recover_index()
+            if self._mod_manager.index_healthy:
+                self._init_data()
+            return
+
+        gid = self._mod_manager.current_game_id
+        if not gid:
+            QMessageBox.information(self, tr("重建索引"), tr("请先选择游戏。"))
+            return
+        ret = QMessageBox.question(
+            self,
+            tr("重建索引"),
+            tr(
+                "将从文件库重新扫描并重建当前游戏的 Mod 索引。\n"
+                "分类、启用态、预设会自动恢复，源文件不受影响。\n\n确定继续？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+
+        dlg = RebuildProgressDialog(self._mod_manager, gid, self)
+        dlg.exec()
+        if dlg.error:
+            QMessageBox.warning(self, tr("重建索引"), tr("重建失败：{error}", error=dlg.error))
+            return
+        report = dlg.report
+        if report is not None:
+            invalid_summary = self._invalid_metadata_summary(report.invalid_metadata)
+            QMessageBox.information(
+                self,
+                tr("重建索引"),
+                tr(
+                    (
+                        "重建完成：\n  登记 {registered} 个 Mod\n  已归类 {classified} / "
+                        "未分类 {unclassified}{invalid_summary}"
+                    ),
+                    registered=report.registered,
+                    classified=report.classified,
+                    unclassified=report.unclassified,
+                    invalid_summary=invalid_summary,
+                ),
+            )
+        try:
+            self._load_characters(self._mod_manager.current_game_id, force_root=True)
+            self._refresh_overview_mods()
+        except Exception:
+            pass
+
+    def _maybe_recover_index(self) -> None:
+        """启动自检分流：结构不兼容/corrupt → 隔离+重建；stale（库被清空但磁盘有数据）→ 直接重建。"""
+        try:
+            state = self._mod_manager.index_needs_recovery()
+        except Exception as e:
+            logger.warning("索引自检失败: %s", e)
+            return
+        if state == "incompatible":
+            self._prompt_index_schema_mismatch()
+        elif state == "corrupt":
+            self._prompt_index_recovery()
+        elif state == "stale":
+            self._prompt_index_rebuild()
+
+    def _prompt_index_schema_mismatch(self) -> None:
+        """结构不符合当前格式时停止读写，保留数据库与源文件。"""
+        from PySide6.QtWidgets import QMessageBox
+
+        QMessageBox.warning(
+            self,
+            tr("索引格式无法使用"),
+            tr(
+                "当前索引格式无法使用，已停止读写。\n\n原因：{index_schema_error}\n\n"
+                "原数据库和源 Mod 文件均已保留。请先备份数据，再检查索引与资源文件的格式。",
+                index_schema_error=self._mod_manager.index_schema_error,
+            ),
+            QMessageBox.StandardButton.Ok,
+        )
+
+    def _prompt_index_rebuild(self) -> None:
+        """索引可打开但为空、而磁盘文件库仍有数据（被清空/截断/删除）→ 从文件库重建。"""
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        if not self._game_service.games:
+            QMessageBox.information(self, tr("重建索引"), tr("没有可重建的游戏，请先在「游戏」页新建游戏。"))
+            return
+        ret = QMessageBox.warning(
+            self,
+            tr("索引为空"),
+            tr(
+                "检测到文件库中有 Mod / 分类数据，但索引为空（索引可能被清空或丢失）。\n\n"
+                "是否从文件库重新扫描重建索引？\n（源 Mod 文件不受影响；角色树将从目录标记 "
+                ".d3dxcategory 自动重建）"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            reports = self._mod_manager.rebuild_all_games()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, tr("重建索引"), tr("重建失败：{e}", e=e))
+            return
+        QApplication.restoreOverrideCursor()
+        total = sum(r.registered for r in reports.values())
+        invalid = [path for report in reports.values() for path in report.invalid_metadata]
+        QMessageBox.information(
+            self,
+            tr("重建索引"),
+            tr(
+                "已从文件库重建索引，共登记 {total} 个 Mod，角色树已从目录标记恢复。{value}",
+                total=total,
+                value=self._invalid_metadata_summary(invalid),
+            ),
+        )
+        try:
+            self._load_characters(self._mod_manager.current_game_id, force_root=True)
+            self._refresh_overview_mods()
+        except Exception:
+            pass
+
+    def _prompt_index_recovery(self) -> None:
+        """索引 DB 损坏：提示用户从文件库恢复（隔离旧库 + 从 marker 重建树与索引）。"""
+        from PySide6.QtWidgets import QMessageBox
+
+        ret = QMessageBox.critical(
+            self,
+            tr("索引损坏"),
+            tr(
+                "Mod 索引数据库无法打开（可能已损坏）。\n\n"
+                "是否隔离损坏文件并从文件库重新扫描重建？\n（源 Mod 文件不受影响；"
+                "角色/类别树将从目录标记 .d3dxcategory 自动重建）"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        self._recover_index_by_quarantine(tr("索引恢复"))
