@@ -2402,3 +2402,245 @@ class MainWindow(QMainWindow):
         current = self._mod_manager.get_character(mod.node_id)
         scope_ids = [mod.node_id] if current and current.node_type == "character" else []
         return None, scope_ids
+
+    def _enable_waits_for_publication(self, mod) -> bool:
+        """归档可独立准备，共享偏好仍按顺序提交。"""
+        if not self._mod_manager.needs_async_deploy(mod.mod_id):
+            return True
+        _, scope_ids = self._character_conflict_scope(mod)
+        if not scope_ids:
+            return False
+        reserved = self._mods_being_deployed()
+        protection = getattr(self._mod_manager, "_library_protection", None)
+        if protection is not None:
+            # 发布阶段保留被替换 Mod 的所有权，直到失败回滚结束。
+            reserved.update(protection.snapshot()[1])
+        siblings = self._mod_manager.get_character_conflict_mods(
+            scope_ids, deploying_ids=reserved, excluding_mod_id=mod.mod_id
+        )
+        return any(sibling.mod_id in reserved for sibling in siblings)
+
+    def _resolve_character_conflict(self, mod, *, defer=False) -> tuple[bool, list[str]]:
+        """启用 mod 前处理「角色目录同时只启用一个」的互斥。
+
+        Returns (是否继续启用, 已被禁用的其它 Mod id 列表)。
+        约束来源：node_type == 'character' 的目录（或挂在这类目录之下的子分类）。
+        """
+        if mod.is_enabled or not mod.node_id:
+            return True, []
+        char_ancestor, scope_ids = self._character_conflict_scope(mod)
+        if not scope_ids:
+            return True, []
+
+        deploying = self._mods_being_deployed()
+        siblings = self._mod_manager.get_character_conflict_mods(
+            scope_ids, deploying_ids=deploying, excluding_mod_id=mod.mod_id
+        )
+        # 在途部署尚未提交，不能按已启用状态禁用，也不能同时启用同一角色下的冲突项。
+        pending = [m for m in siblings if m.mod_id in deploying]
+        if pending:
+            QMessageBox.information(
+                self,
+                t("提示"),
+                tr(
+                    "「{display_name}」正在部署中，请等它完成后再切换本角色下的 Mod。",
+                    display_name=pending[0].display_name,
+                ),
+            )
+            return False, []
+        enabled_mods = [m for m in siblings if m.is_enabled]
+        if not enabled_mods:
+            return True, []
+
+        scope = tr("角色「{name}」", name=char_ancestor.name) if char_ancestor else tr("当前角色")
+        if not self._config.get(self._CONFLICT_SUPPRESS_KEY, False):
+            dialog = QMessageBox(self)
+            dialog.setWindowTitle(t("确认"))
+            dialog.setIcon(QMessageBox.Icon.Question)
+            dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            adult_mode = self._overview_page._adult_mode
+            first_enabled = enabled_mods[0]
+            show_preview = (
+                first_enabled.primary_preview
+                and Path(first_enabled.primary_preview).exists()
+                and not (adult_mode != "show" and first_enabled.info.age_rating == AgeRating.X)
+            )
+            msg_parts = [tr("{scope}已启用{value}Mod：", scope=scope, value=tr("左图") if show_preview else "")]
+            for em in enabled_mods:
+                msg_parts.append(f"  · {em.display_name}")
+            msg_parts.append(tr('\n是否禁用它并启用"{display_name}"', display_name=mod.display_name))
+            dialog.setText("\n".join(msg_parts))
+            if show_preview:
+                pixmap = QPixmap(first_enabled.primary_preview)
+                if not pixmap.isNull():
+                    scaled = pixmap.scaled(
+                        200,
+                        200,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.SmoothTransformation,
+                    )
+                    dialog.setIconPixmap(scaled)
+            # 仅在确认启用时保存不再提示选项，取消操作不改变后续确认行为。
+            never = QCheckBox(tr("不再提示，以后自动禁用冲突的 Mod"))
+            dialog.setCheckBox(never)
+            confirmed = dialog.exec() == QMessageBox.StandardButton.Yes
+            if not confirmed:
+                return False, []
+            if never.isChecked():
+                self._config.set(self._CONFLICT_SUPPRESS_KEY, True)
+        else:
+            logger.info("角色互斥提示已被用户关闭，自动禁用 %d 个冲突 Mod", len(enabled_mods))
+
+        if defer:
+            return True, [em.mod_id for em in enabled_mods]
+        if self._mod_manager.check_mod_operation(mod.mod_id, metadata=True) is None:
+            return False, []
+        disabled_ids: list[str] = []
+        for em in enabled_mods:
+            if self._mod_manager.toggle_mod(em.mod_id):
+                disabled_ids.append(em.mod_id)
+        return True, disabled_ids
+
+    def _mod_update_blocks_deploy(self, mod_id: str) -> bool:
+        """检测该 Mod 是否正在跨游戏更新，冲突时显示提示并阻止部署。"""
+        if mod_id not in self._mod_update_service.active_update_ids(all_games=True):
+            return False
+        self._ensure_toast().done(tr("该 Mod 正在更新，请在更新完成或终止后重试。"), ok=False, hold_ms=2500)
+        return True
+
+    @_invalidates_library_probe
+    def _on_overview_mod_toggle(self, mod_id: str) -> None:
+        """切换总览页中 Mod 的启用状态，并就地更新卡片。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self, include_publication=False):
+            return
+        publication = getattr(self, "_enable_publication", None)
+        confirming = getattr(self, "_deploy_conflict_mod_id", "")
+        if confirming or (publication is not None and publication.busy):
+            mod = self._mod_manager.get_mod(mod_id)
+            if (
+                (publication is not None and publication.closing)
+                or self._deploy_stopping
+                or mod is None
+                or mod.is_enabled
+                or mod_id == confirming
+                or mod_id in self._deploy_workers
+            ):
+                return
+            if confirming or self._enable_waits_for_publication(mod):
+                if not hasattr(self, "_deferred_enable_ids"):
+                    self._deferred_enable_ids = {}
+                if mod_id not in self._deferred_enable_ids:
+                    self._deferred_enable_ids[mod_id] = self._game_service.current_game_id
+                    self._overview_page.begin_deploy_overlay(mod_id)
+                return
+        if (
+            self._preset_apply_worker is not None
+            or getattr(self, "_preset_apply_preparing", False)
+            or getattr(self, "_disable_worker", None) is not None
+            or mod_id in self._deploy_workers
+        ):
+            return
+        if self._mod_update_blocks_deploy(mod_id):
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod:
+            return
+        if mod.is_enabled:
+            self._on_overview_batch_disable([mod_id])
+            return
+        self._deploy_conflict_mod_id = mod_id
+        try:
+            self._enable_overview_mod(mod)
+        finally:
+            self._deploy_conflict_mod_id = ""
+            self._schedule_deferred_enables()
+
+    def _enable_overview_mod(self, mod) -> None:
+        """模态检查和工作线程注册期间保持请求准入限制。"""
+        mod_id = mod.mod_id
+        if not self._require_deploy_dir():
+            return
+
+        if self._mod_manager.check_mod_operation(mod_id, metadata=True, full=False) is None:
+            return
+        proceed, disabled_ids = self._resolve_character_conflict(mod, defer=True)
+        if not proceed:
+            return
+
+        # 启用压缩档 Mod 需解压部署（耗时）→ 后台线程 + 卡片 / 列表实时进度，
+        # 停放副本的身份扫描与恢复也走同一后台线程。
+        if self._mod_manager.needs_async_deploy(mod_id):
+            self._start_async_deploy(mod_id, disabled_ids)
+            return
+
+        toggled = self._mod_manager.toggle_mod(mod_id)
+        if not toggled:
+            if not mod.is_enabled:
+                self._overview_page.finish_deploy_overlay(
+                    mod_id, success=False, error=tr("启用失败，请检查 Mod 和部署目录后重试，详细原因见日志。")
+                )
+            return
+
+        # 就地更新 Overview 卡片（轻量级，避免全量重建）
+        self._overview_page.update_mod_toggle_in_place(mod_id, toggled, disabled_ids)
+        if toggled.is_enabled:
+            # 停放缓存恢复等快速启用直接显示成功反馈，不人为等待进度动画。
+            self._overview_page.finish_deploy_overlay(mod_id)
+
+        # 后台更新角色计数（不触发刷新）
+        chars = self._mod_manager.get_characters_for_ui(self._game_service.current_game_id)
+        self._overview_page.set_characters(chars, refresh=False)
+
+    @_invalidates_library_probe
+    def _start_async_deploy(self, mod_id: str, disabled_ids: list[str]) -> None:
+        """异步部署归档，卡片和列表共用进度信号。
+
+        后台执行文件操作，主线程校验并提交结果；同一 Mod 的重复部署请求直接忽略。
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self, include_publication=False):
+            return
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and publication.closing:
+            return
+        if self._deploy_stopping or mod_id in self._deploy_workers:
+            return  # 部署进行中，忽略重复触发
+        if self._mod_update_blocks_deploy(mod_id):
+            return
+        # 冲突确认可进入嵌套事件循环，采集部署目标前再次检查。
+        if not self._require_deploy_dir():
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod or not mod.path:
+            return
+
+        from src.ui.deploy_worker import DeployWorker
+
+        if not self._deploy_workers and not self._deploy_active:
+            self._deploy_game_id = self._game_service.current_game_id
+            self._game_page.setToolTip(tr("Mod 部署完成后可切换游戏或修改部署目录。"))
+            self._game_page.setEnabled(False)
+        self._overview_page.begin_deploy_overlay(mod_id)
+        worker = DeployWorker(
+            mod_id,
+            mod.path,
+            self._mod_manager._storage,
+            self,
+            deploy_name=mod.folder_name or Path(mod.path).stem,
+            restore_existing=True,
+            remembered_path=mod.deployed_path,
+            stage_only=True,
+            content_hash=mod.content_hash,
+        )
+        worker.disabled_ids = tuple(disabled_ids)
+        self._deploy_workers[mod_id] = worker
+        self._mod_manager.protect_library_operation(
+            "deploy:" + mod_id, paths=(mod.path, mod.deployed_path), mod_ids=(mod_id,)
+        )
+        worker.progress.connect(self._overview_page.update_deploy_overlay)
+        # 自定义结果信号发出时 run 尚未返回。等线程真正结束再释放 QThread，
+        # 同时保证并发名额覆盖完整的解压和收尾阶段。
+        worker.finished.connect(
+            lambda mid=mod_id, w=worker, dids=disabled_ids: self._on_async_deploy_finished(mid, w, dids)
+        )
+        self._pending_deploy_ids.append(mod_id)
+        self._start_pending_deploys()
