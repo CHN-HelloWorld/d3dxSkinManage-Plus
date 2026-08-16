@@ -3501,3 +3501,104 @@ class MainWindow(QMainWindow):
         if ret != QMessageBox.StandardButton.Yes:
             return
         self._recover_index_by_quarantine(tr("索引恢复"))
+
+    def _recover_index_by_quarantine(self, title: str) -> None:
+        """隔离损坏索引后从资源库重建；未配置游戏时不创建空库。"""
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        if not self._game_service.games:
+            QMessageBox.information(self, title, tr("没有可重建的游戏，请先在「游戏」页新建游戏。"))
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            result = self._mod_manager.recover_corrupt_index()
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.warning(self, title, tr("恢复失败：{e}", e=e))
+            return
+        QApplication.restoreOverrideCursor()
+        reports = result.get("reports", {})
+        total = sum(r.registered for r in reports.values())
+        invalid = [path for report in reports.values() for path in report.invalid_metadata]
+        QMessageBox.information(
+            self,
+            title,
+            tr(
+                "已隔离原索引文件并重建索引，共重新登记 {total} 个 Mod，角色树已从目录标记恢复。{value}",
+                total=total,
+                value=self._invalid_metadata_summary(invalid),
+            ),
+        )
+        try:
+            self._load_characters(self._mod_manager.current_game_id, force_root=True)
+            self._refresh_overview_mods()
+        except Exception:
+            pass
+
+    def _run_export(self, mods: list) -> None:
+        """公共导出流程：选择目标目录 → 右下角进度浮层（格式/结构取自设置）。"""
+        dest_dir = QFileDialog.getExistingDirectory(self, tr("选择导出目录"))
+        if not dest_dir:
+            return
+        self._start_export(dest_dir, mods=mods)
+
+    def _start_export(
+        self,
+        dest_dir: str,
+        *,
+        mods: list | None = None,
+        export_items: list[ExportItem] | None = None,
+    ) -> None:
+        """启动非模态导出并使用独立任务面板显示进度。
+
+        导出与导入可同时运行；一次只允许一个导出批次，避免同目录产物相互覆盖。
+        """
+        if self._export_controller is not None:
+            QMessageBox.information(self, tr("提示"), tr("已有一批导出正在进行，请等它结束后再导出。"))
+            return
+        controller = ExportProgressDialog(
+            mods or [],
+            dest_dir,
+            self._mod_manager,
+            parent=self,
+            export_items=export_items,
+            panel=self._export_progress,
+        )
+        self._export_controller = controller
+
+        def _on_export_finished(_success: int, _total: int) -> None:
+            """解除导出控制器引用，并在 Qt 事件循环中释放已结束控制器。"""
+            self._export_controller = None
+            controller.deleteLater()
+
+        controller.export_finished.connect(_on_export_finished)
+        controller.start_export()
+
+    def _on_overview_import_requested(self) -> None:
+        """OverviewPage 中触发导入"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if not self._game_service.has_active_game() or self._import_active or self._preset_apply_worker is not None:
+            return
+        parent_id = self._overview_page._current_parent_id
+        if not parent_id:
+            QMessageBox.information(self, tr("提示"), tr("请先进入一个类别后再导入 Mod。"))
+            return
+        dialog = ModImportDialog(
+            node_id=parent_id,
+            parent=self,
+        )
+        dialog.import_confirmed.connect(self._do_import_overview)
+        dialog.exec()
+
+    def _do_import_overview(self, items: list, node_id: str) -> None:
+        """从 OverviewPage 启动通用导入流程。
+
+        成功后的唯一一次总览重建由 ``_do_import`` 的完成回调统一安排；入口层不能
+        再追加刷新，否则会在 50ms / 100ms 各触发一次卡片重排。
+        """
+        self._do_import(items, node_id)
+
+    def _on_overview_files_dropped(self, paths: list, node_id: str) -> None:
+        """OverviewPage 拖拽文件导入"""
+        call_later(0, self, lambda: self._show_overview_import_dialog(paths, node_id))
