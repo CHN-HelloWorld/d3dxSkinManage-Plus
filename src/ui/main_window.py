@@ -1723,3 +1723,86 @@ class MainWindow(QMainWindow):
             if self._nav.item(i).data(Qt.ItemDataRole.UserRole) == page_index:
                 self._nav.setCurrentRow(i)
                 return
+
+    def _restore_nav_selection(self, page_index: int) -> None:
+        """取消切页时把导航选中态静默恢复到当前页面，避免递归触发切页。"""
+        self._nav.blockSignals(True)
+        try:
+            for i in range(self._nav.count()):
+                if self._nav.item(i).data(Qt.ItemDataRole.UserRole) == page_index:
+                    self._nav.setCurrentRow(i)
+                    break
+        finally:
+            self._nav.blockSignals(False)
+        self._update_nav_indicator(animate=False)
+
+    def _apply_nav_gating(self) -> None:
+        """同步「无激活游戏」状态：刷新启动按钮 + 内容区提示遮罩。
+
+        无激活游戏时仍允许进入画廊、总览和 Mod 商店，由 _update_lock_overlay
+        显示激活提示，引导用户前往游戏页。游戏、设置和工具页始终可用且无遮罩。
+        """
+        if hasattr(self, "_launch_loader_btn"):
+            self._update_launch_buttons()
+        self._update_lock_overlay()
+
+    def _raise_task_center(self) -> None:
+        """切页或显示锁定遮罩后，将任务中心浮层提升至同级栈顶。
+
+        导入和导出面板可同时存在，由堆叠器统一调整层级和位置。
+        """
+        stack = getattr(self, "_panel_stack", None)
+        if stack is None:
+            return
+        try:
+            stack.raise_all()
+            stack.relayout()
+        except RuntimeError:
+            pass
+
+    def _on_stack_page_changed(self, _index: int) -> None:
+        """切页后重排浮层 Z 序：立刻抬一次 + 过渡动画结束后再抬一次。"""
+        self._raise_task_center()
+        call_later(220, self, self._raise_task_center)
+
+    def _update_lock_overlay(self) -> None:
+        """无激活游戏且当前在 总览/画廊/商店 时显示提示遮罩；否则隐藏。"""
+        overlay = getattr(self, "_lock_overlay", None)
+        if overlay is None:
+            return
+        gated = {self.PAGE_OVERVIEW, self.PAGE_GALLERY, self.PAGE_STORE}
+        show = not self._game_service.has_active_game() and self._stack.currentIndex() in gated
+        if show:
+            was_hidden = not overlay.isVisible()
+            overlay.setGeometry(self._stack.rect())
+            overlay.raise_()
+            overlay.show()
+            # 仅在「隐藏→显示」时淡入；重复调用（切页/缩放）不重复闪动
+            if was_hidden:
+                anim.fade_in(overlay)
+        else:
+            overlay.hide()
+        # 遮罩刚 raise 过 → 任务中心必须再抬一次，否则「请先激活」会盖住进度浮层
+        self._raise_task_center()
+
+    def eventFilter(self, obj, event):
+        # 注意：nav viewport 的过滤器在 _setup_ui 早段就装上了，此时 _stack 尚未创建，
+        # 故用 getattr 守卫，避免构造期 viewport resize 事件触发 AttributeError。
+        """随页面栈和导航视口缩放同步锁定层、任务浮层与导航指示条的位置。"""
+        if event.type() == QEvent.Type.Resize:
+            stack = getattr(self, "_stack", None)
+            if stack is not None and obj is stack:
+                # _stack 改变大小时同步提示遮罩几何，使其始终铺满内容区。
+                overlay = getattr(self, "_lock_overlay", None)
+                if overlay is not None and overlay.isVisible():
+                    overlay.setGeometry(stack.rect())
+                # 任务中心是 absolute 定位的浮层（不进布局），内容区改尺寸后
+                # 必须重算右下角锚点，否则窗口缩小会把它留在视口外。多张浮层由
+                # 堆叠器统一重排（每张的 y 偏移取决于它下面那几张的高度）。
+                panel_stack = getattr(self, "_panel_stack", None)
+                if panel_stack is not None:
+                    panel_stack.relayout(animate=False)
+            elif hasattr(self, "_nav") and obj is self._nav.viewport():
+                # 导航 viewport 尺寸变化（首次布局/折叠/缩放）→ 重定位选中指示条
+                self._update_nav_indicator(animate=False)
+        return super().eventFilter(obj, event)
