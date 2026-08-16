@@ -3051,3 +3051,129 @@ class MainWindow(QMainWindow):
             store.notify_mod_deleted(gb_mod_ids)
         except Exception as exc:
             logger.warning("notify_store_mod_deleted 失败: %s", exc)
+
+    @_invalidates_library_probe
+    def _on_overview_batch_disable(self, mod_ids: list) -> None:
+        """统一处理批量禁用入口。
+
+        主线程一次性准备整批操作，DisableBatchWorker 执行文件读写，
+        完成后由主线程提交单个索引事务并保存预设。
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if (
+            self._preset_apply_worker is not None
+            or getattr(self, "_preset_apply_preparing", False)
+            or self._deploy_workers
+            or getattr(self, "_disable_worker", None) is not None
+        ):
+            return
+        mod_ids = tuple(dict.fromkeys(mod_ids or []))
+        if not mod_ids:
+            return
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        total = len(mod_ids)
+        title = tr("正在禁用 {total} 个 Mod", total=total)
+        panel = self._intake_progress
+        panel.start_batch(total, title)
+        panel.update_progress(None, title, tr("正在准备：检查部署与保存变体…"))
+        self._raise_task_center()
+        self._disable_game_id = self._game_service.current_game_id
+        self._game_page.setEnabled(False)
+        # 先显示反馈，再扫描文件和读取用户 INI；此前仅采集小型数据库投影。
+        try:
+            preparation = self._mod_manager.create_deployment_preparation(trigger="mod_disable", mod_ids=mod_ids)
+            self._mod_manager.protect_library_operation(
+                "disable-batch",
+                mod_ids=mod_ids,
+                paths=tuple(p for mod in preparation.mods for p in (mod.path, mod.deployed_path)),
+            )
+        except Exception as error:
+            panel.finish(tr("禁用准备失败"), str(error), ok=False)
+            self._disable_game_id = ""
+            self._game_page.setEnabled(True)
+            return
+        worker = DeploymentPhaseWorker(preparation.prepare, self)
+        self._disable_worker = worker
+        worker.finished.connect(lambda w=worker: self._on_disable_prepared(w, mod_ids))
+        panel.stop_requested.connect(self._on_disable_stop_requested)
+        worker.start(QThread.Priority.LowPriority)
+
+    def _on_disable_prepared(self, worker, mod_ids) -> None:
+        """验证后台停用准备结果并创建逐项停用线程，准备失败时报告错误并释放界面状态。"""
+        if self._disable_worker is not worker:
+            return
+        panel = self._intake_progress
+        try:
+            if worker.isInterruptionRequested():
+                self._on_disable_batch_finished([], True)
+                return
+            if worker.error is not None:
+                raise worker.error
+            entries = self._mod_manager.prepare_disable_batch(mod_ids, preparation=worker.result)
+        except Exception as error:
+            panel.finish(tr("禁用准备失败"), str(error), ok=False)
+            from src.core.operation_preflight import OperationPreflightError
+
+            if isinstance(error, OperationPreflightError):
+                self._mod_manager.report_operation_failure(error)
+            self._clear_disable_ui(worker)
+            return
+        if not entries:
+            self._on_disable_batch_finished([], False)
+            return
+        from src.ui.disable_worker import DisableBatchWorker
+
+        for index, entry in enumerate(entries):
+            panel.update_item(index, entry.display_name, ST_QUEUED)
+        self._disable_entries = entries
+        self._disable_done = 0
+        worker.deleteLater()
+        worker = DisableBatchWorker(entries, self._mod_manager, self)
+        self._disable_worker = worker
+        worker.item_started.connect(self._on_disable_item_started)
+        worker.item_finished.connect(self._on_disable_item_finished)
+        worker.finished.connect(lambda w=worker: self._finish_disable_worker(w))
+        worker.start(QThread.Priority.LowPriority)
+
+    def _finish_disable_worker(self, worker) -> None:
+        """只为当前停用线程提交其保存的批次结果与取消状态。"""
+        if self._disable_worker is worker:
+            self._on_disable_batch_finished(worker.results or [], worker.cancelled)
+
+    def _on_disable_stop_requested(self) -> None:
+        """浮层 ■：请求中断批量禁用。已处理的保持已禁用，未处理的保持原样（不回滚）。"""
+        worker = getattr(self, "_disable_worker", None)
+        if worker is not None:
+            worker.requestInterruption()
+            self._intake_progress.set_stop_enabled(False)
+
+    def _on_disable_item_started(self, index: int, display_name: str) -> None:
+        """标记条目正在移除部署，并按已完成数更新批次说明。"""
+        panel = self._intake_progress
+        panel.update_item(index, display_name, ST_RUNNING, tr("正在移除部署…"))
+        total = len(getattr(self, "_disable_entries", ()) or ())
+        pct = (self._disable_done / total * 100.0) if total else None
+        panel.update_progress(
+            pct, tr("正在禁用 {total} 个 Mod", total=total), f"{display_name} ({self._disable_done + 1}/{total})"
+        )
+
+    def _on_disable_item_finished(self, index: int, result) -> None:
+        """记录单项文件处理结果，成功条目保持待提交状态，整体进度在发布前不达到百分之百。"""
+        self._disable_done += 1
+        panel = self._intake_progress
+        entries = getattr(self, "_disable_entries", ()) or ()
+        name = entries[index].display_name if index < len(entries) else ""
+        if result is not None and result.ok:
+            panel.update_item(index, name, ST_RUNNING, tr("文件已处理，等待提交…"))
+        else:
+            reason = (result.error if result is not None else "") or tr("失败")
+            panel.update_item(index, name, ST_FAILED, reason)
+        total = len(entries)
+        if total:
+            panel.update_progress(
+                min(99.0, self._disable_done / total * 100.0),
+                tr("正在禁用 {total} 个 Mod", total=total),
+                f"{self._disable_done}/{total}",
+            )
