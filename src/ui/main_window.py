@@ -2137,3 +2137,108 @@ class MainWindow(QMainWindow):
         if gid and getattr(self, "_gb_store_page", None) is not None:
             self._gb_store_page.set_game(gid, force=True)
         self._apply_nav_gating()
+
+    def _on_deployment_directory_selected(self, game_id: str) -> None:
+        """更新选中游戏的部署根跟踪，并使当前游戏的激活请求与错误提示失效。"""
+        self._deployment_root_watch.sync_games(selected_game_id=game_id)
+        if game_id == self._game_service.current_game_id:
+            self._deployment_activation.cancel()
+            self._library_probe.reset_failure()
+            self._deployment_root_notice = None
+
+    def _on_deploy_dir_cleared(self, game_id: str) -> None:
+        """清空部署目录后重建视图，使卡片反映已保存的禁用状态。"""
+        if not game_id or game_id != self._game_service.current_game_id:
+            return
+        try:
+            self._load_characters(game_id, force_root=True)
+            self._refresh_overview_mods()
+            self._refresh_gallery()
+            self._refresh_preset_combo()
+        except Exception as e:
+            logger.warning("清空部署目录后刷新视图失败: %s", e)
+
+    # 类别/Mod 操作
+
+    @_invalidates_library_probe
+    def _on_character_add(self, data: dict) -> None:
+        """创建当前游戏的分类及可选缩略图，成功后刷新分类视图并抑制自身文件事件。"""
+        name = data.get("name", "")
+        name_en = data.get("name_en", "")
+        thumbnail = data.get("thumbnail", "")
+        parent_id = data.get("parent_id", "")
+        node_type = data.get("node_type", "category")
+        char = self._mod_manager.add_character(
+            name, name_en, self._game_service.current_game_id, parent_id=parent_id, node_type=node_type
+        )
+        if char and thumbnail:
+            self._mod_manager.update_character_thumbnail(char.id, thumbnail)
+        if char:
+            self._load_characters(self._game_service.current_game_id)
+            self._suppress_watcher()  # 直接刷新已生效，跳过 watcher 二次重建（避免闪两次）
+
+    @_invalidates_library_probe
+    def _on_character_edit(self, char_id: str, data: dict) -> None:
+        """在无部署冲突时更新分类名称、类型和可选缩略图，再刷新视图。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        name = data.get("name", "")
+        name_en = data.get("name_en", "")
+        thumbnail = data.get("thumbnail", "")
+        node_type = data.get("node_type", None)
+        if self._mod_manager.update_character(char_id, name, name_en, node_type=node_type):
+            if thumbnail is not None:
+                self._mod_manager.update_character_thumbnail(char_id, thumbnail)
+            self._load_characters(self._game_service.current_game_id)
+            self._suppress_watcher()  # 跳过 watcher 二次重建
+
+    @_invalidates_library_probe
+    def _on_character_delete(self, char_id: str) -> None:
+        """在事务空闲时确认永久删除分类及内容，成功后同步分类视图与商店安装状态。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if self._preset_apply_worker is not None:
+            return
+        # 获取类别名称用于提示信息。
+        char_name = ""
+        for c in self._overview_page._all_characters:
+            if c.get("id") == char_id:
+                char_name = c.get("name", "")
+                break
+        reply = QMessageBox.question(
+            self,
+            t("确认"),
+            t("确定永久删除类别「{name}」及其中的 Mod 文件和子类别？\n删除后无法恢复。", name=char_name),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            if self._mod_manager.delete_character(char_id):
+                self._load_characters(self._game_service.current_game_id)
+                self._suppress_watcher()  # 跳过 watcher 二次重建
+                # 级联删除会顺带删 character 下所有 Mod；让 store 全量比对一次
+                self._refresh_store_installed_state()
+
+    @_invalidates_library_probe
+    def _on_character_batch_add(self, items: list) -> None:
+        """按表单选择的类型和父目录批量创建节点，再刷新当前游戏的分类。"""
+        count = 0
+        for data in items:
+            name = data.get("name", "")
+            name_en = data.get("name_en", "")
+            thumbnail = data.get("thumbnail", "")
+            parent_id = data.get("parent_id", "")
+            char = self._mod_manager.add_character(
+                name,
+                name_en,
+                self._game_service.current_game_id,
+                parent_id=parent_id,
+                node_type=data.get("node_type", "category"),
+            )
+            if char:
+                if thumbnail:
+                    self._mod_manager.update_character_thumbnail(char.id, thumbnail)
+                count += 1
+        if count > 0:
+            self._load_characters(self._game_service.current_game_id)
+            self._suppress_watcher()  # 跳过 watcher 二次重建
+            logger.info("批量添加类别完成: %d 个", count)
