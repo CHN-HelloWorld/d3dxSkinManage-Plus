@@ -3177,3 +3177,160 @@ class MainWindow(QMainWindow):
                 tr("正在禁用 {total} 个 Mod", total=total),
                 f"{self._disable_done}/{total}",
             )
+
+    @_invalidates_library_probe
+    def _on_disable_batch_finished(self, results, cancelled: bool) -> None:
+        """发布停用批次结果并保证释放界面状态，收尾异常时保留已提交结果的提示。"""
+        worker = getattr(self, "_disable_worker", None)
+        try:
+            self._publish_disable_results(results, cancelled)
+        except Exception as error:
+            logger.exception("禁用界面收尾失败")
+            self._intake_progress.finish(tr("禁用状态已提交，界面刷新失败"), str(error), ok=False)
+        finally:
+            self._clear_disable_ui(worker)
+
+    def _publish_disable_results(self, results, cancelled: bool) -> None:
+        """在主线程以单个事务提交批量禁用结果，再刷新条目并结算任务进度。"""
+        worker = getattr(self, "_disable_worker", None)
+        panel = self._intake_progress
+        entries = getattr(self, "_disable_entries", ()) or ()
+        try:
+            disabled = self._mod_manager.commit_disable_batch(results or [])
+        except Exception as error:
+            logger.exception("禁用状态提交失败")
+            panel.finish(tr("禁用状态提交失败"), str(error), ok=False)
+            return
+        if worker is not None:
+            worker.committed = True
+        failed = sum(1 for r in (results or []) if r is not None and not r.ok)
+        skipped = sum(1 for r in (results or []) if r is None)
+
+        if disabled:
+            chars = self._mod_manager.get_characters_for_ui(self._game_service.current_game_id)
+            self._overview_page.set_characters(chars, refresh=False)
+            mods = [self._mod_manager.get_mod(mid) for mid in disabled]
+            mods = [mod for mod in mods if mod is not None]
+            self._overview_page.update_mods_in_place(mods)
+            self._gallery_page.update_mods_in_place(mods)
+            logger.info("批量禁用 Mod 完成: %d 个（失败 %d，未执行 %d）", len(disabled), failed, skipped)
+
+        detail_bits = [tr("成功 {count}", count=len(disabled))]
+        if failed:
+            detail_bits.append(tr("失败 {failed}", failed=failed))
+        if skipped:
+            detail_bits.append(tr("未执行 {skipped}", skipped=skipped))
+        detail = "，".join(detail_bits)
+        if cancelled:
+            panel.finish_cancelled(detail)
+        else:
+            panel.finish(
+                tr("已禁用 {count}/{count_2} 个 Mod", count=len(disabled), count_2=len(entries)), detail, ok=not failed
+            )
+        for index, entry in enumerate(entries):
+            if entry.mod_id in disabled:
+                panel.update_item(index, entry.display_name, ST_DONE, tr("已禁用"))
+
+    def _clear_disable_ui(self, worker) -> None:
+        """释放停用事务保护、断开停止连接并清空线程状态，随后恢复游戏操作和延后任务。"""
+        if self._disable_worker is not worker:
+            return
+        self._mod_manager.release_library_operation("disable-batch")
+        try:
+            self._intake_progress.stop_requested.disconnect(self._on_disable_stop_requested)
+        except TypeError:
+            pass
+        self._disable_worker = None
+        if worker is not None:
+            worker.deleteLater()
+        self._disable_entries = ()
+        self._disable_done = 0
+        self._disable_game_id = ""
+        self._game_page.setEnabled(True)
+        resume = getattr(self, "_resume_deferred_library_environment", None)
+        if resume is not None:
+            resume()
+
+    def _on_overview_items_export(self, cat_ids: list, mod_ids: list) -> None:
+        """OverviewPage「导出」：导出选中的类别（展开子树）+ Mod。
+
+        把选中节点作为导出根、保留其下目录结构（rel_dir 由逻辑类别名链算出）。
+        类别展开成子树全部 Mod；与直接选中的 Mod 合并去重。
+        """
+        items = self._build_export_plan(cat_ids or [], mod_ids or [])
+        if not items:
+            QMessageBox.information(self, tr("提示"), tr("选中的项目下没有可导出的 Mod。"))
+            return
+        self._run_export_plan(items)
+
+    def _build_export_plan(self, cat_ids: list, mod_ids: list) -> list[ExportItem]:
+        """为导出项目计算相对于目标目录的分类路径。
+
+        保留完整目录结构时使用从资源库根到所属分类的名称链；
+        否则从选中的节点开始计算，直接选中的 Mod 平铺输出。
+        路径取自数据库中的逻辑分类，按 Mod 编号去重，避免重叠选择重复导出。
+        """
+        preserve = bool(self._config.get("export.preserve_tree", True))
+        chars = self._mod_manager.get_characters()
+        char_map = {c.id: c for c in chars}
+
+        def name_chain(root_id, leaf_id: str) -> str:
+            """从 leaf_id 沿 category_id 向上取类别名链。
+            root_id=None → 一直取到全局顶层根；否则到 root_id（含）为止。"""
+            parts: list[str] = []
+            cur = leaf_id
+            guard = 0
+            while cur and cur in char_map and guard < 1000:
+                guard += 1
+                c = char_map[cur]
+                parts.append(c.name or c.name_en or cur)
+                if cur == root_id:
+                    break
+                cur = c.parent_id
+            parts.reverse()
+            return str(Path(*parts)) if parts else ""
+
+        items: list[ExportItem] = []
+        seen: set[str] = set()
+        for cid in cat_ids:
+            for dcid in self._mod_manager.get_subtree_ids(cid):
+                # 勾选 → 从全局根算链；未勾选 → 从选中类别 cid 算链
+                rel = name_chain(None, dcid) if preserve else name_chain(cid, dcid)
+                for mod in self._mod_manager.get_mods(node_id=dcid):
+                    if mod.mod_id in seen:
+                        continue
+                    seen.add(mod.mod_id)
+                    items.append(
+                        ExportItem(
+                            name=mod.display_name,
+                            src_path=mod.path,
+                            rel_dir=rel,
+                            meta=share_meta_from_mod(mod),
+                            preview_paths=list(mod.preview_images or []),
+                        )
+                    )
+        for mid in mod_ids:
+            if mid in seen:
+                continue
+            mod = self._mod_manager.get_mod(mid)
+            if mod:
+                seen.add(mid)
+                # 勾选 → 保留该 Mod 所属类别的完整链；未勾选 → 平铺到 dest 根
+                rel = name_chain(None, mod.node_id) if preserve else ""
+                items.append(
+                    ExportItem(
+                        name=mod.display_name,
+                        src_path=mod.path,
+                        rel_dir=rel,
+                        meta=share_meta_from_mod(mod),
+                        preview_paths=list(mod.preview_images or []),
+                    )
+                )
+        return items
+
+    def _run_export_plan(self, items: list[ExportItem]) -> None:
+        """按导出计划（含 rel_dir）执行导出：选目录 → 右下角进度浮层（非模态）。"""
+        dest_dir = QFileDialog.getExistingDirectory(self, tr("选择导出目录"))
+        if not dest_dir:
+            return
+        self._start_export(dest_dir, export_items=items)
