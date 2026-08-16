@@ -3763,3 +3763,206 @@ class MainWindow(QMainWindow):
         self._sync_overview_mod(mod)
         self._overview_page._panel_preview.set_images(mod.preview_images)
         self._overview_page._update_card_preview_by_path(mod_id, mod.preview_images[0] if mod.preview_images else "")
+
+    @_invalidates_library_probe
+    def _on_overview_preview_delete_all(self, mod_id: str) -> None:
+        """删除当前 Mod 的全部预览文件，成功后清空详情预览并更新卡片。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if mod is None or not mod.preview_images:
+            return
+        from src.core.preview_operations import delete_preview_files
+
+        if not delete_preview_files(self._mod_manager, mod_id, list(mod.preview_images)):
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        self._sync_overview_mod(mod)
+        self._overview_page._panel_preview.clear()
+        self._overview_page._update_card_preview_by_path(mod_id, "")
+
+    @_invalidates_library_probe
+    def _on_overview_preview_reorder(self, mod_id: str, image_path: str) -> None:
+        """将当前预览保存为主图，同时更新索引和元数据。
+
+        以路径定位图像，避免展示顺序与已保存顺序不同。原地更新已选 Mod 的列表，
+        保持预览栏和卡片对同一对象的引用。
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if not mod_id or not image_path:
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod or not mod.preview_images:
+            return
+        target = -1
+        for i, p in enumerate(mod.preview_images):
+            if OverviewPage._preview_paths_equal(p, image_path):
+                target = i
+                break
+        if target <= 0:
+            return  # 不在库里，或已经是主图 —— 无需写库
+        img = mod.preview_images.pop(target)
+        mod.preview_images.insert(0, img)
+        if not self._mod_manager.update_mod(mod):
+            return
+        new_order = list(mod.preview_images)
+        sel = self._overview_page._selected_mod
+        if sel is not None and sel.mod_id == mod_id:
+            sel.preview_images[:] = new_order
+        for m in self._overview_page._current_mods:
+            if m.mod_id == mod_id:
+                m.preview_images[:] = new_order
+        for entry in self._overview_page._display_items:
+            data = entry.get("data")
+            if entry.get("type") == "mod" and getattr(data, "id", "") == mod_id:
+                data.preview_images[:] = new_order
+        logger.info("Overview 预览图已设为主图: %s", Path(img).name)
+
+    # Mod 操作
+
+    @_invalidates_library_probe
+    def _on_gallery_mod_toggle(self, mod_id: str) -> None:
+        """将画廊的启停请求转入与总览相同的部署事务入口。"""
+        self._on_overview_mod_toggle(mod_id)
+
+    @_invalidates_library_probe
+    def _on_mod_edit(self, mod_id: str) -> None:
+        """校验 Mod 元数据身份后复用编辑对话框，并由标签事务提交字段与标签修改。
+
+        保存成功后按需同步文件夹名称，刷新受影响条目；重命名或侧车文件同步失败单独提示，保留已提交信息。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod:
+            return
+        if self._mod_manager.check_mod_operation(mod_id, metadata=True, full=False) is None:
+            return
+        original_name = mod.name
+        dialog = getattr(self, "_mod_edit_dialog", None)
+        if dialog is not None and getattr(dialog, "isVisible", lambda: False)():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        if dialog is None:
+            dialog = ModEditDialog(mod, parent=self)
+            self._mod_edit_dialog = dialog
+        try:
+            dialog.bind_mod(mod, tag_service=self._mod_manager.get_tag_service())
+        except Exception as exc:
+            from src.core.operation_preflight import OperationPreflightError
+
+            if isinstance(exc, OperationPreflightError):
+                self._mod_manager.report_operation_failure(exc)
+            else:
+                QMessageBox.warning(self, tr("无法编辑 Mod"), str(exc))
+            return
+        dialog.set_save_handler(lambda fields, draft: self._mod_manager.commit_tag_edit(draft, fields))
+        if not dialog.exec():
+            return
+        result = dialog.get_result()
+        if not result:
+            return
+        from src.models.tag import TagCommitResult
+        from src.utils import fs
+
+        committed = result.get("tag_commit_result")
+        if not isinstance(committed, TagCommitResult):
+            logger.error("Mod 编辑未返回有效提交结果：%s", mod_id)
+            return
+        changed = {saved.mod_id: saved for saved in committed.mods}
+        saved = changed.get(mod_id)
+        followup_errors = []
+        new_name = result.get("name", original_name)
+        if saved and new_name and new_name != original_name and result.get("sync_folder", True):
+            # 显示元数据已经提交，物理改名独立执行，不重新提交表单。
+            old_path = saved.path
+            try:
+                if not fs.exists(old_path):
+                    raise OSError(tr("Mod 文件或文件夹不存在"))
+                renamed_mod = self._mod_manager.rename_mod(mod_id, new_name, sync_folder=True)
+                if renamed_mod is None:
+                    raise OSError(tr("文件或文件夹未能完成重命名"))
+                changed[mod_id] = renamed_mod
+            except Exception as exc:
+                logger.warning("Mod 文件或文件夹重命名失败 (%s)：%s", mod_id, exc)
+                followup_errors.append(tr("Mod 文件或文件夹未能重命名。"))
+        refresh_tags = getattr(self._overview_page, "refresh_tags", None)
+        conditions_changed = False
+        if callable(refresh_tags):
+            conditions_changed = bool(refresh_tags(refresh_view=False))
+        if conditions_changed:
+            # 移除活动筛选标签可能显示更多内容，直接重新投影一次，避免先局部重绘。
+            self._refresh_overview_mods()
+        else:
+            self._overview_page.update_mods_in_view(list(changed.values()))
+        if committed.sidecar_failed_ids:
+            count = len(set(committed.sidecar_failed_ids))
+            followup_errors.append(tr("{count} 个 Mod 的信息未能同步到 Mod 文件。", count=count))
+        if followup_errors:
+            QMessageBox.warning(
+                self,
+                tr("已保存，部分后续操作未完成"),
+                tr("Mod 信息和标签已保存。\n") + "\n".join(followup_errors),
+            )
+        return
+        # 局部差异已更新排序、筛选和详情，原生监控继续处理真实外部变化。
+
+    # 导入
+
+    @_invalidates_library_probe
+    def _do_import(self, items: list, node_id: str, *, on_done=None) -> None:
+        """在后台执行批量导入，并通过共用任务中心浮层显示进度。
+
+        导入期间用户可继续浏览。完成回调负责解除 ``_import_active`` 状态保护、
+        对账源目录，并执行一次总览重建。
+
+        ``on_done(results)``：可选的批次完成回调（商店安装用它做界面收尾），先于
+        本方法自己的刷新逻辑执行，无论本批是否有成功项都会调用。
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        from src.ui.dialogs.import_progress import ImportProgressDialog
+
+        controller = ImportProgressDialog(
+            items,
+            node_id,
+            self._mod_manager,
+            parent=self,
+            panel=self._intake_progress,
+        )
+
+        def _on_import_finished(results):
+            """清除导入活动状态、交付调用方结果并继续排队安装，成功导入后延后刷新当前分类。"""
+            self._import_active = False
+            self._import_controller = None
+            if on_done is not None:
+                try:
+                    on_done(results)
+                except Exception as exc:
+                    logger.warning("导入完成回调失败: %s", exc)
+            # 导入已结束，在下一轮事件循环继续处理商店安装队列，避免重入。
+            if self._pending_gb_installs:
+                call_later(0, self, self._drain_gb_installs)
+            imported_count = sum(1 for _, mod in results if mod is not None)
+            if imported_count <= 0:
+                return
+            # 导入完成后已直接刷新页面，抑制同次写入引起的重复监控重建。
+            self._suppress_watcher()
+            self._watcher_debounce.stop()
+            refresh_game_id = self._game_service.current_game_id
+            logger.info("批量导入完成: %d 个 Mod", imported_count)
+            self._defer_source_reconcile()
+            call_later(
+                0,
+                self,
+                lambda gid=refresh_game_id: self._reload_overview_level(gid),
+            )
+
+        controller.import_finished.connect(_on_import_finished)
+        # 持有控制器，防止异步导入完成前被垃圾回收。
+        self._import_controller = controller
+        # 暂停 watcher 对账，避免将待压缩或删除的中间目录登记为独立 Mod。
+        # 导入完成回调负责解除此状态保护。
+        self._import_active = True
+        controller.start_import()
