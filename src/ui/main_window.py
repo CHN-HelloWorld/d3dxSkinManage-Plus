@@ -3602,3 +3602,164 @@ class MainWindow(QMainWindow):
     def _on_overview_files_dropped(self, paths: list, node_id: str) -> None:
         """OverviewPage 拖拽文件导入"""
         call_later(0, self, lambda: self._show_overview_import_dialog(paths, node_id))
+
+    def _show_overview_import_dialog(self, paths: list, node_id: str) -> None:
+        """按指定分类和初始路径打开导入对话框，将确认结果连接到概览导入入口。"""
+        dialog = ModImportDialog(
+            node_id=node_id,
+            initial_paths=paths,
+            parent=self,
+        )
+        dialog.import_confirmed.connect(self._do_import_overview)
+        dialog.exec()
+
+    @_invalidates_library_probe
+    def _on_items_move(self, cat_ids: list, mod_ids: list, target_parent: str) -> None:
+        """处理剪切粘贴：移动类别和 Mod"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        moved = 0
+        for cid in cat_ids:
+            if self._mod_manager.move_character(cid, target_parent):
+                moved += 1
+        for mid in mod_ids:
+            if self._mod_manager.move_mod(mid, target_parent):
+                moved += 1
+        if moved > 0:
+            self._load_characters(self._game_service.current_game_id)
+            self._refresh_overview_mods()
+            logger.info("移动项目完成: %d 个", moved)
+
+    def _sync_overview_mod(self, mod: Mod) -> None:
+        """同步更新 overview 页面中的 Mod 引用（_selected_mod + _current_mods），避免全量刷新"""
+        # 更新 _selected_mod
+        if self._overview_page._selected_mod and self._overview_page._selected_mod.mod_id == mod.mod_id:
+            self._overview_page._selected_mod = mod
+        # 同步 _current_mods 中对应 Mod 对象
+        for i, m in enumerate(self._overview_page._current_mods):
+            if m.mod_id == mod.mod_id:
+                self._overview_page._current_mods[i] = mod
+                break
+        # 同步 _display_items 中对应 Mod 对象
+        for item in self._overview_page._display_items:
+            if item["type"] == "mod" and item["id"] == mod.mod_id:
+                item["data"] = mod
+                break
+
+    @_invalidates_library_probe
+    def _on_overview_preview_dropped(self, item_id: str, image_path: str) -> None:
+        """处理总览页的预览图拖入或卡片图片设置，并就地更新相关卡片。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        mod = self._mod_manager.get_mod(item_id)
+        if mod:
+            if not self._mod_manager.save_preview(item_id, image_path):
+                return
+            mod = self._mod_manager.get_mod(item_id)
+            if mod and mod.preview_images:
+                new_index = len(mod.preview_images) - 1
+                if new_index > 0:
+                    img = mod.preview_images.pop(new_index)
+                    mod.preview_images.insert(0, img)
+                    if not self._mod_manager.update_mod(mod):
+                        return
+                # 就地更新 Mod 引用，避免全量重建卡片。
+                self._sync_overview_mod(mod)
+                # 同步更新卡片和面板预览
+                self._overview_page._update_card_preview_by_path(
+                    item_id, mod.preview_images[0] if mod.preview_images else ""
+                )
+                # 更新预览面板显示 —— 仅当右栏正在看这个 Mod。卡片右键上图可能发生在
+                # 多选态下（面板显示的是另一个 Mod），无条件重灌会把右栏内容换错。
+                sel = self._overview_page._selected_mod
+                if sel is not None and sel.mod_id == item_id:
+                    self._overview_page._panel_preview.set_images(mod.preview_images, initial_index=0)
+            logger.info("Mod 预览图已保存（Overview）: %s", item_id[:8])
+
+    @_invalidates_library_probe
+    def _on_category_preview_dropped(self, cat_id: str, image_path: str) -> None:
+        """处理类别预览图的拖入、修改和删除。"""
+        if not image_path:
+            # 空路径表示删除预览图。
+            if not self._mod_manager.update_character_thumbnail(cat_id, ""):
+                return
+            # 仅更新单个卡片
+            card = self._overview_page._vs_card_cache.get(cat_id)
+            if card and isinstance(card, CharacterCard):
+                card._data["thumbnail"] = ""
+                card._cached_pixmap = None
+                card._thumb.clear()
+                card._thumb.setText(card._data.get("name", ""))
+                card._thumb.setWordWrap(True)
+                card._thumb.setStyleSheet("font-size: 14px; font-weight: bold;")
+            else:
+                self._load_characters(self._game_service.current_game_id)
+            # 同步内部角色数据
+            for c in self._overview_page._all_characters:
+                if c.get("id") == cat_id:
+                    c["thumbnail"] = ""
+                    break
+            if (
+                self._overview_page._panel_mode == "category"
+                and self._overview_page._selected_category
+                and self._overview_page._selected_category.get("id") == cat_id
+            ):
+                self._overview_page._selected_category["thumbnail"] = ""
+                self._overview_page._show_category_panel(self._overview_page._selected_category)
+            logger.info("类别预览图已删除: %s", cat_id[:8])
+            return
+        if not Path(image_path).exists():
+            return
+        # 类别仅一张预览图，直接覆盖
+        if not self._mod_manager.update_character_thumbnail(cat_id, image_path):
+            return
+        # 仅更新单个卡片的预览图，无需全量刷新
+        card = self._overview_page._vs_card_cache.get(cat_id)
+        if card and isinstance(card, CharacterCard):
+            card._data["thumbnail"] = image_path
+            if image_path and Path(image_path).exists():
+                pixmap = QPixmap(image_path)
+                if not pixmap.isNull():
+                    card._cached_pixmap = pixmap
+                    scaled = pixmap.scaled(
+                        card._card_width - 8,
+                        card._preview_h,
+                        Qt.AspectRatioMode.KeepAspectRatio,
+                        Qt.TransformationMode.FastTransformation,
+                    )
+                    card._thumb.setPixmap(scaled)
+            else:
+                card._cached_pixmap = None
+                card._thumb.clear()
+                card._thumb.setText(card._data.get("name", ""))
+        else:
+            # 卡片不在可见缓存中，回退到全量刷新
+            self._load_characters(self._game_service.current_game_id)
+        # 同步预览面板
+        if (
+            self._overview_page._panel_mode == "category"
+            and self._overview_page._selected_category
+            and self._overview_page._selected_category.get("id") == cat_id
+        ):
+            self._overview_page._selected_category["thumbnail"] = image_path
+            self._overview_page._show_category_panel(self._overview_page._selected_category)
+        # 同步内部角色数据
+        for c in self._overview_page._all_characters:
+            if c.get("id") == cat_id:
+                c["thumbnail"] = image_path
+                break
+        logger.info("类别预览图已更新: %s", cat_id[:8])
+
+    @_invalidates_library_probe
+    def _on_overview_preview_delete(self, mod_id: str, image_path: str) -> None:
+        """在无文件事务冲突时删除指定预览，并同步详情图片列表与卡片封面。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        from src.core.preview_operations import delete_preview_files
+
+        if not delete_preview_files(self._mod_manager, mod_id, [image_path]):
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        self._sync_overview_mod(mod)
+        self._overview_page._panel_preview.set_images(mod.preview_images)
+        self._overview_page._update_card_preview_by_path(mod_id, mod.preview_images[0] if mod.preview_images else "")
