@@ -2315,3 +2315,90 @@ class MainWindow(QMainWindow):
         self._overview_root_presented = False
         overview.set_current_mods(mods, subtree_mods, refresh_view=not root_presented)
         self._defer_source_reconcile()
+
+    def _reload_overview_level(self, gid: str) -> None:
+        """一次性重建总览当前层级（类别 + Mod），只触发一次 _refresh_cards。
+
+        先 set_characters(refresh=False) 仅更新类别数据与父子映射、不重建卡片，再由
+        _refresh_overview_mods → set_current_mods 触发唯一一次重排。避免「先 set_characters
+        再 set_current_mods」两次重建造成的二次闪烁（也减少导入后卡片重排的崩溃窗口）。"""
+        if not gid or not self._game_service.has_active_game():
+            self._overview_page.set_characters([], force_root=True)
+            return
+        chars = self._mod_manager.get_characters_for_ui(gid)
+        self._overview_page.set_characters(chars, refresh=False)
+        self._refresh_overview_mods()
+
+    def _suppress_watcher(self, seconds: float = 1.2) -> None:
+        """短期抑制应用自身文件操作引起的重复目录刷新。
+
+        导入和分类修改已直接更新视图，抑制窗口覆盖监控防抖时间，避免同一操作再次重建页面。
+        """
+        self._watcher_suppress_until = time.monotonic() + seconds
+
+    def _collect_subtree_mods(self, parent_id: str) -> list[Mod]:
+        """收集某目录下（含子孙目录）的全部 Mod。"""
+        if not self._game_service.has_active_game():
+            return []  # 防空 game_id 回退到全库（见 _refresh_gallery 注释）
+        if not parent_id:
+            return self._mod_manager.get_mods(game_id=self._game_service.current_game_id)
+        subtree_ids = self._mod_manager.get_subtree_ids(parent_id)
+        all_mods: list[Mod] = []
+        for cid in subtree_ids:
+            all_mods.extend(self._mod_manager.get_mods(node_id=cid))
+        return all_mods
+
+    def _require_deploy_dir(self) -> bool:
+        """启用 Mod / 切换预设前确认已配置部署目录；未配置则提示并返回 False。
+
+        部署操作要求有效的部署目录，因此在界面入口统一检查并提示缺失配置。
+        """
+        root_watch = getattr(self, "_deployment_root_watch", None)
+        if root_watch is not None:
+            resolution = root_watch.check_current()
+            if resolution.status == "missing":
+                self._on_deployment_root_invalid(self._game_service.current_game_id, resolution.previous_path)
+                return False
+            if resolution.status == "moved":
+                return False  # 存在待提交修改或配置保存失败。
+            if resolution.status == "current":
+                from src.core.library_snapshot import path_key
+
+                bound = str(self._mod_manager._storage.get_deploy_dir() or "")
+                if path_key(bound) != path_key(resolution.path):
+                    self._apply_migoto_for_current_game()
+                    self._ensure_toast().done(tr("正在准备部署目录，请稍后重试"), ok=False, hold_ms=2500)
+                    return False
+        if self._mod_manager.has_deploy_dir():
+            return True
+        from PySide6.QtWidgets import QMessageBox
+
+        QMessageBox.information(
+            self,
+            tr("未配置 Mod 文件夹"),
+            tr("当前游戏尚未配置「Mod 文件夹」，请前往「游戏」页编辑当前游戏，设置「Mod 文件夹」后重试。"),
+        )
+        return False
+
+    # 角色目录单 Mod 互斥（画廊/总览共用一份）
+
+    _CONFLICT_SUPPRESS_KEY = "ui.suppress_character_conflict_prompt"
+
+    def _mods_being_deployed(self) -> set[str]:
+        """返回正在后台部署的 Mod 编号。
+
+        部署完成前数据库仍为禁用状态，互斥检查须包含这些在途任务，
+        以维持角色目录同时只启用一个 Mod 的约束。
+        """
+        return {mid for mid in getattr(self, "_deploy_workers", {})}
+
+    def _character_conflict_scope(self, mod):
+        """确定 Mod 所属角色祖先及冲突子树；无角色范围时返回空集合。"""
+        if not mod.node_id:
+            return None, []
+        ancestor = self._mod_manager.find_character_ancestor(mod.node_id)
+        if ancestor is not None:
+            return ancestor, self._mod_manager.get_subtree_ids(ancestor.id)
+        current = self._mod_manager.get_character(mod.node_id)
+        scope_ids = [mod.node_id] if current and current.node_type == "character" else []
+        return None, scope_ids
