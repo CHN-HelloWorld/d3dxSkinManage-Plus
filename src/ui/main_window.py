@@ -2906,3 +2906,148 @@ class MainWindow(QMainWindow):
             return
         if report is not None and report.changed:
             logger.info("d3dx_user.ini 变更：已采集 %d 个 Mod 的变体状态", len(report.attributed))
+
+    @_invalidates_library_probe
+    def _on_overview_mod_delete(self, mod_id: str) -> None:
+        """删除总览页中的 Mod。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if self._preset_apply_worker is not None:
+            return
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod:
+            return
+        delete_method = self._configured_mod_delete_method()
+        # 删除前抓 gb 元数据——_mod_manager.delete_mod 之后再查就无法获取了
+        gb_mod_id = self._extract_gb_mod_id(mod)
+
+        # 已启用的 Mod 使用不同的提示
+        if mod.is_enabled:
+            message = (
+                tr("当前 Mod 已启用，将先从游戏目录移除，再放入系统回收站。\n是否继续？")
+                if delete_method == "recycle_bin"
+                else tr("当前Mod已启用，您是否仍要删除它？\n此操作不可恢复！")
+            )
+            reply = QMessageBox.question(
+                self,
+                t("确认"),
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+        else:
+            message = (
+                tr("确定要将“{display_name}”放入系统回收站吗？", display_name=mod.display_name)
+                if delete_method == "recycle_bin"
+                else t("确定删除该 Mod 吗？此操作不可恢复。")
+            )
+            reply = QMessageBox.question(
+                self,
+                t("确认"),
+                message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            )
+
+        if reply == QMessageBox.StandardButton.Yes:
+            if delete_mod_with_fallback(
+                self,
+                self._mod_manager,
+                mod_id,
+                delete_method,
+            ):
+                # 删除当前选中的 Mod 时清空预览面板。
+                if self._overview_page._selected_mod and self._overview_page._selected_mod.mod_id == mod_id:
+                    self._overview_page._selected_mod = None
+                    self._overview_page._selected_ids.discard(mod_id)
+                    self._overview_page._hide_panel()
+                # 立即同步 UI（角色 + Mod 列表）
+                self._load_characters(self._game_service.current_game_id)
+                self._refresh_overview_mods()
+                # 分别在下一个事件循环和延迟 500 毫秒后刷新，合并异步文件操作引起的状态变化。
+                call_later(0, self, self._refresh_overview_mods)
+                self._watcher_debounce.start()
+                # 通知 Mod 商店把对应卡片的「已安装」徽章撤掉
+                self._notify_store_mod_deleted(gb_mod_id)
+
+    @_invalidates_library_probe
+    def _on_overview_mod_batch_delete(self, mod_ids: list) -> None:
+        """批量删除总览页中的 Mod，并清理选中状态和预览面板。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if self._preset_apply_worker is not None:
+            return
+        if not mod_ids:
+            return
+
+        # 记录选中的Mod id（在删除前）
+        selected_mod_id = self._overview_page._selected_mod.mod_id if self._overview_page._selected_mod else ""
+        # 删除前先把 gb_mod_id 抓出来——删除后再去 mod_index 查就空了
+        gb_mod_ids: list[int] = []
+        for mid in mod_ids:
+            m = self._mod_manager.get_mod(mid)
+            if m:
+                gid = self._extract_gb_mod_id(m)
+                if gid:
+                    gb_mod_ids.append(gid)
+
+        # 使用删除进度对话框
+        dialog = DeleteProgressDialog(
+            mod_ids,
+            self._mod_manager,
+            parent=self,
+            delete_method=self._configured_mod_delete_method(),
+        )
+        dialog.deletion_finished.connect(
+            lambda count: self._on_batch_delete_finished(count, selected_mod_id, mod_ids, gb_mod_ids)
+        )
+        dialog.start_deletion()
+        dialog.exec()
+
+    def _on_batch_delete_finished(
+        self,
+        deleted_count: int,
+        selected_mod_id: str,
+        mod_ids: list,
+        gb_mod_ids: list[int] | None = None,
+    ):
+        """批量删除完成后的处理"""
+        if deleted_count > 0:
+            # 若当前选中的Mod在删除列表中，清空预览面板
+            if selected_mod_id and selected_mod_id in mod_ids:
+                self._overview_page._selected_mod = None
+                self._overview_page._selected_ids.discard(selected_mod_id)
+                self._overview_page._hide_panel()
+            self._load_characters(self._game_service.current_game_id)
+            self._refresh_overview_mods()
+            # 异步回退处理刷新 + watcher 防抖（同 _on_overview_mod_delete）
+            call_later(0, self, self._refresh_overview_mods)
+            self._watcher_debounce.start()
+            logger.info("批量删除 Mod 完成（Overview）: %d 个", deleted_count)
+            # 通知 Mod 商店去掉相应卡片的「已安装」徽章
+            if gb_mod_ids:
+                self._notify_store_mod_deleted(gb_mod_ids)
+
+    @staticmethod
+    def _extract_gb_mod_id(mod) -> int:
+        """从本地 Mod 中抠出 gamebanana mod_id；不是 GB 导入的返回 0。"""
+        try:
+            gb = (mod.info.custom_data or {}).get("gamebanana") or {}
+            return int(gb.get("mod_id") or 0)
+        except Exception:
+            return 0
+
+    def _configured_mod_delete_method(self) -> str:
+        """读取有效的 Mod 删除方式，未知配置回退为永久删除。"""
+        method = self._config.get("mods.delete_method", "permanent")
+        return method if method in ("permanent", "recycle_bin") else "permanent"
+
+    def _notify_store_mod_deleted(self, gb_mod_ids):
+        """通知 Mod 商店刷新对应卡片状态。store 页可能还没构建好，做容错。"""
+        if not gb_mod_ids:
+            return
+        store = getattr(self, "_gb_store_page", None)
+        if store is None or not hasattr(store, "notify_mod_deleted"):
+            return
+        try:
+            store.notify_mod_deleted(gb_mod_ids)
+        except Exception as exc:
+            logger.warning("notify_store_mod_deleted 失败: %s", exc)
