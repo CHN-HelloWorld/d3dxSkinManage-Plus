@@ -1553,3 +1553,53 @@ class MainWindow(QMainWindow):
         if svc.acknowledge_completed_updates():
             self._overview_page.set_update_status_text("")
         panel.dismiss()
+
+    def _on_stop_mod_updates(self, local_mod_id: str | None = None) -> None:
+        """为单个或全部更新打开停止确认，确认动作由更新服务处理。"""
+        from src.ui.mod_update_actions import confirm_stop_updates
+
+        confirm_stop_updates(
+            getattr(self, "_mod_updates_dialog", None) or self,
+            self._mod_update_service,
+            [local_mod_id] if local_mod_id is not None else None,
+        )
+
+    def _is_current_mod_update(self, local_mod_id: str) -> bool:
+        """检查 Mod 是否仍存在于当前游戏的任务、更新结果或本地库中。"""
+        svc = self._mod_update_service
+        return (
+            local_mod_id in svc.update_task_snapshots()
+            or local_mod_id in svc.get_update_status()
+            or any(mod.mod_id == local_mod_id for mod in self._mod_manager.get_mods())
+        )
+
+    def _restore_mod_update_task(self, local_mod_id: str) -> dict | None:
+        """读取任务快照并同步给当前游戏的更新中心，返回快照供结果处理复用。"""
+        snapshot = self._mod_update_service.update_task_snapshots().get(local_mod_id)
+        dlg = getattr(self, "_mod_updates_dialog", None)
+        if snapshot is not None and dlg is not None and dlg.property("gameId") == self._mod_manager.current_game_id:
+            dlg.set_task_snapshot(local_mod_id, snapshot)
+        return snapshot
+
+    @_invalidates_library_probe
+    def _on_update_task_changed(self, local_mod_id: str, snapshot: dict) -> None:
+        """仅处理当前游戏的任务变化，同步更新中心与后台通知并使库探测失效。"""
+        if snapshot.get("game_id") != self._mod_manager.current_game_id:
+            return
+        # 排队信号可能早于暂停、重试或游戏切换。
+        self._restore_mod_update_task(local_mod_id)
+        self._sync_mod_update_notification()
+
+    @_invalidates_library_probe
+    def _on_update_applied(self, local_mod_id: str, mod) -> None:
+        """为当前 Mod 恢复更新快照、显示完成状态，并尝试局部更新总览条目。"""
+        if not self._is_current_mod_update(local_mod_id):
+            return
+        self._restore_mod_update_task(local_mod_id)
+        self._overview_page.set_update_status_text(tr("更新完成"))
+        # 刷新该卡片：去角标 + 同步新内容/版本（复用现有就地刷新）
+        if hasattr(self._overview_page, "update_mod_in_view"):
+            try:
+                self._overview_page.update_mod_in_view(mod)
+            except Exception:
+                pass
