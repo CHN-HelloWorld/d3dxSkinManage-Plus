@@ -4914,3 +4914,59 @@ class MainWindow(QMainWindow):
             self._on_game_changed(game_id)
         self._select_nav_page(self.PAGE_OVERVIEW)
         self._overview_page._navigate_to("")
+
+    def _category_preset_dialog_finished(self) -> None:
+        """释放分类预设窗口，恢复积压的目录事件处理，并继续等待中的主窗口关闭。"""
+        dialog = getattr(self, "_category_preset_dialog", None)
+        self._category_preset_dialog = None
+        if dialog is not None:
+            dialog.deleteLater()
+        if getattr(self, "_watcher_events", None) or getattr(self._mod_manager, "_deferred_source_events", None):
+            self._watcher_debounce.start(0)
+        if getattr(self, "_category_preset_close_pending", False):
+            self._category_preset_close_pending = False
+            call_later(0, self, self.close)
+
+    def _on_view_logs(self) -> None:
+        """打开应用内日志查看器（只读，排查问题用）。"""
+        from src.ui.dialogs.log_viewer import LogViewerDialog
+
+        LogViewerDialog(self).exec()
+
+    # 辅助
+
+    def _start_file_watcher(self, game_id: str) -> None:
+        """启动或重启文件监控"""
+        self._watcher_changed_paths.clear()
+        self._watcher_events.clear()
+        self._deployment_events = []
+        self._library_discovery.reset_scope()
+        self._library_local_discovery.reset_scope()
+        self._watcher_debounce.stop()
+        watch_path = get_data_dir() / self._game_service.get_resource_dir(game_id) / "mods"
+        watch_path.mkdir(parents=True, exist_ok=True)
+        self._file_watcher.start(watch_path)
+        # 即使 watchdog 不可用/启动失败，轮询仍提供最终一致性。
+        self._source_state_poll.start()
+
+    def _reconcile_deploy_state(self) -> None:
+        """周期定时器共享不可变探测输入和待处理标记。"""
+        if _plugin_operation_busy(self):
+            return
+        if self._game_service.has_active_game():
+            self._library_probe.schedule(periodic=True)
+
+    def _defer_source_reconcile(self) -> None:
+        """让周期源对账避开刚开始的卡片逐项动画。"""
+        if self._source_state_poll.isActive():
+            self._source_state_poll.start()
+
+    def _reconcile_source_state(self) -> None:
+        """定时核对已登记的源和部署路径，不发现新增内容。
+
+        新增发现由目录事件、手动刷新、启动和游戏切换触发；纳管进行时暂停本轮检查。
+        """
+        if _plugin_operation_busy(self):
+            return
+        if self._game_service.has_active_game():
+            self._library_probe.schedule(periodic=True)
