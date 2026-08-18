@@ -5406,3 +5406,188 @@ class MainWindow(QMainWindow):
             self._ensure_toast().done(
                 tr("{who}用户偏好已写入；若游戏仍在运行，请退出后重新应用，再启动。", who=who), ok=True, hold_ms=5000
             )
+
+    def _show_operation_failure(self, payload):
+        """显示当前游戏的操作失败详情，确认且游戏未切换时删除对应记录并刷新视图。"""
+        from src.ui.dialogs.operation_failure import OperationFailureDialog
+
+        game_id = payload.get("game_id")
+        if game_id != self._mod_manager.current_game_id:
+            return
+        error = payload["error"]
+        node_id = getattr(error, "node_id", None)
+        target = self._mod_manager.get_character(node_id) if node_id else self._mod_manager.get_mod(error.mod_id)
+        delete_method = "permanent" if node_id else str(self._config.get("mods.delete_method", "permanent"))
+        if (
+            OperationFailureDialog(
+                error,
+                self,
+                target_name=target.display_name if target else "",
+                delete_method=delete_method,
+            ).exec()
+            != 1
+        ):
+            return
+        if game_id != self._mod_manager.current_game_id:
+            return
+        removed = (
+            self._mod_manager.delete_character(node_id)
+            if node_id
+            else self._mod_manager.delete_mod(error.mod_id, delete_method=delete_method)
+        )
+        if removed:
+            self._refresh_intake_views()
+        else:
+            self._toast_done(tr("删除未完成，相关记录已保留。"))
+
+    def _schedule_activation_reconcile(self, game_id: str, trigger: str) -> None:
+        """先显示索引，再异步对账离线变化。"""
+        self._reconcile_library(game_id, trigger=trigger, publish="on-change")
+
+    def _resume_plugin_deferred_intake(self) -> None:
+        """插件文件操作结束后，为仍处于当前游戏的延后纳管请求重新扫描和规划。"""
+        pending = getattr(self, "_plugin_intake_pending", None)
+        if pending is None or _plugin_operation_busy(self):
+            return
+        self._plugin_intake_pending = None
+        game_id, manual = pending
+        if game_id == self._game_service.current_game_id:
+            # 插件文件工作后重新规划，不能复用之前排队的报告。
+            self._reconcile_library(game_id, trigger="manual", manual=manual)
+
+    @_invalidates_library_probe
+    def _start_intake_batch(self, report, *, manual: bool) -> bool:
+        """消费统一对账给出的纳管计划：处置损坏容器 + 起后台 worker。"""
+        if report.game_id != self._game_service.current_game_id or not self._game_service.has_active_game():
+            return False  # 已切走游戏：这批属于上一个游戏，丢弃
+        if _plugin_operation_busy(self):
+            pending = getattr(self, "_plugin_intake_pending", None)
+            self._plugin_intake_pending = (report.game_id, manual or bool(pending and pending[1]))
+            return False
+        if self._intake_worker is not None or self._intake_settling:
+            # 计划做好后才被别的批次抢先（延后起批时可能发生）→ 记一次补扫。
+            if not self._intake_rescan_pending:
+                self._intake_rescan_pending = True
+                self._intake_progress.queue_info(1)
+            self._intake_rescan_manual = self._intake_rescan_manual or manual
+            return False
+
+        requests = list(report.intake_requests)
+        invalid_containers = list(report.invalid_containers)
+
+        broken_note = ""
+        if invalid_containers:
+            # 无法解析标记的容器不进入纳管流程，须单独提示处置。
+            # 处置对话框运行嵌套事件循环，期间阻止目录监控或手动刷新启动新批次。
+            self._intake_settling = True
+            try:
+                broken_note = self._dispose_broken_containers(invalid_containers)
+            finally:
+                self._intake_settling = False
+            if broken_note:
+                self._refresh_intake_views()
+
+        if not requests:
+            if broken_note:
+                self._intake_progress.finish(
+                    tr("已处置损坏的 Mod 容器"),
+                    tr("未发现可纳管的新增内容{broken_note}", broken_note=broken_note),
+                    ok=False,
+                )
+            elif manual:
+                self._intake_progress.finish(tr("Mod 库已是最新"), tr("未发现需要纳管的新增内容"))
+            return False
+
+        if not manual:
+            self._intake_progress.start_batch(len(requests), tr("发现 {count} 个新 Mod，正在纳管", count=len(requests)))
+        else:
+            self._intake_progress.start_batch(len(requests), tr("正在纳管 {count} 个新增项", count=len(requests)))
+        # 逐项明细：先全部登记为「排队中」，随进度逐个转态。
+        self._intake_item_names = [Path(str(r.source_path)).name for r in requests]
+        # 保存本批源路径，停止后据此查找并处理仍未纳管的输入。
+        self._intake_item_paths = [Path(str(r.source_path)) for r in requests]
+        self._intake_handled_indexes: set[int] = set()
+        # 失败/重复项索引单独记：它们也算「已处置」，故不能从 _intake_handled_indexes
+        # 反推；两者再分桶，因为处置弹窗文案要按原因区分。
+        self._intake_failed_indexes: set[int] = set()
+        self._intake_duplicate_indexes: set[int] = set()
+        # 本轮发现阶段已处置的损坏容器文案，结算时拼进终态通知。
+        self._intake_broken_note = broken_note
+        # 新一批开始：清掉上一批的提交记录与终止决策，否则「取消全部」会误删上批的 Mod。
+        self._intake_committed_mods = []
+        self._intake_cancel_all = False
+        for index, name in enumerate(self._intake_item_names):
+            self._intake_progress.update_item(index, name, ST_QUEUED)
+        # 投放/F5 纳管与程序内导入共用同一个并行度设置（import.parallel_workers）：
+        # 两条通道的 prepare 都是各自独立的文件 IO，没道理一条并行一条串行。
+        # 单项批次强制 1，省掉没意义的线程池开销。
+        parallel_workers = effective_archive_workers(self._config.get("import.parallel_workers"))
+        worker = IntakeWorker(
+            requests,
+            self._intake_service,
+            max_workers=parallel_workers if len(requests) > 1 else 1,
+            parent=self,
+        )
+        worker.progress_updated.connect(self._on_intake_progress)
+        worker.item_progress.connect(self._on_intake_item_progress)
+        worker.item_prepared.connect(self._on_intake_item_prepared)
+        worker.item_failed.connect(self._on_intake_item_failed)
+        worker.batch_finished.connect(self._on_intake_batch_finished)
+        worker.finished.connect(worker.deleteLater)
+        self._intake_worker = worker
+        worker.start()
+        return True
+
+    def _on_panel_stop_requested(self) -> None:
+        """处理任务面板发出的停止请求。
+
+        投放纳管和程序内导入分别处理自身批次的确认与回滚。
+        """
+        if getattr(self, "_manual_refresh_active", False) and self._intake_worker is None and not self._intake_settling:
+            self._manual_refresh_active = False
+            self._intake_rescan_pending = self._intake_rescan_manual = False
+            self._library_discovery.cancel()
+            self._library_local_discovery.cancel(cancel_probe=False)
+            self._intake_progress.finish_cancelled(tr("刷新已停止"))
+            return
+        self._cancel_intake()
+
+    def _cancel_intake(self) -> None:
+        """停止投放纳管前，确认保留已提交结果或撤销整批操作。
+
+        纳管逐项提交，终止决策需覆盖已经入库的 Mod。
+        """
+        worker = self._intake_worker
+        if worker is None:
+            return
+        committed = list(getattr(self, "_intake_committed_mods", ()))
+        # 先冻结工作线程再显示确认框，避免嵌套事件循环期间继续提交导入结果。
+        worker.freeze()
+        cancel_all = True
+        if committed:
+            msg = QMessageBox(self)
+            msg.setWindowTitle(tr("停止纳管"))
+            total = len(getattr(self, "_intake_item_names", ()) or ())
+            remaining = max(0, total - len(committed))
+            msg.setText(
+                tr(
+                    "已纳管 {count} 个 Mod，还有 {remaining} 个未处理。\n\n请选择操作：",
+                    count=len(committed),
+                    remaining=remaining,
+                )
+            )
+            cancel_all_btn = msg.addButton(tr("取消全部纳管"), QMessageBox.ButtonRole.DestructiveRole)
+            msg.addButton(tr("保留已纳管的Mod"), QMessageBox.ButtonRole.AcceptRole)
+            # 误点 ■ 要有退路：选它则解冻放行，纳管照常继续。
+            resume_btn = msg.addButton(tr("继续导入"), QMessageBox.ButtonRole.RejectRole)
+            msg.setDefaultButton(resume_btn)
+            msg.exec()
+            clicked = msg.clickedButton()
+            if clicked is resume_btn:
+                worker.unfreeze()
+                return  # 不请求取消、不动决策位，纳管照常进行
+            cancel_all = clicked is cancel_all_btn
+        # 决策先记下，等 worker 真正停下来再在 batch_finished 里执行回滚。
+        self._intake_cancel_all = cancel_all
+        self._intake_progress.set_stop_enabled(False)
+        worker.request_cancel()  # 内部会解冻，让 worker 走到取消分支收尾
