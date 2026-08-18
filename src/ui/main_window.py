@@ -5074,3 +5074,208 @@ class MainWindow(QMainWindow):
         game_id, observations = payload
         if game_id == self._game_service.current_game_id:
             self._overview_page.set_source_observations(observations)
+
+    def _on_deployment_change(self, event) -> None:
+        """筛选当前监视代次中影响部署容器身份或位置的事件，合并路径后调度局部核对。"""
+        watcher = self._deploy_watcher
+        if event.generation != watcher.generation or event.root != str(watcher._watch_path):
+            return
+        if event.kind in {"root_replaced", "watch_failed", "root_offline"}:
+            self._schedule_watcher_restart(watcher, event.generation, event.root)
+        root = Path(event.root)
+        # INI 内容保存由同步器处理，仅容器成员和身份变化使部署位置证据失效。
+        paths = [Path(p) for p in (event.path, event.destination) if p]
+        relevant = [
+            p
+            for p in paths
+            if p == root or p.parent == root or (p.name == MOD_CONTAINER_MARKER and p.parent.parent == root)
+        ]
+        if event.kind in {"overflow", "zero_bytes", "root_replaced", "watch_failed", "root_offline"}:
+            relevant = [root]
+        if not relevant:
+            return
+        probe = getattr(self, "_library_probe", None)
+        if probe is not None:
+            probe.yield_to_local_events()
+        self._deploy_changed_paths.update(relevant)
+        if not hasattr(self, "_deployment_events"):
+            self._deployment_events = []
+        self._deployment_events.append(event)
+        if not self._deploy_watcher_debounce.isActive():
+            self._deploy_watcher_debounce.start(0)
+
+    def _schedule_watcher_restart(self, watcher, generation, root) -> None:
+        """重新启动失败或更换的根监控，旧代次不能重新激活它。"""
+        pending = getattr(self, "_watcher_restarts", None)
+        if pending is None:
+            pending = self._watcher_restarts = set()
+        key = (watcher, generation)
+        if key in pending:
+            return
+        pending.add(key)
+        expected_generation = [generation]
+
+        def retry():
+            """重连仍有效的监视范围并触发源审计；关闭或代次变化时退出，失败时延后一秒重试。"""
+            if watcher.generation != expected_generation[0] or getattr(self._library_probe, "closing", False):
+                pending.discard(key)
+                return
+            try:
+                if fs.is_dir(root) and watcher.start(root):
+                    pending.discard(key)
+                    if watcher is self._file_watcher:
+                        self._mod_manager._local_source_events = None
+                    self._library_probe.schedule(force_source_audit=True)
+                    return
+            except Exception as error:
+                logger.warning("重新接通目录监视失败 path=%s reason=%s", root, error)
+            expected_generation[0] = watcher.generation
+            call_later(1000, self, retry)
+
+        call_later(1000, self, retry)
+
+    def _refresh_deploy_changes(self) -> None:
+        """每次提交至多 32 个部署事件并发布局部差异，失败时把本批放回队首重试。"""
+        self._deploy_changed_paths.clear()
+        events = getattr(self, "_deployment_events", [])
+        batch, self._deployment_events = events[:32], events[32:]
+        if self._game_service.has_active_game() and (
+            batch or getattr(self._mod_manager, "_deferred_deployment_events", None)
+        ):
+            try:
+                delta = self._mod_manager.apply_local_deployment_events(batch)
+                self._publish_local_library_delta(delta)
+            except Exception:
+                logger.exception("局部部署事件提交失败，保留事件待重试")
+                self._deployment_events[:0] = batch
+                self._deploy_watcher_debounce.start(500)
+                return
+        if self._deployment_events:
+            self._deploy_watcher_debounce.start(0)
+        elif getattr(self._mod_manager, "_deferred_deployment_events", None):
+            self._deploy_watcher_debounce.start(50)
+
+    def _refresh_from_watcher(self) -> None:
+        """处理有限批次的资源事件，不受无关导入和审计阻塞。"""
+        self._watcher_changed_paths.clear()
+        batch, self._watcher_events = self._watcher_events[:32], self._watcher_events[32:]
+        if self._game_service.has_active_game() and (
+            batch or getattr(self._mod_manager, "_deferred_source_events", None)
+        ):
+            try:
+                delta = self._mod_manager.apply_local_source_events(batch)
+                inline_missing = (
+                    getattr(delta, "retry_after_ms", None) == 0
+                    and not self._watcher_events
+                    and not getattr(self._mod_manager, "_deferred_source_events", None)
+                )
+                self._local_missing_inline = inline_missing
+                try:
+                    self._publish_local_library_delta(delta)
+                finally:
+                    self._local_missing_inline = False
+                if inline_missing:
+                    self._confirm_local_missing()
+            except Exception:
+                logger.exception("局部源事件提交失败，保留事件待重试")
+                self._watcher_events[:0] = batch
+                self._watcher_debounce.start(500)
+                return
+        if self._watcher_events:
+            self._watcher_debounce.start(0)
+        elif getattr(self._mod_manager, "_deferred_source_events", None):
+            self._watcher_debounce.start(50)
+        self._plugin_watcher_pending = False
+
+    def _publish_local_library_delta(self, delta) -> None:
+        """将已提交的 Mod 与分类差异更新到概览，并调度新增内容纳管、元数据刷新和缺失确认。"""
+        game_id = self._game_service.current_game_id
+        overview = self._overview_page
+        removed = set(delta.removed_ids)
+        mods = self._mod_manager._index.get_mods_by_ids(set(delta.changed_ids) - removed)
+        node_ids = set(getattr(delta, "moved_node_ids", ()))
+        prior = getattr(overview, "_delta_by_id", {})
+        parents = getattr(overview, "_delta_node_parents", {})
+        for mod in mods + [prior[mid] for mid in set(delta.changed_ids) | removed if mid in prior]:
+            node_id = mod.node_id
+            seen = set()
+            while node_id and node_id not in seen:
+                seen.add(node_id)
+                node_ids.add(node_id)
+                node_id = parents.get(node_id)
+        moved_nodes = getattr(delta, "moved_node_ids", ())
+        if moved_nodes:
+            nodes = self._mod_manager.get_nodes_for_ui(node_ids)
+            new_ancestors = set()
+            for node in nodes:
+                parent = node.get("parent_id")
+                while parent and parent not in node_ids and parent not in new_ancestors:
+                    new_ancestors.add(parent)
+                    parent = parents.get(parent)
+            if new_ancestors:
+                nodes.extend(self._mod_manager.get_nodes_for_ui(new_ancestors))
+            # 后代归属使用已提交的父节点链。
+            overview.apply_node_delta(nodes)
+        if mods or removed:
+            overview.apply_reconcile_delta(mods, removed)
+        if node_ids and not moved_nodes:
+            overview.apply_node_delta(self._mod_manager.get_nodes_for_ui(node_ids))
+        discoveries = getattr(delta, "discoveries", ())
+        if discoveries:
+            # 先确认输入，再由统一导入任务中心显示等待和运行状态。
+            self._library_local_discovery.schedule(
+                game_id,
+                trigger="watcher",
+                changed_paths=discoveries,
+                external_copy_paths=getattr(delta, "external_copy_paths", ()),
+            )
+        refresh = getattr(delta, "refresh_mod_ids", ())
+        if refresh:
+            if not hasattr(self, "_library_metadata"):
+                from src.ui.library_metadata import LibraryMetadataController
+
+                self._library_metadata = LibraryMetadataController(
+                    self._mod_manager, self._publish_local_library_delta, self
+                )
+            self._library_metadata.schedule(refresh)
+        missing = getattr(delta, "pending_missing_ids", ())
+        retry = getattr(delta, "retry_after_ms", None)
+        if missing and retry != 0:
+            # 下一轮完成最终确认，清理失败通过重试差异发布不可用状态。
+            overview.set_pending_missing_mods(missing)
+        if (missing or retry == 0) and not getattr(self, "_local_missing_inline", False):
+            # 后续原生批次可能补足待处理证据，明确提示可提前结束等待期。
+            if not getattr(self, "_local_missing_scheduled", False) or retry == 0:
+                self._local_missing_scheduled = True
+                delay = retry if retry is not None else 500 if getattr(self, "_local_missing_retrying", False) else 16
+                call_later(delay, self, self._confirm_local_missing)
+        review = getattr(delta, "review_paths", ())
+        if review:
+            service = getattr(self._mod_manager, "_local_source_events", None)
+            if service is not None and service._tainted:
+                self._library_probe.schedule_changes(review, force_source_audit=True)
+            else:
+                self._library_probe.schedule_changes(review)
+
+    def _confirm_local_missing(self) -> None:
+        """等待目录事件消化且清理任务空闲后，再确认当前游戏缺失的源文件并发布清理结果。"""
+        self._local_missing_scheduled = False
+        cleanup = getattr(self, "_library_source_cleanup", None)
+        if cleanup is not None and cleanup.running:
+            return
+        if self._watcher_events:
+            self._local_missing_scheduled = True
+            call_later(16, self, self._confirm_local_missing)
+            return
+        if self._game_service.has_active_game():
+            if cleanup is None:
+                from src.ui.library_source_cleanup import LibrarySourceCleanupController
+
+                cleanup = self._library_source_cleanup = LibrarySourceCleanupController(
+                    self._mod_manager, self._publish_local_library_delta, self._confirm_local_missing, self
+                )
+            self._local_missing_retrying = True
+            try:
+                self._publish_local_library_delta(self._mod_manager.confirm_local_missing(purge=cleanup.purge))
+            finally:
+                self._local_missing_retrying = False
