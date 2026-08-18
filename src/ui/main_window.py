@@ -4685,3 +4685,49 @@ class MainWindow(QMainWindow):
                 notice.close()
             self._library_probe.reset_failure()
             call_later(0, self, self._apply_migoto_for_current_game)
+
+    def _on_deployment_root_failed(self, game_id, error) -> None:
+        """当前游戏根路径更新失败时取消激活、暂停部署并显示错误。"""
+        if game_id == self._game_service.current_game_id:
+            self._deployment_activation.cancel()
+            self._suspend_deployment_root(tr("更新部署目录失败：{error}", error=error))
+            self._ensure_toast().done(tr("更新部署目录失败：{error}", error=error), ok=False, hold_ms=8000)
+
+    def _on_deployment_activation_settled(self, game_id, result) -> None:
+        """当前游戏激活成功后恢复部署监控、刷新变更条目，并继续库探测和延后任务。"""
+        if game_id != self._game_service.current_game_id:
+            return
+        root = self._mod_manager._storage.get_deploy_dir()
+        if root:
+            self._deploy_watcher.start(root)
+            self._deploy_state_poll.start()
+        self._overview_page._refresh_deploy_summary()
+        if result.changed_ids:
+            mods = [mod for mid in result.changed_ids if (mod := self._mod_manager.get_mod(mid)) is not None]
+            self._overview_page.update_mods_in_place(mods)
+        self._library_probe.schedule()
+        self._resume_deferred_library_environment()
+
+    def _on_deployment_activation_failed(self, game_id, error) -> None:
+        """当前游戏激活失败时暂停库探测、刷新部署摘要并提示准备错误。"""
+        if game_id == self._game_service.current_game_id:
+            self._library_probe.pause(error)
+            self._overview_page._refresh_deploy_summary()
+            self._ensure_toast().done(tr("游戏环境准备未完成：{error}", error=error), ok=False, hold_ms=6000)
+
+    def _on_deployment_activation_discarded(self, game_id) -> None:
+        """当前游戏激活结果过期时，在下一轮事件循环重新准备环境。"""
+        if game_id == self._game_service.current_game_id:
+            call_later(0, self, self._apply_migoto_for_current_game)
+
+    def _on_deployment_activation_stopped(self) -> None:
+        """解除激活线程关闭等待标记，并异步继续关闭主窗口。"""
+        if self._deployment_activation_close_pending:
+            self._deployment_activation_close_pending = False
+            call_later(0, self, self.close)
+
+    def _on_enable_publication_stopped(self) -> None:
+        """解除启用发布关闭等待标记，并异步继续窗口关闭流程。"""
+        if getattr(self, "_enable_publication_close_pending", False):
+            self._enable_publication_close_pending = False
+            call_later(0, self, self.close)
