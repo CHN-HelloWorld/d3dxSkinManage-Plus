@@ -5279,3 +5279,130 @@ class MainWindow(QMainWindow):
                 self._publish_local_library_delta(self._mod_manager.confirm_local_missing(purge=cleanup.purge))
             finally:
                 self._local_missing_retrying = False
+
+    def _reconcile_library(
+        self,
+        game_id: str,
+        *,
+        trigger: str,
+        changed_paths: set[Path] | None = None,
+        manual: bool = False,
+        discover: bool = True,
+        publish: str = "on-change",
+    ) -> None:
+        """由所有者协调器排队执行探测和发现。"""
+        if _plugin_operation_busy(self):
+            return
+        busy = self._intake_worker is not None or self._intake_settling
+        if manual and not busy:
+            self._manual_refresh_active = True
+            self._intake_progress.start_batch(0, tr("正在刷新 Mod 库"))
+            self._intake_progress.update_progress(None, tr("正在刷新 Mod 库"), tr("正在检查新增内容…"))
+        root_watch = getattr(self, "_deployment_root_watch", None)
+        if root_watch is not None:
+            resolution = root_watch.check_current()
+            if resolution.status == "missing":
+                self._on_deployment_root_invalid(game_id, resolution.previous_path)
+                self._on_library_discovery_failed(
+                    tr("部署目录无效，请重新选择"), {"game_id": game_id, "manual": manual}
+                )
+                return
+        if manual:
+            self._library_probe.reset_failure()
+        self._library_discovery.schedule(
+            game_id, trigger=trigger, changed_paths=changed_paths, manual=manual, discover=discover, publish=publish
+        )
+
+    def _on_library_discovery_failed(self, error, options) -> None:
+        """仅结算当前游戏的手动发现失败；纳管仍在执行或提交时保留其进度显示。"""
+        if options.get("game_id") != self._game_service.current_game_id:
+            return
+        if options.get("manual") or getattr(self, "_manual_refresh_active", False):
+            self._manual_refresh_active = False
+            if self._intake_worker is None and not self._intake_settling:
+                self._intake_progress.finish(tr("刷新未完成"), str(error), ok=False)
+
+    def _consume_library_discovery(self, report, options) -> None:
+        """接收当前游戏的发现结果，按需刷新概览、重试清理并启动新增内容纳管。"""
+        if report.game_id != self._game_service.current_game_id:
+            return
+        if options["manual"]:
+            self._manual_refresh_active = False
+        self._schedule_source_cleanup_retry()
+        if options["publish"] == "always":
+            self._refresh_after_source_reconcile(report.game_id, 0)
+        if report.intake_requests or report.invalid_containers:
+            self._start_intake_batch(report, manual=options["manual"])
+        elif options["manual"]:
+            self._intake_progress.finish(tr("Mod 库已是最新"), tr("未发现需要纳管的新增内容"))
+
+    def _recover_pending_preset_applies(self, game_id: str) -> None:
+        """启动时恢复未完成的预设部署事务及运行时变体补丁。
+
+        残留事务会阻止后续切换和启停，因此在接受操作前完成恢复。
+        未配置部署目录时暂缓恢复，设置目录后由 set_deploy_dir 处理。
+        """
+        try:
+            if self._mod_manager._storage.get_deploy_dir() is None:
+                return
+            pm = self._mod_manager.preset_manager
+            if not pm.has_pending_apply(game_id):
+                return
+            errors = pm.recover_incomplete_applies(game_id)
+        except Exception as e:
+            logger.warning("启动回滚未完成的预设切换失败: %s", e)
+            return
+        if errors:
+            logger.warning("未完成的预设切换未能完整回滚: %s", errors)
+            call_later(0, self, lambda: self._toast_done(tr("上次预设切换未能完整回滚，请检查部署目录")))
+        else:
+            logger.info("已回滚未完成的预设切换事务: %s", game_id)
+
+    def _on_core_event(self, event: str, **payload) -> None:
+        """将操作失败、变体及部署状态事件转交界面线程，并在游戏切换后更新相关服务。"""
+        if event == "operation_failed":
+            self.operation_failed.emit(payload)
+            return
+        if event in (
+            "variant_state_changed",
+            "variant_references_missing",
+            "variant_restored",
+            "mod_enabled",
+            "mod_disabled",
+            "game_changed",
+        ):
+            self.variant_event_received.emit(event, payload)
+        if event == "game_changed":
+            # 数据源已切换：按目标游戏恢复离线更新结果，同时清除旧游戏的检查提示。
+            self._update_check_is_manual = False
+            self._overview_page.set_update_status_text("")
+            dlg = getattr(self, "_mod_updates_dialog", None)
+            if dlg is not None:
+                dlg.force_close()
+            self._mod_update_service.load_status()
+            if dlg is not None:
+                self._open_mod_updates_center()
+            return
+
+    def _on_variant_event(self, event: str, payload) -> None:
+        """转发当前游戏的变体事件，并提示缺失引用回退及用户偏好写入结果。"""
+        game_id = payload.get("game_id")
+        if game_id and game_id != self._mod_manager.current_game_id:
+            return
+        controller = getattr(self, "_variant_controller", None)
+        if controller is not None:
+            controller.handle_core_event(event, **payload)
+        if event == "variant_references_missing":
+            names = list(dict.fromkeys(str(name) for name in payload.get("names", ()) if name))
+            label = "、".join(names)
+            self._ensure_toast().done(
+                tr("{value}缺失的变体引用已改用 Mod 默认。", value=label + "：" if label else ""),
+                ok=False,
+                hold_ms=6000,
+            )
+        elif event == "variant_restored":
+            applied = int(payload.get("applied") or 0)
+            who = tr("{applied} 个 Mod 的", applied=applied) if applied > 1 else ""
+            self._ensure_toast().done(
+                tr("{who}用户偏好已写入；若游戏仍在运行，请退出后重新应用，再启动。", who=who), ok=True, hold_ms=5000
+            )
