@@ -5591,3 +5591,112 @@ class MainWindow(QMainWindow):
         self._intake_cancel_all = cancel_all
         self._intake_progress.set_stop_enabled(False)
         worker.request_cancel()  # 内部会解冻，让 worker 走到取消分支收尾
+
+    def _on_intake_progress(
+        self,
+        value: float | None,
+        text: str,
+        current: int,
+        total: int,
+    ) -> None:
+        """将纳管比例限制在有效范围并转换为百分比，保留未知进度的忙碌状态。"""
+        pct = None if value is None else max(0.0, min(1.0, float(value))) * 100.0
+        title = tr("正在纳管 {value}/{total}", value=max(1, current), total=total) if total > 0 else tr("正在纳管")
+        self._intake_progress.update_progress(pct, title, text)
+
+    def _on_intake_item_progress(self, index: int, frac: float, text: str) -> None:
+        """使用任务提供的实际条目索引更新明细进度，不从展示用计数推导索引。"""
+        name = self._intake_item_name(index)
+        if not name:
+            return
+        pct = int(max(0.0, min(1.0, frac)) * 100)
+        stage = (text or "").split(":", 1)[0].strip()
+        label = f"{stage} {pct}%" if stage else f"{pct}%"
+        self._intake_progress.update_item(index, name, ST_RUNNING, label)
+
+    def _intake_item_name(self, index: int) -> str:
+        """按本批索引读取纳管项目名称，索引无效或名称尚未建立时返回空字符串。"""
+        names = getattr(self, "_intake_item_names", None)
+        if not names or index < 0 or index >= len(names):
+            return ""
+        return names[index]
+
+    @_invalidates_library_probe
+    def _on_intake_item_prepared(self, _index: int, prepared) -> None:
+        """在界面线程提交后台准备结果，向工作线程确认提交或拒绝，并记录整批回滚所需的 Mod。"""
+        worker = self._intake_worker
+        if worker is None:
+            return
+        if worker.is_cancel_requested:
+            worker.acknowledge(committed=False)
+            self._mark_intake_item(_index, ST_ROLLED_BACK, tr("已回滚"))
+            return
+        if isinstance(prepared, Exception):
+            worker.acknowledge(committed=False, error=str(prepared))
+            self._mark_intake_item(_index, ST_FAILED, str(prepared)[:24])
+            return
+        try:
+            mod = self._intake_service.commit(
+                prepared,
+                rollback_on_error=False,
+            )
+        except Exception as exc:
+            logger.warning("提交后台纳管结果失败: %s", exc)
+            worker.acknowledge(committed=False, error=str(exc))
+            self._mark_intake_item(_index, ST_FAILED, tr("提交失败"))
+            return
+        worker.acknowledge(committed=True)
+        # 保留已提交的 Mod，以支持取消全部纳管时回滚本批提交。
+        if mod is not None:
+            self._intake_committed_mods.append(mod)
+            self._overview_page.apply_reconcile_delta([mod], ())
+        # 显示元数据读取降级，避免将读取失败误认为原内容未提供作者或来源。
+        notice = getattr(prepared, "metadata_notice", "")
+        if notice:
+            logger.warning("纳管降级: %s (%s)", notice, self._intake_item_name(_index))
+            self._mark_intake_item(_index, ST_DONE, tr("已纳管·无元数据"))
+            return
+        self._mark_intake_item(_index, ST_DONE, tr("已纳管"))
+
+    def _mark_intake_item(self, index: int, status: str, text: str) -> None:
+        """记录已处置的项目索引并更新任务明细，供停止后的遗留输入筛选使用。"""
+        # 成功、失败和回滚均记为已处理；停止后按此集合筛选尚未开始的输入。
+        try:
+            self._intake_handled_indexes.add(int(index))
+        except Exception:
+            pass
+        name = self._intake_item_name(index)
+        if name:
+            self._intake_progress.update_item(index, name, status, text)
+
+    def _on_intake_item_failed(
+        self,
+        _index: int,
+        message: str,
+        source_restored: bool,
+        is_duplicate: bool = False,
+    ) -> None:
+        """分别登记失败和重复输入以供后续处置，并同步源文件恢复情况及任务行状态。"""
+        suffix = tr("；原文件已保留或恢复") if source_restored else ""
+        if is_duplicate:
+            logger.info("后台 Mod 纳管跳过重复: %s%s", message, suffix)
+        else:
+            logger.warning("后台 Mod 纳管失败: %s%s", message, suffix)
+        # 失败和重复输入也会标为已处理，但源文件可能仍在库中；另存索引供分类处置。
+        try:
+            if is_duplicate:
+                self._intake_duplicate_indexes.add(int(_index))
+            else:
+                self._intake_failed_indexes.add(int(_index))
+        except Exception:
+            pass
+        # 将处理结果同步到任务明细行。
+        if is_duplicate:
+            # 重复输入未产生新提交，以回滚状态显示跳过结果。
+            self._mark_intake_item(_index, ST_ROLLED_BACK, tr("重复，已跳过"))
+            return
+        self._mark_intake_item(
+            _index,
+            ST_FAILED,
+            tr("失败，原文件已恢复") if source_restored else tr("失败"),
+        )
