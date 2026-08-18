@@ -4184,3 +4184,92 @@ class MainWindow(QMainWindow):
     def _persist_adult_mode(self, mode: str) -> None:
         """成人级Mod预览模式变更 → 写入 config，下次启动恢复。"""
         self._config.set("ui.adult_preview_mode", mode)
+
+    def _on_gallery_mod_selected(self, mod_id: str) -> None:
+        """画廊中点击 Mod → 导航到 Mod 所在目录并选中该 Mod"""
+        mod = self._mod_manager.get_mod(mod_id)
+        if not mod or not mod.node_id:
+            return
+        # 按页面标识定位总览导航项，避免依赖导航列表的固定行号。
+        self._select_nav_page(self.PAGE_OVERVIEW)
+        # 导航到 Mod 所在的父类别目录
+        parent_id = mod.node_id
+        self._overview_page._current_parent_id = parent_id
+        # 加载该层级的 Mod
+        mods = self._mod_manager.get_mods(node_id=parent_id) if parent_id else []
+        subtree_mods = self._collect_subtree_mods(parent_id)
+        self._overview_page.set_current_mods(mods, subtree_mods)
+        # 选中该 Mod
+        self._overview_page._selected_ids.clear()
+        self._overview_page._selected_ids.add(mod_id)
+        self._overview_page._selected_mod = mod
+        self._overview_page._selected_category = None
+        self._overview_page._show_mod_panel(mod)
+        self._overview_page._update_card_selection()
+        # 滚动到选中的 Mod 位置（延迟执行以确保布局已更新）
+        call_later(0, self, lambda: self._overview_page.scroll_to_item(mod_id))
+
+    # 设置
+
+    @_invalidates_library_probe
+    def _on_settings_changed(self) -> None:
+        """响应实时保存的设置变更。
+
+        配置单例已包含最新值；代理和定时器更新通过 150 毫秒单次定时器合并，
+        避免连续操作重复读取系统代理和重启定时器。
+        """
+        # 并发数调大后立即补齐名额；调小仅约束后续启动，不打断进行中的部署。
+        self._start_pending_deploys()
+        update_service = getattr(self, "_mod_update_service", None)
+        if update_service is not None:
+            update_service.refresh_update_concurrency()
+        monitor = getattr(self, "_image_memory_monitor", None)
+        if monitor is not None:
+            monitor.apply_settings()
+        from PySide6.QtCore import QTimer
+
+        if not hasattr(self, "_settings_apply_timer"):
+            self._settings_apply_timer = QTimer(self)
+            self._settings_apply_timer.setSingleShot(True)
+            self._settings_apply_timer.timeout.connect(self._apply_settings_reconcile)
+        self._settings_apply_timer.start(150)
+
+    @_invalidates_library_probe
+    def _apply_settings_reconcile(self) -> None:
+        """合并后的设置重对账：定时检查间隔 + 代理热生效（仅在真正变化时换 client）。"""
+        if hasattr(self, "_mod_update_service"):
+            self._apply_periodic_update_timer()
+        store = getattr(self, "_gb_store_page", None)
+        if store is not None and hasattr(store, "apply_proxy"):
+            from src.utils.proxy import get_active_proxy_url
+
+            store.apply_proxy(get_active_proxy_url(self._config))
+
+    # 外观实时应用（字体 / 主题 / 背景）+ 「正在应用」通知
+    def _ensure_toast(self):
+        """懒创建并复用绑定到主窗口内容区域的提示浮层。"""
+        t = getattr(self, "_toast", None)
+        if t is None:
+            from src.ui.widgets.toast import Toast
+
+            # 提示层放入视频前景合成范围，避免透明边角与窗口底色合成。
+            t = Toast(self.centralWidget() or self)
+            self._toast = t
+        return t
+
+    def _ensure_appearance_queue(self):
+        """懒创建串行外观更新队列，并与主窗口提示浮层关联。"""
+        queue = getattr(self, "_appearance_queue", None)
+        if queue is None:
+            from src.ui.appearance import AppearanceQueue
+
+            queue = AppearanceQueue(self, self._ensure_toast())
+            self._appearance_queue = queue
+        return queue
+
+    def _toast_done(self, text: str) -> None:
+        """尝试显示外观操作完成提示，提示控件失效时忽略显示异常。"""
+        try:
+            self._ensure_toast().done(text)
+        except Exception:
+            pass
