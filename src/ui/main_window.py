@@ -6040,3 +6040,86 @@ class MainWindow(QMainWindow):
         page = getattr(self, "_settings_page", None)
         if page is not None:
             page.set_video_background_preview(path, image)
+
+    def _on_bg_active_changed(self, _active: bool) -> None:
+        """背景可用状态变化时延后同步窗口材质，外观已释放时忽略通知。"""
+        # 仅首帧、错误和来源切换影响材质，普通帧不刷新材质。
+        if hasattr(self, "_settings_page") and not getattr(self, "_appearance_disposed", False):
+            call_later(0, self, self._sync_bg_material)
+
+    def _sync_bg_material(self) -> None:
+        """通过外观队列串行应用背景材质，避免覆盖正在执行的外观任务完成回调。"""
+        if getattr(self, "_appearance_disposed", False):
+            return
+        # 首帧和加载失败也通过外观队列串行处理，避免直接刷新替换当前完成回调。
+        self._ensure_appearance_queue().submit(
+            "background",
+            t("正在应用背景…"),
+            t("背景已应用"),
+            self._do_background_change,
+        )
+
+    def apply_background(self, *, on_applied=None) -> bool:
+        """重配背景绘制层；透明材质可分批更新，颜色变化才替换全局 QSS。"""
+        self._refresh_bg_overlay()
+        try:
+            from src.app import App
+
+            return App.instance().apply_theme(
+                self._config.get("general.theme", "dark"),
+                on_finished=on_applied,
+            )
+        except Exception as e:
+            logger.debug("应用背景后重渲染主题失败: %s", e)
+            if on_applied is not None:
+                on_applied(False)
+            return False
+
+    def resizeEvent(self, event):
+        """窗口缩放后调整下载浮窗位置、背景层范围和背景控制器输出尺寸。"""
+        super().resizeEvent(event)
+        self._reposition_download_flyout()
+        if hasattr(self, "_bg_overlay") and hasattr(self, "_central"):
+            self._bg_overlay.setGeometry(self._central.rect())
+            if hasattr(self, "_background_controller"):
+                self._background_controller.resize()
+
+    def showEvent(self, event):
+        """首次显示时恢复最大化状态并延后发布插件通知，同时校准可见提示条的位置。"""
+        super().showEvent(event)
+        # 首次显示后恢复最大化状态，避免与初始化尺寸设置竞争；仅执行一次。
+        if getattr(self, "_restore_maximized", False) and not getattr(self, "_maximized_restored", False):
+            self._maximized_restored = True
+            self.showMaximized()
+        # 窗口首次显示后再发送插件启动通知，以使用最终窗口几何定位。
+        if not getattr(self, "_plugin_notify_flushed", False):
+            self._plugin_notify_flushed = True
+            host = getattr(self, "_plugin_ui_host", None)
+            if host is not None:
+                call_later(200, self, host.flush_notifications)
+        # 通知条可见时保持右上角对齐
+        toast = getattr(self, "_toast", None)
+        if toast is not None and toast.isVisible():
+            try:
+                toast._reposition(visible=True)
+            except Exception:
+                pass
+
+    def changeEvent(self, event):
+        """按最小化状态暂停或恢复背景渲染，并在最小化时隐藏独立下载浮窗。"""
+        from PySide6.QtCore import QEvent
+
+        # 主窗口最小化时同步隐藏独立浮窗。
+        # 还原后用户再点下载管理按钮重新打开。
+        if event.type() == QEvent.Type.WindowStateChange:
+            if hasattr(self, "_background_controller"):
+                self._background_controller.set_suspended(self.isMinimized())
+            try:
+                store = getattr(self, "_gb_store_page", None)
+                if store is not None and self.isMinimized():
+                    flyout = getattr(store, "download_flyout", None)
+                    if flyout is not None and flyout.isVisible():
+                        flyout.hide()
+            except Exception:
+                pass
+        super().changeEvent(event)
