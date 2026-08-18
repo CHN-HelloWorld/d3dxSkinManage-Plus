@@ -4731,3 +4731,116 @@ class MainWindow(QMainWindow):
         if getattr(self, "_enable_publication_close_pending", False):
             self._enable_publication_close_pending = False
             call_later(0, self, self.close)
+
+    def _on_enable_publication_idle(self) -> None:
+        """启用结果发布空闲后继续排队请求，并在部署结束时恢复游戏页和延后操作。"""
+        publication = self._enable_publication
+        if not publication.closing and getattr(self, "_deferred_enable_ids", {}):
+            self._schedule_deferred_enables()
+        if publication.closing or self._deploy_workers or self._deploy_active:
+            return
+        self._deploy_stopping = False
+        self._deploy_close_pending = False
+        self._deploy_game_id = ""
+        self._game_page.setEnabled(not (_deployment_operation_busy(self) or _plugin_operation_busy(self)))
+        self._game_page.setToolTip("")
+        self._resume_deferred_library_environment()
+
+    def _schedule_deferred_enables(self) -> None:
+        """无冲突且未在处理队列时，合并安排下一轮启用请求处理。"""
+        if (
+            getattr(self, "_deferred_enable_ids", {})
+            and not getattr(self, "_deferred_enable_scheduled", False)
+            and not getattr(self, "_deploy_conflict_mod_id", "")
+            and not getattr(self, "_draining_deferred_enables", False)
+        ):
+            self._deferred_enable_scheduled = True
+            call_later(0, self, self._drain_deferred_enables)
+
+    def _drain_deferred_enables(self) -> None:
+        """前一配置提交后重新核对冲突和路径。"""
+        self._deferred_enable_scheduled = False
+        if getattr(self, "_draining_deferred_enables", False) or getattr(self, "_deploy_conflict_mod_id", ""):
+            return
+        pending = getattr(self, "_deferred_enable_ids", {})
+        if not pending or self._enable_publication.closing or self._deploy_stopping:
+            return
+        if _deployment_operation_busy(self, include_publication=False) or _plugin_operation_busy(self):
+            return
+        mod_id = next(iter(pending))
+        game_id = pending[mod_id]
+        mod = self._mod_manager.get_mod(mod_id)
+        if (
+            game_id == self._game_service.current_game_id
+            and mod is not None
+            and not mod.is_enabled
+            and (self._enable_publication.busy or self._deploy_workers)
+            and self._enable_waits_for_publication(mod)
+        ):
+            return
+        self._draining_deferred_enables = True
+        try:
+            pending.pop(mod_id)
+            if game_id == self._game_service.current_game_id:
+                mod = self._mod_manager.get_mod(mod_id)
+                if mod is not None and not mod.is_enabled:
+                    self._on_overview_mod_toggle(mod_id)
+            if mod_id not in self._deploy_workers and mod_id not in pending:
+                mod = self._mod_manager.get_mod(mod_id)
+                success = mod is not None and mod.is_enabled
+                self._overview_page.finish_deploy_overlay(
+                    mod_id, success=success, error="" if success else tr("已取消排队的启用请求")
+                )
+        finally:
+            self._draining_deferred_enables = False
+            self._schedule_deferred_enables()
+
+    def _resume_deferred_library_environment(self) -> None:
+        """部署事务和界面结算后重放等待中的操作。"""
+        activation = getattr(self, "_deployment_activation", None)
+        if activation is not None and activation.closing:
+            return
+        if _deployment_operation_busy(self) or _plugin_operation_busy(self):
+            return
+        if self._deploy_environment_dirty:
+            self._deploy_environment_dirty = False
+            call_later(0, self, self._apply_migoto_for_current_game)
+        if getattr(self, "_plugin_variant_pending", False):
+            call_later(0, self, self._resume_pending_variant_capture)
+        if self._watcher_changed_paths:
+            self._watcher_debounce.start()
+        if self._pending_gb_installs:
+            call_later(0, self, self._drain_gb_installs)
+        if getattr(self, "_deferred_enable_ids", {}):
+            self._schedule_deferred_enables()
+
+    def _update_launch_buttons(self) -> None:
+        """按当前游戏配置更新加载器和游戏启动按钮。
+
+        加载器按钮仅在对应可执行文件存在时启用；由外部启动器注入的环境
+        仍可使用部署及变体功能，无需提供独立加载器程序。
+        """
+        if not hasattr(self, "_launch_loader_btn"):
+            return
+        game = self._game_service.get_current_game()
+        name = game.name if game else ""
+        has_path = bool(self._migoto.migoto_path)
+        has_loader = self._migoto.has_loader
+        has_exe = bool(self._migoto.game_exe_path)
+        self._launch_loader_btn.setEnabled(has_loader)
+        self._launch_game_btn.setEnabled(has_exe)
+        if has_loader:
+            loader_tip = t("启动「{game}」的 Mod 加载器", game=name)
+        elif has_path:
+            loader_tip = f"{t('文件不存在或无法读取')}\n{self._migoto.migoto_path / MIGOTO_LOADER_NAME}"
+        else:
+            loader_tip = t("当前游戏未配置 3DMigoto / 加载器路径")
+        self._launch_loader_btn.setToolTip(loader_tip)
+        self._launch_game_btn.setToolTip(t("启动「{game}」", game=name) if has_exe else t("当前游戏未配置可执行文件"))
+
+    def _on_launch_migoto(self) -> None:
+        """启动当前游戏配置的 Mod 加载器（3DMigoto Loader）。"""
+        if not self._migoto.launch_migoto():
+            QMessageBox.warning(
+                self, t("错误"), t("启动 Mod 加载器失败，请到「游戏」页编辑当前游戏，检查 3DMigoto 路径。")
+            )
