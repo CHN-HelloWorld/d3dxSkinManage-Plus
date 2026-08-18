@@ -4359,3 +4359,184 @@ class MainWindow(QMainWindow):
             overlay.when_ready(on_finished)
         else:
             on_finished()
+
+    def _post_appearance_refresh(
+        self, toast_label: str, *, on_finished=None, colors_changed=True, refresh_background=True
+    ) -> None:
+        """只有主题/透明材质变化才重涂，分步执行并惰性刷新不可见页面。
+
+        颜色/材质选择器已由 GUI 线程分批应用；这里只更新内联样式和图标。
+        """
+        import shiboken6
+
+        from src.ui import acrylic, icons
+
+        if (not shiboken6.isValid(self)) or getattr(self, "_appearance_disposed", False):
+            return
+        # 立即更新当前页面，其余页面在下次显示前刷新。
+        self._pending_retheme = {
+            self.PAGE_GAME,
+            self.PAGE_OVERVIEW,
+            self.PAGE_GALLERY,
+            self.PAGE_TOOLS,
+            self.PAGE_ABOUT,
+            self.PAGE_PLUGINS,
+        }
+        cur = self._stack.currentIndex()
+        self._pending_retheme.discard(cur)
+
+        def _flyout() -> None:
+            """刷新插件界面、下载浮层和各任务面板的主题样式。"""
+            plugin_host = getattr(self, "_plugin_ui_host", None)
+            if plugin_host is not None:
+                plugin_host.retheme()
+            store = getattr(self, "_gb_store_page", None)
+            if store is not None and hasattr(store, "download_flyout"):
+                store.download_flyout.retheme()
+            for panel in (
+                getattr(self, "_intake_progress", None),
+                getattr(self, "_export_progress", None),
+                getattr(self, "_mod_update_progress", None),
+                getattr(self, "_plugin_progress", None),
+            ):
+                if panel is not None:
+                    panel.retheme()
+
+        steps = [acrylic.reset_for_theme_change]
+        if colors_changed:
+            steps.extend((lambda: icons.retheme_icons(self), self._refresh_themed_icons))
+        if refresh_background:
+            steps.append(self._refresh_bg_overlay)
+        steps.extend(
+            [
+                lambda: self._retheme_one_page(cur),  # 仅当前可见页
+                _flyout,
+            ]
+        )
+
+        def _finish() -> None:
+            """窗口仍有效时等待背景就绪，再交付外观完成回调或显示提示。"""
+            if shiboken6.isValid(self) and not getattr(self, "_appearance_disposed", False):
+                self._when_appearance_ready(on_finished or (lambda: self._toast_done(toast_label)))
+
+        def _run(i: int) -> None:
+            """逐阶段刷新外观并在步骤间让出事件循环，结束后重建设置页；销毁窗口立即终止。"""
+            if (not shiboken6.isValid(self)) or getattr(self, "_appearance_disposed", False):
+                return
+            if i >= len(steps):
+                self._rebuild_settings_page(on_finished=_finish)
+                return
+            try:
+                steps[i]()
+            except Exception:
+                pass
+            call_later(8, self, lambda: _run(i + 1))
+
+        _run(0)
+
+    def _retheme_one_page(self, idx: int) -> None:
+        """重涂指定页的内联样式 / 卡片（按页类型分派）。供惰性重涂调用。"""
+        try:
+            if idx == self.PAGE_GAME:
+                self._game_page.retheme()
+            elif idx == self.PAGE_OVERVIEW:
+                self._overview_page.retheme()
+                if self._game_service.has_active_game():
+                    self._load_characters(self._game_service.current_game_id)
+                    self._refresh_overview_mods()
+            elif idx == self.PAGE_GALLERY:
+                self._gallery_page.refresh_from_index()
+            elif idx == self.PAGE_TOOLS:
+                self._tools_page.retheme()
+            elif idx == self.PAGE_ABOUT:
+                self._about_page.retheme()
+            elif idx == self.PAGE_PLUGINS:
+                self._plugins_page.retheme()
+        except Exception:
+            pass
+
+    def _rebuild_settings_page(self, *, on_finished=None) -> None:
+        """换肤后刷新设置页。
+
+        `SettingsPage.retheme` 就地重涂登记过的内联样式；实时切换用回调等待分批刷新。
+        仅当该页没有 retheme 或调用失败才回退到重建。图标由 `icons.retheme_icons` 统一重涂。
+        """
+        page = getattr(self, "_settings_page", None)
+        if page is None:
+            if on_finished is not None:
+                on_finished()
+            return
+        if hasattr(page, "retheme"):
+            try:
+                if on_finished is None:
+                    page.retheme()
+                else:
+                    page.retheme(on_finished=on_finished)
+                return
+            except Exception:
+                pass
+        self._rebuild_settings_page_full()
+        if on_finished is not None:
+            on_finished()
+
+    def _rebuild_settings_page_full(self) -> None:
+        """整页重建设置页（回退路径）。"""
+        old = getattr(self, "_settings_page", None)
+        if old is None:
+            return
+        # 正在跑代理测试线程时不重建——线程父挂在旧页上，删旧页会连带删运行中的线程→崩。
+        prev = getattr(old, "_proxy_test_thread", None)
+        if prev is not None:
+            try:
+                if prev.isRunning():
+                    return
+            except RuntimeError:
+                pass
+        idx = self._stack.indexOf(old)
+        if idx < 0:
+            return
+        from src.ui.pages.settings import SettingsPage
+
+        was_current = self._stack.currentIndex() == idx
+        new = SettingsPage(shortcuts=self._shortcut_settings)
+        new.settings_changed.connect(self._on_settings_changed)
+        new.theme_changed.connect(self._on_theme_changed)
+        new.font_changed.connect(self._on_font_changed)
+        new.language_changed.connect(self._on_language_changed)
+        new.background_changed.connect(self._on_background_changed)
+        new.bg_overlay_refresh.connect(self._refresh_bg_overlay)
+        new.bg_playback_requested.connect(self._background_controller.playback)
+        new.bg_scrim_live.connect(self._on_bg_scrim_live)
+        new.bg_blur_live.connect(self._on_bg_blur_live)
+        new.app_update_check_requested.connect(self._on_app_update_check_requested)
+        self._wire_settings_downloads(new)  # 整页重建后必须重接，否则清理按钮失灵
+        self._stack.insertWidget(idx, new)
+        self._stack.removeWidget(old)
+        old.deleteLater()
+        self._settings_page = new
+        self._refresh_bg_overlay()
+        if was_current:
+            self._stack.setCurrentWidget(new)
+
+    def _refresh_themed_icons(self) -> None:
+        """主题切换后重新着色导航栏图标（apply_theme 已清空图标缓存）。"""
+        for i, (icon_name, _label, _idx) in enumerate(self._nav_items_data):
+            item = self._nav.item(i)
+            if item is not None:
+                icons.apply_icon(item, icon_name)
+        icons.apply_icon(self._launch_loader_btn, "actions/launch")
+        icons.apply_icon(self._launch_game_btn, "actions/game")
+        self._collapse_btn.setIcon(icons.get_icon("actions/chevron-right" if self._nav_collapsed else "actions/menu"))
+
+    def _on_language_changed(self, lang: str) -> None:
+        """语言确有变化时提示设置已保存且将在重启后生效。"""
+        from src.utils.i18n import get_i18n
+        from src.utils.language_pack import normalize_language_code
+
+        if normalize_language_code(lang) == get_i18n().current_language:
+            return
+        QMessageBox.information(
+            self,
+            t("提示"),
+            t("语言设置已保存，重启软件后生效。"),
+        )
