@@ -4273,3 +4273,89 @@ class MainWindow(QMainWindow):
             self._ensure_toast().done(text)
         except Exception:
             pass
+
+    def _on_font_changed(self, family: str) -> None:
+        """把字体变更加入可合并外观队列，通过应用回调报告完成。"""
+        from src.app import App
+
+        self._ensure_appearance_queue().submit(
+            "font",
+            t("正在应用字体…"),
+            t("字体已应用"),
+            lambda finish: App.instance().apply_font(family, on_finished=finish),
+        )
+
+    def _on_theme_changed(self, theme: str) -> None:
+        """把主题变更加入外观队列，串行应用主题并显示处理状态。"""
+        self._ensure_appearance_queue().submit(
+            "theme",
+            t("正在应用主题…"),
+            t("主题已应用"),
+            lambda finish: self._do_theme_change(theme, finish),
+        )
+
+    def _do_theme_change(self, theme: str, on_finished=None) -> None:
+        """请求应用切换主题，完成后依据实际变化决定刷新页面或等待现有材质就绪。"""
+        import shiboken6
+
+        from src.app import App
+
+        finish = on_finished or (lambda: self._toast_done(t("主题已应用")))
+
+        def applied(changed: bool) -> None:
+            """仅在窗口有效时处理主题应用结果，变化时继续分阶段刷新界面。"""
+            if (not shiboken6.isValid(self)) or getattr(self, "_appearance_disposed", False):
+                return
+            if changed:
+                self._post_appearance_refresh(t("主题已应用"), on_finished=finish)
+            else:
+                self._when_appearance_ready(finish)
+
+        App.instance().apply_theme(theme, on_finished=applied)
+        logger.info("主题已切换: %s", theme)
+
+    def _on_background_changed(self) -> None:
+        # 图片加载自行处理最新请求，清除、禁用和替换立即生效，不等待外观队列。
+        """立即同步背景遮罩，并将完整背景变更加到串行外观队列。"""
+        self._refresh_bg_overlay()
+        self._ensure_appearance_queue().submit(
+            "background",
+            t("正在应用背景…"),
+            t("背景已应用"),
+            self._do_background_change,
+        )
+
+    def _do_background_change(self, on_finished=None) -> None:
+        """保存原主题并请求背景更新，完成后按颜色是否变化决定刷新范围，同时安排卡片预热。"""
+        import shiboken6
+
+        from src.ui import theme
+
+        previous_theme = theme.current_theme()
+        finish = on_finished or (lambda: self._toast_done(t("背景已应用")))
+
+        def applied(changed: bool) -> None:
+            """核验窗口生命周期后刷新受背景影响的界面，未变化时等待材质就绪再完成。"""
+            if (not shiboken6.isValid(self)) or getattr(self, "_appearance_disposed", False):
+                return
+            if changed:
+                self._post_appearance_refresh(
+                    t("背景已应用"),
+                    on_finished=finish,
+                    colors_changed=previous_theme != theme.current_theme(),
+                    refresh_background=False,
+                )
+            else:
+                # 仅更换图片时等待解码，不重新生成主题、图标或页面样式。
+                self._when_appearance_ready(finish)
+
+        self.apply_background(on_applied=applied)
+        MainWindow._schedule_directory_card_preparation(self)
+
+    def _when_appearance_ready(self, on_finished) -> None:
+        """等待背景覆盖层准备完成后执行回调；无覆盖层时直接完成。"""
+        overlay = getattr(self, "_bg_overlay", None)
+        if overlay is not None:
+            overlay.when_ready(on_finished)
+        else:
+            on_finished()
