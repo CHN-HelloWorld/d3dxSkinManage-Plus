@@ -5998,3 +5998,45 @@ class MainWindow(QMainWindow):
         """窗口移动后重定位可见的下载浮窗，保持其与主窗口对齐。"""
         super().moveEvent(event)
         self._reposition_download_flyout()
+
+    def _on_bg_scrim_live(self, pct: int) -> None:
+        """背景遮罩滑块拖动 → 随主题实时压暗/提亮（轻量 fillRect，直连无节流）。"""
+        if getattr(self, "_bg_overlay", None) is not None:
+            self._bg_overlay.set_scrim_live(pct)
+
+    def _on_bg_blur_live(self, pct: int) -> None:
+        """背景模糊滑块拖动 → 节流实时模糊（重算偏重，~40ms 合并一次）。"""
+        self._pending_bg_blur = pct
+        if not self._bg_blur_throttle.isActive():
+            self._bg_blur_throttle.start(40)
+
+    def _flush_bg_blur(self) -> None:
+        """将防抖期间记录的最新模糊强度应用到仍存在的背景层。"""
+        if getattr(self, "_bg_overlay", None) is not None:
+            self._bg_overlay.set_blur_live(self._pending_bg_blur)
+
+    def _refresh_bg_overlay(self) -> None:
+        """根据配置更新背景绘制层，不重新应用全局样式。"""
+        from src.ui.backgrounds.config import background_options
+
+        cfg = background_options(self._config)
+        if hasattr(self, "_bg_overlay"):
+            self._bg_overlay.setGeometry(self._central.rect())
+            self._bg_overlay.lower()
+            validator = getattr(getattr(self, "_settings_page", None), "_bg_engine_validator", None)
+            valid = bool(validator and validator.valid and validator.path == cfg.get("engine_path"))
+            self._background_controller.apply(cfg, engine_valid=valid)
+            self._on_bg_state_changed(self._background_controller.state, self._background_controller.message)
+
+    def _on_bg_state_changed(self, state: str, message: str) -> None:
+        """将背景加载状态传给设置页，并重新安排目录卡片资源准备。"""
+        MainWindow._schedule_directory_card_preparation(self)
+        page = getattr(self, "_settings_page", None)
+        if page is not None:
+            page.set_background_status(state, message)
+
+    def _on_bg_preview_ready(self, path, image) -> None:
+        """把解码完成的视频背景预览交给仍存在的设置页显示。"""
+        page = getattr(self, "_settings_page", None)
+        if page is not None:
+            page.set_video_background_preview(path, image)
