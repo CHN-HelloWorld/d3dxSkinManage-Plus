@@ -4540,3 +4540,148 @@ class MainWindow(QMainWindow):
             t("提示"),
             t("语言设置已保存，重启软件后生效。"),
         )
+
+    def _apply_migoto_for_current_game(self) -> None:
+        """根据当前游戏配置重新指向加载器与 Mod 部署目录（各游戏相互独立）。
+
+        部署目录取显式配置的 mods_path；未配置时禁止启用 Mod 和切换预设。
+        3DMigoto 的实际 Mod 目录可由 d3dx.ini 改写，不能仅凭 migoto_path 推导。
+        migoto_path 用于启动游戏专属加载器，exe_path 用于启动游戏。
+        """
+        if getattr(self, "_game_settings_saving", False):
+            self._deploy_environment_dirty = True
+            return
+        if getattr(self, "_preset_delete_preparing", False) or getattr(self, "_preset_delete_worker", None) is not None:
+            self._deploy_environment_dirty = True
+            return
+        variants = getattr(self, "_variant_controller", None)
+        if variants is not None and variants.busy:
+            self._deploy_environment_dirty = True
+            return
+        if _plugin_operation_busy(self):
+            self._deploy_environment_dirty = True
+            return
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and publication.busy:
+            self._deploy_environment_dirty = True
+            return
+        if (
+            self._preset_apply_worker is not None
+            or getattr(self, "_preset_apply_preparing", False)
+            or getattr(self, "_disable_worker", None) is not None
+        ):
+            self._deploy_environment_dirty = True
+            return
+        if self._deploy_workers or self._deploy_active:
+            # 存储实例由在途 worker 共用，整批完成前不能修改它的目标目录。
+            self._deploy_environment_dirty = True
+            return
+        root_watch = getattr(self, "_deployment_root_watch", None)
+        resolution = root_watch.check_current() if root_watch is not None else None
+        game = self._game_service.get_current_game()
+        migoto_path = game.migoto_path if game and game.migoto_path else ""
+        deploy_dir = game.mods_path if game and game.mods_path else ""
+
+        self._migoto.migoto_path = migoto_path or None
+        self._migoto.game_exe_path = game.exe_path if game and game.exe_path else None
+        self._update_launch_buttons()
+        if resolution is not None and resolution.status == "missing":
+            self._on_deployment_root_invalid(game.id, deploy_dir)
+            return
+        if resolution is not None and resolution.status == "moved":
+            self._deploy_environment_dirty = True
+            return
+        self._overview_page._deploy_status_label.setProperty("deploymentRootError", "")
+        if not self._deployment_activation.is_current(deploy_dir):
+            probe = getattr(self, "_library_probe", None)
+            if probe is not None:
+                probe.reset_failure()
+                probe.cancel()
+            self._deploy_watcher.stop()
+            self._deploy_state_poll.stop()
+            self._overview_page._deploy_status_label.setText(tr("正在准备游戏环境…"))
+            self._overview_page._deploy_status_label.show()
+            self._deployment_activation.start(deploy_dir)
+        # d3dx_user.ini 的位置跟着 migoto_path 走（还含 d3dx.ini 的 [Include]
+        # user_config）→ 切游戏 / 改 3DMigoto 路径都必须在这个咽喉点重新指向监视目标。
+        try:
+            self._mod_manager.variants.refresh_watch()
+        except Exception as e:
+            logger.debug("重设 d3dx_user.ini 监视失败: %s", e)
+
+    def _on_deployment_root_relocated(self, game_id, old, new) -> None:
+        """当前部署根迁移后撤销旧监控与探测，安排环境重建并刷新游戏配置页面。"""
+        if game_id == self._game_service.current_game_id:
+            self._deploy_watcher.stop()
+            self._deploy_watcher_debounce.stop()
+            self._deploy_changed_paths.clear()
+            self._deployment_events = []
+            self._library_probe.reset_failure()
+            self._library_probe.cancel()
+            self._deployment_root_notice = None
+            call_later(0, self, self._apply_migoto_for_current_game)
+            self._ensure_toast().done(tr("部署目录已自动更新：{new}", new=new), ok=True, hold_ms=5000)
+        self._game_page.reload()
+
+    def _on_deployment_root_invalid(self, game_id, path) -> None:
+        """取消无效根的激活；文件事务忙碌时延后处理，空闲时暂停部署并去重提示。"""
+        if game_id != self._game_service.current_game_id:
+            return
+        self._deployment_activation.cancel()
+        if (
+            _deployment_operation_busy(self)
+            or _plugin_operation_busy(self)
+            or self._deploy_workers
+            or self._deploy_active
+        ):
+            self._deploy_environment_dirty = True
+            return
+        message = tr("部署目录无效，请重新选择")
+        self._suspend_deployment_root(message)
+        if getattr(self, "_deployment_root_notice", None) != (game_id, path):
+            self._deployment_root_notice = (game_id, path)
+            self._show_deployment_root_notice(message, path)
+
+    def _show_deployment_root_notice(self, message: str, path: str) -> None:
+        """关闭旧提示后非阻塞显示原部署路径与重新选择入口，结束时清除引用。"""
+        previous = getattr(self, "_deployment_root_dialog", None)
+        if previous is not None:
+            previous.close()
+        notice = QMessageBox(self)
+        notice.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        notice.setIcon(QMessageBox.Icon.Warning)
+        notice.setWindowTitle(tr("部署目录无效"))
+        notice.setText(message)
+        notice.setInformativeText(
+            tr("原部署目录：{path}\n\n请前往「游戏」页编辑当前游戏，重新选择「Mod 文件夹」。", path=path)
+        )
+        notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self._deployment_root_dialog = notice
+        notice.finished.connect(lambda: setattr(self, "_deployment_root_dialog", None))
+        notice.open()
+
+    def _suspend_deployment_root(self, message: str) -> None:
+        """保留部署记录，但禁止通过失效目录绑定写入。"""
+        self._deploy_watcher.stop()
+        self._deploy_state_poll.stop()
+        self._deploy_watcher_debounce.stop()
+        self._deploy_changed_paths.clear()
+        self._deployment_events = []
+        if self._mod_manager._storage.get_deploy_dir() is not None:
+            self._mod_manager.set_deploy_dir("", defer_activation=True)
+        if not self._library_probe.paused or self._library_probe.last_error != message:
+            self._library_probe.pause(message)
+        label = self._overview_page._deploy_status_label
+        label.setProperty("deploymentRootError", message)
+        label.setText(message)
+        label.show()
+
+    def _on_deployment_root_available(self, game_id) -> None:
+        """当前部署根恢复时撤销错误提示与探测暂停，并重新应用游戏部署环境。"""
+        if game_id == self._game_service.current_game_id:
+            self._deployment_root_notice = None
+            notice = getattr(self, "_deployment_root_dialog", None)
+            if notice is not None:
+                notice.close()
+            self._library_probe.reset_failure()
+            call_later(0, self, self._apply_migoto_for_current_game)
