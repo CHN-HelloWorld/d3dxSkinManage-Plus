@@ -4844,3 +4844,73 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(
                 self, t("错误"), t("启动 Mod 加载器失败，请到「游戏」页编辑当前游戏，检查 3DMigoto 路径。")
             )
+
+    def _on_launch_game(self) -> None:
+        """启动当前游戏（使用「游戏管理」中的可执行文件配置）。"""
+        if not self._migoto.launch_game():
+            QMessageBox.warning(self, t("错误"), t("启动游戏失败，请到「游戏」页编辑当前游戏，检查可执行文件路径。"))
+
+    # 工具
+
+    def _show_category_preset_recovery_notice(self) -> None:
+        """仅创建一次恢复失败提示，列出仍受保护的分类预设目录。"""
+        paths = getattr(self._mod_manager, "category_preset_recovery_errors", ())
+        if not paths or getattr(self, "_category_preset_recovery_notice", None) is not None:
+            return
+        notice = QMessageBox(self)
+        notice.setObjectName("categoryPresetRecoveryNotice")
+        notice.setIcon(QMessageBox.Icon.Warning)
+        notice.setWindowTitle(tr("分类预设恢复未完成"))
+        notice.setText(tr("部分分类预设操作尚未完成恢复。"))
+        notice.setInformativeText(tr("相关目录继续受保护，暂不自动纳管。可展开详细信息查看路径；重启软件后会重试。"))
+        notice.setDetailedText("\n".join(paths))
+        notice.setStandardButtons(QMessageBox.StandardButton.Ok)
+        self._category_preset_recovery_notice = notice
+        notice.show()
+
+    def _open_category_presets(self, *, start_import: bool = False, start_export: bool = False) -> None:
+        """复用或异步打开分类预设窗口；库操作忙碌时拒绝创建，避免并发修改。"""
+        dialog = getattr(self, "_category_preset_dialog", None)
+        if dialog is not None:
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        if _plugin_operation_busy(self) or self._host_library_busy():
+            self._ensure_toast().done(tr("当前任务完成后可管理分类预设"), ok=False, hold_ms=2500)
+            return
+        from src.ui.dialogs.category_preset import CategoryPresetDialog
+
+        try:
+            dialog = CategoryPresetDialog(
+                self._mod_manager,
+                self._game_service.current_game_id,
+                self,
+                start_import=start_import,
+                start_export=start_export,
+            )
+        except Exception as error:
+            logger.exception("无法打开分类预设")
+            QMessageBox.warning(self, tr("无法打开分类预设"), str(error))
+            return
+        self._category_preset_dialog = dialog
+        dialog.import_completed.connect(self._on_category_preset_imported)
+        dialog.view_categories_requested.connect(self._view_preset_categories)
+        dialog.games_requested.connect(self._open_game_settings)
+        dialog.finished.connect(self._category_preset_dialog_finished)
+        dialog.open()
+
+    @_invalidates_library_probe
+    def _on_category_preset_imported(self, game_id: str) -> None:
+        """分类预设导入后使操作校验证据失效，并刷新当前游戏的概览目录。"""
+        self._mod_manager.invalidate_operation_trust()
+        if game_id == self._game_service.current_game_id:
+            self._reload_overview_level(game_id)
+
+    def _view_preset_categories(self, game_id: str) -> None:
+        """确认目标游戏存在后切换游戏，并导航到概览的分类根目录。"""
+        if self._game_service.get_game(game_id) is None:
+            return
+        if game_id != self._game_service.current_game_id:
+            self._on_game_changed(game_id)
+        self._select_nav_page(self.PAGE_OVERVIEW)
+        self._overview_page._navigate_to("")
