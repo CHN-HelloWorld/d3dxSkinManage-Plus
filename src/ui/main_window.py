@@ -4970,3 +4970,107 @@ class MainWindow(QMainWindow):
             return
         if self._game_service.has_active_game():
             self._library_probe.schedule(periodic=True)
+
+    def _refresh_after_source_reconcile(self, game_id: str, removed: int) -> None:
+        """发布已提交标识；手动刷新或不完整差异重新加载数据。"""
+        if game_id != self._game_service.current_game_id:
+            return
+        if self._stack.currentIndex() == self.PAGE_OVERVIEW:
+            probe = getattr(self, "_library_probe", None)
+            changed_ids = getattr(probe, "changed_ids", None)
+            removed_ids = getattr(probe, "removed_ids", None)
+            overview = self._overview_page
+            applied = False
+            refresh = getattr(self, "_overview_refresh", None)
+            if (
+                changed_ids is not None
+                and removed_ids is not None
+                and removed == len(removed_ids)
+                and len(set(changed_ids) | set(removed_ids)) <= 128
+                and not getattr(refresh, "active", False)
+                and hasattr(overview, "apply_reconcile_delta")
+            ):
+                removed_set = set(removed_ids)
+                mods = [self._mod_manager.get_mod(mid) for mid in changed_ids if mid not in removed_set]
+                if all(mod is not None for mod in mods):
+                    parent_id = getattr(overview, "_current_parent_id", "")
+                    overview.set_characters(self._mod_manager.get_characters_for_ui(game_id), refresh=False)
+                    if parent_id == getattr(overview, "_current_parent_id", ""):
+                        applied = overview.apply_reconcile_delta(mods, removed_ids)
+            if not applied:
+                self._reload_overview_level(game_id)
+            if not applied and removed and self._overview_page._selected_mod is not None:
+                selected_id = self._overview_page._selected_mod.mod_id
+                if self._mod_manager.get_mod(selected_id) is None:
+                    self._overview_page._selected_mod = None
+                    self._overview_page._selected_ids.discard(selected_id)
+                    self._overview_page._hide_panel()
+        elif self._stack.currentIndex() == self.PAGE_GALLERY:
+            self._refresh_gallery()
+        if removed:
+            self._refresh_preset_combo()
+            self._refresh_store_installed_state()
+
+    def _schedule_source_cleanup_retry(self) -> None:
+        """按退避间隔重试耐久清理，并明确告知用户当前仍在等待。"""
+        if self._mod_manager.has_pending_source_cleanup():
+            if not self._source_cleanup_retry.isActive():
+                delay = self._source_cleanup_retry_delays[
+                    min(self._source_cleanup_retry_step, len(self._source_cleanup_retry_delays) - 1)
+                ]
+                self._source_cleanup_retry.start(delay)
+            if not self._source_cleanup_notified:
+                self._source_cleanup_notified = True
+                try:
+                    self._ensure_toast().done(
+                        tr("Mod 清理尚未完成：文件可能被占用或部署盘离线，将在后台继续重试"),
+                        ok=False,
+                        hold_ms=6000,
+                    )
+                except Exception:
+                    pass
+        else:
+            self._source_cleanup_retry.stop()
+            if self._source_cleanup_notified:
+                self._toast_done(tr("待处理的 Mod 清理已完成"))
+            self._source_cleanup_retry_step = 0
+            self._source_cleanup_notified = False
+
+    def _retry_pending_source_cleanup(self) -> None:
+        """重试继续使用后台流程，不恢复同步轮询。"""
+        if self._game_service.has_active_game():
+            self._source_cleanup_retry_step += 1
+            self._library_probe.schedule()
+
+    def _on_watcher_path_event(self, path: str) -> None:
+        """收集 watcher 报出的具体变化路径，供本轮防抖结束后的对账定范围。"""
+        if path:
+            self._watcher_changed_paths.add(Path(path))
+            from src.core.watcher import FileChange
+
+            watcher = self._file_watcher
+            self._on_source_change(FileChange(str(watcher._watch_path), watcher.generation, "modified", path))
+
+    def _on_source_change(self, event) -> None:
+        """接收当前源目录监视事件，保留配对路径并启动防抖；根目录失效时安排重连。"""
+        watcher = self._file_watcher
+        if event.generation != watcher.generation or event.root != str(watcher._watch_path):
+            return
+        probe = getattr(self, "_library_probe", None)
+        if probe is not None:
+            probe.yield_to_local_events()
+        if event.kind in {"root_replaced", "watch_failed", "root_offline"}:
+            self._schedule_watcher_restart(watcher, event.generation, event.root)
+        self._watcher_events.append(event)
+        # 防抖期间保留配对事件，调度前将后代路径合并到父事件范围。
+        for path in (event.path, event.destination):
+            if path:
+                self._watcher_changed_paths.add(Path(path))
+        if not self._watcher_debounce.isActive():
+            self._watcher_debounce.start(0)
+
+    def _on_source_observed(self, payload) -> None:
+        """仅将当前游戏的源目录观测结果发布到概览，忽略切换游戏前的结果。"""
+        game_id, observations = payload
+        if game_id == self._game_service.current_game_id:
+            self._overview_page.set_source_observations(observations)
