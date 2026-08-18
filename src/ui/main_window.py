@@ -5835,3 +5835,166 @@ class MainWindow(QMainWindow):
         finally:
             # 异常路径也须释放结算状态，允许后续目录事件或刷新继续纳管。
             self._intake_settling = False
+
+    @_invalidates_library_probe
+    def _settle_intake_batch(self, result: IntakeBatchResult) -> None:
+        """处置纳管遗留输入，按取消选择回滚已提交内容，再汇总结果并恢复后续任务。"""
+        committed_mods = list(getattr(self, "_intake_committed_mods", ()))
+        cancel_all = bool(getattr(self, "_intake_cancel_all", False))
+        self._intake_committed_mods = []
+        self._intake_cancel_all = False
+        # 将发现期间已处理的损坏容器计入本批结果说明。
+        broken_note = getattr(self, "_intake_broken_note", "") or ""
+        self._intake_broken_note = ""
+
+        # 停止后先处置未纳管输入，避免留在库目录中的文件在下次刷新时再次纳管。
+        leftover_note = ""
+        disposed_any = False
+        if result.cancelled:
+            recycled, deleted = self._resolve_intake_leftovers()
+            leftover_note = self._disposal_note(tr("尚未加入 Mod 库的项目"), recycled, deleted)
+            disposed_any = bool(recycled or deleted)
+        elif result.failed or result.duplicates:
+            # 失败及重复输入仍位于资源库中，须进入遗留项处理，避免后续发现反复处理。
+
+            # 失败和重复输入分别询问并使用对应文案，避免将重复内容误报为损坏。
+            from src.ui.dialogs.leftover_intake import (
+                REASON_DUPLICATE,
+                REASON_FAILED,
+            )
+
+            failed_paths = self._failed_intake_paths()
+            if failed_paths:
+                recycled, deleted = self._resolve_intake_leftovers(failed_paths, allow_keep=False, reason=REASON_FAILED)
+                leftover_note += self._disposal_note(tr("失败项"), recycled, deleted)
+                disposed_any = disposed_any or bool(recycled or deleted)
+            duplicate_paths = self._failed_intake_paths(duplicates=True)
+            if duplicate_paths:
+                recycled, deleted = self._resolve_intake_leftovers(
+                    duplicate_paths, allow_keep=False, reason=REASON_DUPLICATE
+                )
+                leftover_note += self._disposal_note(tr("重复项"), recycled, deleted)
+                disposed_any = disposed_any or bool(recycled or deleted)
+        leftover_note += broken_note
+
+        if result.cancelled and cancel_all and committed_mods:
+            # 取消全部纳管时，在 SQLite 连接所属的主线程回滚本批已提交内容。
+            rolled_back = 0
+            for mod in committed_mods:
+                try:
+                    self._mod_manager.delete_mod(mod.mod_id)
+                    rolled_back += 1
+                except Exception as exc:
+                    logger.warning("回滚已纳管 Mod 失败: %s", exc)
+            detail = tr("已取消全部纳管，回滚 {rolled_back} 个 Mod", rolled_back=rolled_back)
+            if result.restored:
+                detail += tr("；已恢复 {restored} 个原文件", restored=result.restored)
+            self._intake_progress.finish_cancelled(detail + leftover_note)
+            self._refresh_intake_views()
+            self._finish_intake_followup(result)
+            return
+
+        if result.cancelled:
+            if committed_mods:
+                detail = tr("已停止纳管，保留已纳管的 {count} 个 Mod", count=len(committed_mods))
+                if result.restored:
+                    detail += tr("；已恢复 {restored} 个原文件", restored=result.restored)
+            else:
+                detail = (
+                    tr("未提交内容已清理，已恢复 {restored} 个原文件", restored=result.restored)
+                    if result.restored
+                    else tr("未提交内容已清理，用户原文件保持不变")
+                )
+            self._intake_progress.finish_cancelled(detail + leftover_note)
+        elif result.failed:
+            detail = tr("已纳管 {committed} 个，{failed} 个失败", committed=result.committed, failed=result.failed)
+            if result.duplicates:
+                detail += tr("，{duplicates} 个重复", duplicates=result.duplicates)
+            if result.restored:
+                detail += tr("；已恢复 {restored} 个原文件", restored=result.restored)
+            self._intake_progress.finish(tr("纳管完成，但有失败项"), detail + leftover_note, ok=False)
+        elif result.duplicates:
+            # 重复输入以成功状态汇总，冗余副本的处置结果已记录在 leftover_note 中。
+            detail = tr("跳过 {duplicates} 个重复内容", duplicates=result.duplicates)
+            if result.committed:
+                detail = tr("已纳管 {committed} 个，", committed=result.committed) + detail
+            self._intake_progress.finish(tr("Mod 纳管完成"), detail + leftover_note)
+        elif result.committed:
+            self._intake_progress.finish(
+                tr("Mod 纳管完成"), tr("已纳管 {committed} 个 Mod", committed=result.committed) + leftover_note
+            )
+        else:
+            self._intake_progress.finish(tr("Mod 库已是最新"), tr("未发现需要纳管的新增内容") + leftover_note)
+        # 处置遗留输入后重新扫描视图，移除已删除内容的卡片。
+        if result.committed or disposed_any:
+            self._refresh_intake_views()
+        self._finish_intake_followup(result)
+
+    @_invalidates_library_probe
+    def _finish_intake_followup(self, result: IntakeBatchResult) -> None:
+        """本轮结束后的待复扫合并（多次 F5/watcher 只补一次）。"""
+        # 调度补充扫描前解除结算标记，使新批次能够通过重入检查。
+        self._intake_settling = False
+        pending = self._intake_rescan_pending and not result.cancelled
+        pending_manual = self._intake_rescan_manual
+        self._intake_rescan_pending = False
+        self._intake_rescan_manual = False
+        if pending:
+            call_later(
+                0,
+                self,
+                lambda: self._refresh_current(manual=pending_manual),
+            )
+
+    def _refresh_intake_views(self) -> None:
+        """刷新当前可见的概览或画廊，并同步商店已安装标记；无当前游戏时跳过。"""
+        gid = self._game_service.current_game_id
+        if not gid:
+            return
+        if self._stack.currentIndex() == self.PAGE_OVERVIEW:
+            self._reload_overview_level(gid)
+        elif self._stack.currentIndex() == self.PAGE_GALLERY:
+            self._refresh_gallery()
+        self._refresh_store_installed_state()
+
+    def _refresh_current(
+        self,
+        *,
+        after_preset_commit: bool = False,
+        manual: bool = False,
+        changed_paths: set[Path] | None = None,
+    ) -> None:
+        """选择统一对账的触发器并检查执行条件。
+
+        手动刷新和预设提交检查当前游戏；目录事件限定为合并后的变化路径。
+        控制器依次执行路径核对、后台发现和主线程规划。
+        """
+        if _plugin_operation_busy(self):
+            return
+        # 导入期间的复制和压缩目录尚未稳定，暂不执行后台纳管，避免重复登记同一资源。
+        if self._import_active or (getattr(self, "_preset_apply_worker", None) is not None and not after_preset_commit):
+            return
+        # 「自致变更」抑制窗口内：本次 watcher 刷新与刚才的直接刷新重复，跳过以免二次重排。
+        if not manual and time.monotonic() < self._watcher_suppress_until:
+            return
+        if not self._game_service.has_active_game():
+            return  # 无激活游戏：不刷新（视图已清空，避免 F5/watcher 拉回全库残留）
+        # 预设提交后是应用自发的一次全量收敛（不是目录事件），故与 F5 同档。
+        full_scan = manual or after_preset_commit
+        self._reconcile_library(
+            self._game_service.current_game_id,
+            trigger="manual" if full_scan else "watcher",
+            changed_paths=None if full_scan else changed_paths,
+            manual=manual,
+            # F5 / 预设提交：用户或应用主动要求刷新，必须无条件重绘当前页 ——
+            # 预设切换改的是 DB 启用态，对账报告里的计数天然是 0。
+            # watcher：每个目录事件都会走到这里，无变化就重绘会造成多余重排。
+            publish="always" if full_scan else "on-change",
+        )
+
+    # 下载浮窗为独立顶级窗口，主窗口移动、缩放或从最小化恢复时须重新定位。
+
+    def moveEvent(self, event):
+        """窗口移动后重定位可见的下载浮窗，保持其与主窗口对齐。"""
+        super().moveEvent(event)
+        self._reposition_download_flyout()
