@@ -4095,3 +4095,92 @@ class MainWindow(QMainWindow):
 
         ids, md5s = self._collect_installed_gb_keys()
         return scan_downloads(ids, md5s)
+
+    def _on_download_usage_requested(self, page=None) -> None:
+        """设置页只排队；全库元数据读取和下载目录扫描均在后台完成。"""
+        page = page or getattr(self, "_settings_page", None)
+        if page is None:
+            return
+        from src.ui.download_usage_loader import DownloadUsageLoader
+        from src.utils.paths import get_data_dir, get_gb_download_dir
+
+        loader = getattr(page, "_download_usage_loader", None)
+        if loader is None:
+            loader = page._download_usage_loader = DownloadUsageLoader(page)
+            loader.ready.connect(page.set_download_usage)
+        loader.request(get_data_dir() / "mod_index.db", get_gb_download_dir())
+
+    def _on_download_purge_requested(self, page=None) -> None:
+        """清理已入库源包；仍有下载、更新或安装占用的文件交给下载器延后删除。"""
+        page = page or getattr(self, "_settings_page", None)
+        # 删除前重新扫描，使用当前文件状态核实清理目标。
+        usage = self._scan_download_usage()
+        dm = getattr(getattr(self, "_gb_store_page", None), "_download_manager", None)
+        count = freed = 0
+        if dm is not None:
+            for entry in usage.entries:
+                if not entry.installed:
+                    continue
+                try:
+                    if not entry.path.is_file():
+                        continue
+                    dm.delete_archive_when_unused(entry.path)
+                    # 延后删除的源包仍占空间，不能计入本次释放结果。
+                    if entry.path.exists():
+                        continue
+                except OSError as exc:
+                    logger.warning("清理下载文件失败 %s: %s", entry.path.name, exc)
+                    continue
+                count += 1
+                freed += entry.size
+        self._refresh_download_local_index()
+        if page is not None:
+            page.set_download_purge_result(count, freed)
+
+    def _refresh_download_local_index(self) -> None:
+        """下载文件经外部清理后重新扫描缓存索引，避免安装时引用已不存在的文件。
+
+        下载管理器尚未创建时无需处理，其初始化会建立当前索引。
+        """
+        dm = getattr(getattr(self, "_gb_store_page", None), "_download_manager", None)
+        if dm is None or not hasattr(dm, "refresh_local_index"):
+            return
+        try:
+            dm.refresh_local_index()
+        except Exception as e:
+            logger.warning("刷新下载索引失败: %s", e)
+
+    def _maybe_delete_installed_archive(self, payload: dict, mod) -> None:
+        """按配置清理安装成功后的下载源包。
+
+        仅在自动清理已开启、返回有效入库 Mod 且源路径属于共享下载目录时处理。
+        未返回 Mod 的重复或失败结果不自动删除，已安装的重复源包可由下载清理统一处理。
+        """
+        if mod is None:
+            return
+        if not self._config.get("gamebanana.delete_archive_after_install", True):
+            return
+        raw = str((payload or {}).get("archive_path") or "")
+        if not raw:
+            return
+        dm = getattr(getattr(self, "_gb_store_page", None), "_download_manager", None)
+        if dm is not None:
+            dm.delete_archive_when_unused(Path(raw))
+
+    # 画廊
+
+    def _refresh_gallery(self) -> None:
+        # 无激活游戏：直接清空。不能走 get_mods——空 game_id 会被底层当「全库」返回所有游戏的
+        # Mod（mod_index.get_all_mods 在 gid 为空时 SELECT * 不带 game 过滤）→ 残留别的游戏数据。
+        # 画廊与总览不同：每次切到画廊 _on_nav_changed 都会重拉，故这里的拦截是必须的。
+        """无激活游戏时取消加载并清空画廊，否则为局部事件让行后安排分片读取。"""
+        if not self._game_service.has_active_game():
+            self._gallery_refresh.cancel()
+            self._gallery_page.set_mods([])
+            return
+        self._library_probe.yield_to_local_events()
+        self._gallery_refresh.schedule()
+
+    def _persist_adult_mode(self, mode: str) -> None:
+        """成人级Mod预览模式变更 → 写入 config，下次启动恢复。"""
+        self._config.set("ui.adult_preview_mode", mode)
