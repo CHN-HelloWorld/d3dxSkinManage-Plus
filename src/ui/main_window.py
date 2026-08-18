@@ -3966,3 +3966,132 @@ class MainWindow(QMainWindow):
         # 导入完成回调负责解除此状态保护。
         self._import_active = True
         controller.start_import()
+
+    # 商店下载完成后的安装
+
+    def _on_gb_install_requested(self, payload: object) -> None:
+        """将商店下载结果送入与手动导入共用的后台流水线，由任务中心显示进度。"""
+        if not isinstance(payload, dict):
+            return
+        if not payload.get("archive_path") or not payload.get("node_id"):
+            logger.warning("商店安装请求缺少必要字段，已忽略")
+            return
+        from uuid import uuid4
+
+        payload = dict(payload)
+        metadata = (payload.get("plan") or {}).get("gamebanana_metadata") or {}
+        owner = f"install:{uuid4().hex}"
+        self._gb_store_page._download_manager.retain(
+            int(metadata.get("file_id") or 0),
+            str(metadata.get("file_md5") or ""),
+            owner=owner,
+            path=payload["archive_path"],
+        )
+        payload["_archive_consumer"] = owner
+        self._pending_gb_installs.append(payload)
+        self._drain_gb_installs()
+
+    @_invalidates_library_probe
+    def _drain_gb_installs(self) -> None:
+        """处理一个待安装请求；导入进行中时保留队列，等待完成回调继续处理。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if self._import_active or not self._pending_gb_installs:
+            return
+        payload = self._pending_gb_installs.pop(0)
+        dm = self._gb_store_page._download_manager
+        owner = payload["_archive_consumer"]
+        # items 第 5 元素 = 透传给 ModIntakeService.plan_request 的额外参数
+        # （GameBanana 元数据 / auto_preview / NSFW 分级）；第 6 元素 = 仅显示名，
+        # 见 import_progress。
+        item = (
+            payload.get("archive_path", ""),
+            payload.get("display_name", ""),
+            "",
+            "G",
+            dict(payload.get("plan") or {}),
+            payload.get("display_label", ""),
+        )
+
+        def _done(results: list) -> None:
+            """处理商店导入结果与可清理压缩包，并保证释放下载任务的安装所有权。"""
+            try:
+                mod = next((m for _, m in results if m is not None), None)
+                self._maybe_delete_installed_archive(payload, mod)
+                store = getattr(self, "_gb_store_page", None)
+                if store is not None:
+                    try:
+                        store.apply_install_result(payload, mod)
+                    except RuntimeError:
+                        pass  # 页面已销毁
+            finally:
+                dm.release(owner)
+
+        try:
+            self._do_import([item], payload["node_id"], on_done=_done)
+        except Exception:
+            logger.exception("无法启动商店安装")
+            self._import_active = False
+            self._import_controller = None
+            try:
+                _done([])
+            finally:
+                if self._pending_gb_installs:
+                    call_later(0, self, self._drain_gb_installs)
+
+    # 下载数据统计 / 清理
+
+    def _wire_settings_downloads(self, page) -> None:
+        """接设置页的下载数据信号。初始构造与**换主题整页重建**各调一次——只接一处的
+        表现是「换过主题后清理按钮失灵」。lambda 捕获 page 本身，避免回填到已被替换的旧页。"""
+        page.download_usage_requested.connect(lambda p=page: self._on_download_usage_requested(p))
+        page.download_purge_requested.connect(lambda p=page: self._on_download_purge_requested(p))
+        page.api_cache_clear_requested.connect(self._on_api_cache_clear_requested)
+
+    def _on_api_cache_clear_requested(self) -> None:
+        """清理 GbApiCache 的进程内缓存。
+
+        设置页负责删除磁盘缓存，此处同步清除分类、详情、更新和下载量等内存条目。
+        客户端尚未初始化时无需处理。
+        """
+        client = getattr(self, "_gb_client", None)
+        cache = getattr(client, "cache", None) if client is not None else None
+        if cache is None:
+            logger.info("清理缓存：当前没有 GameBanana 客户端实例，跳过内存缓存清理")
+            return
+        try:
+            cache.clear()
+            logger.info("清理缓存：GameBanana 接口内存缓存已清空")
+        except Exception as e:
+            logger.warning("清理 GameBanana 接口内存缓存失败: %s", e)
+
+    def _collect_installed_gb_keys(self) -> tuple[set, set]:
+        """收集各游戏已入库的 GameBanana 文件标识和 MD5。
+
+        必须在数据库连接所属线程调用；任一标识匹配即表明对应安装包已经入库。
+        """
+        ids: set = set()
+        md5s: set = set()
+        try:
+            mods = self._mod_manager.get_mods_all_games()
+        except Exception:
+            return ids, md5s
+        for m in mods:
+            gb = (m.info.custom_data or {}).get("gamebanana") or {}
+            try:
+                fid = int(gb.get("file_id") or 0)
+            except (TypeError, ValueError):
+                fid = 0
+            if fid:
+                ids.add(fid)
+            md5 = str(gb.get("file_md5") or "").strip().lower()
+            if md5:
+                md5s.add(md5)
+        return ids, md5s
+
+    def _scan_download_usage(self):
+        """收集已安装来源标识和哈希后扫描下载占用，区分仍被安装记录引用的文件。"""
+        from src.services.gamebanana.download_store import scan_downloads
+
+        ids, md5s = self._collect_installed_gb_keys()
+        return scan_downloads(ids, md5s)
