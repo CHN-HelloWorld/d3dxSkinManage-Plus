@@ -5700,3 +5700,138 @@ class MainWindow(QMainWindow):
             ST_FAILED,
             tr("失败，原文件已恢复") if source_restored else tr("失败"),
         )
+
+    def _pending_leftover_paths(self) -> list[Path]:
+        """本批中从未开始处理、仍原样躺在库目录里的项。"""
+        paths = getattr(self, "_intake_item_paths", None) or []
+        handled = getattr(self, "_intake_handled_indexes", None) or set()
+        out: list[Path] = []
+        for index, path in enumerate(paths):
+            if index in handled:
+                continue
+            try:
+                if path.exists():
+                    out.append(path)
+            except OSError:
+                continue
+        return out
+
+    def _failed_intake_paths(self, *, duplicates: bool = False) -> list[Path]:
+        """分别返回本批失败和重复且仍存在于资源库的输入。
+
+        这些项目已被纳管流程处理，不属于未处理项集合；
+        须单独收集并按原因显示处置说明。
+        """
+        paths = getattr(self, "_intake_item_paths", None) or []
+        indexes = (
+            getattr(
+                self,
+                "_intake_duplicate_indexes" if duplicates else "_intake_failed_indexes",
+                None,
+            )
+            or set()
+        )
+        out: list[Path] = []
+        for index in sorted(indexes):
+            if index < 0 or index >= len(paths):
+                continue
+            path = paths[index]
+            try:
+                if path.exists():
+                    out.append(path)
+            except OSError:
+                continue
+        return out
+
+    def _dispose_broken_containers(self, containers: list[str]) -> str:
+        """处理标记无法解析的容器，并返回用于批次通知的补充说明。
+
+        此类容器在发现时即被拒绝，不会出现在正常纳管结果中，须在此单独处理。
+        """
+        from src.ui.dialogs.leftover_intake import REASON_BROKEN
+
+        paths: list[Path] = []
+        for raw in containers:
+            try:
+                path = Path(raw)
+                if path.exists():
+                    paths.append(path)
+            except OSError:
+                continue
+        if not paths:
+            return ""
+        recycled, deleted = self._resolve_intake_leftovers(paths, allow_keep=False, reason=REASON_BROKEN)
+        return self._disposal_note(tr("无法识别的 Mod"), recycled, deleted)
+
+    @staticmethod
+    def _disposal_note(label: str, recycled: int, deleted: int) -> str:
+        """把处置结果拼成通知框尾巴（无处置则空串）。"""
+        parts = []
+        if recycled:
+            parts.append(tr("{recycled} 个移入回收站", recycled=recycled))
+        if deleted:
+            parts.append(tr("{deleted} 个已永久删除", deleted=deleted))
+        if not parts:
+            return ""
+        return f"；{label} " + "、".join(parts)
+
+    def _resolve_intake_leftovers(
+        self,
+        paths: list[Path] | None = None,
+        *,
+        allow_keep: bool = True,
+        reason: str | None = None,
+    ) -> tuple[int, int]:
+        """处理资源库遗留项，返回移入回收站和永久删除的数量。
+
+        allow_keep 控制是否允许保留；不允许保留时关闭对话框采用其已说明的删除行为。
+        reason 决定提示内容，重复、失败和损坏须分别说明。
+        """
+        from src.ui.dialogs.leftover_intake import (
+            ACTION_DELETE,
+            ACTION_RECYCLE,
+            REASON_STOPPED,
+            resolve_leftover_paths,
+        )
+
+        leftovers = self._pending_leftover_paths() if paths is None else list(paths)
+        if not leftovers:
+            return (0, 0)
+        decisions = resolve_leftover_paths(
+            leftovers,
+            parent=self,
+            allow_keep=allow_keep,
+            reason=reason or REASON_STOPPED,
+        )
+        recycled = deleted = 0
+        for raw, action in decisions.items():
+            if action not in (ACTION_RECYCLE, ACTION_DELETE):
+                continue  # 保留：维持现状
+            try:
+                ok = self._mod_manager._storage.delete_source(Path(raw), delete_method=action)
+            except Exception as exc:
+                logger.warning("处置未纳管残留失败 (%s): %s", raw, exc)
+                continue
+            if not ok:
+                logger.warning("处置未纳管残留未成功: %s", raw)
+                continue
+            if action == ACTION_RECYCLE:
+                recycled += 1
+            else:
+                deleted += 1
+        if recycled or deleted:
+            logger.info("未纳管残留处置完成: 回收站 %d, 删除 %d", recycled, deleted)
+        return (recycled, deleted)
+
+    @_invalidates_library_probe
+    def _on_intake_batch_finished(self, result: IntakeBatchResult) -> None:
+        """释放本批工作线程引用并结算结果，以结算标记阻止模态对话框期间启动新批次。"""
+        self._intake_worker = None
+        # 完成后释放任务引用，再由 _intake_settling 保护结果处理期间的模态事件循环，
+        # 防止遗留项对话框尚未关闭时启动新一批纳管。
+        self._intake_settling = True
+        try:
+            self._settle_intake_batch(result)
+        finally:
+            # 异常路径也须释放结算状态，允许后续目录事件或刷新继续纳管。
+            self._intake_settling = False
