@@ -6123,3 +6123,275 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
         super().changeEvent(event)
+
+    def _reposition_download_flyout(self) -> None:
+        """在线商店已创建时重定位可见下载浮窗，浮窗失效不阻断窗口事件处理。"""
+        store = getattr(self, "_gb_store_page", None)
+        if store is None or not hasattr(store, "reposition_flyout_if_visible"):
+            return
+        try:
+            store.reposition_flyout_if_visible()
+        except Exception:
+            pass
+
+    def _pending_intake_count(self) -> int:
+        """面板上仍处于「排队中 / 处理中」的项数；取不到就退回本轮总数。"""
+        panel = getattr(self, "_intake_progress", None)
+        try:
+            rows = panel._items.values()
+            pending = sum(1 for row in rows if row._status in (ST_QUEUED, ST_RUNNING))
+            if pending:
+                return pending
+        except Exception:
+            pass
+        return len(getattr(self, "_intake_item_names", ()) or ())
+
+    def _confirm_quit_during_intake(self) -> bool:
+        """纳管进行中关窗确认。返回 True 表示用户选择「停止并退出」。"""
+        pending = self._pending_intake_count()
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("退出确认"))
+        box.setText(tr("仍有 {pending} 个 Mod 正在纳管。", pending=pending) if pending else tr("仍有 Mod 正在纳管。"))
+        box.setInformativeText(tr("直接退出会停止纳管并恢复未提交的原文件。"))
+        stop_btn = box.addButton(tr("停止并退出"), QMessageBox.ButtonRole.DestructiveRole)
+        wait_btn = box.addButton(tr("继续等待"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(wait_btn)
+        box.exec()
+        return box.clickedButton() is stop_btn
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        """先请求业务与探测任务退出，必要时推迟关闭；取消退出后恢复暂停的控制器。"""
+        publication = getattr(self, "_enable_publication", None)
+        if publication is not None and publication.busy:
+            self._enable_publication_close_pending = True
+            self._deploy_stopping = True
+            event.ignore()
+            publication.close()
+            return
+        if getattr(self, "_preset_delete_preparing", False) or getattr(self, "_preset_delete_worker", None) is not None:
+            self._preset_delete_close_pending = True
+            self._cancel_preset_delete()
+            event.ignore()
+            return
+        variants = getattr(self, "_variant_controller", None)
+        if variants is not None and variants.running:
+            self._variant_close_pending = True
+            event.ignore()
+            variants.close()
+            return
+        preset_dialog = getattr(self, "_category_preset_dialog", None)
+        if preset_dialog is not None:
+            self._category_preset_close_pending = True
+            event.ignore()
+            preset_dialog.request_close()
+            return
+        cleanup = getattr(self, "_library_source_cleanup", None)
+        if cleanup is not None:
+            cleanup.stop()
+        activation = getattr(self, "_deployment_activation", None)
+        if activation is not None:
+            activation.close()
+            if activation.running:
+                self._deployment_activation_close_pending = True
+                event.ignore()
+                return
+        # 进入关闭确认前请求停止，完成前保留窗口和控制器，不同步等待读取。
+        probe = getattr(self, "_library_probe", None)
+        discovery = getattr(self, "_library_discovery", None)
+        local_discovery = getattr(self, "_library_local_discovery", None)
+        metadata = getattr(self, "_library_metadata", None)
+        if metadata is not None:
+            metadata.stop()
+        overview = getattr(self, "_overview_refresh", None)
+        if overview is not None:
+            overview.stop()
+        gallery = getattr(self, "_gallery_refresh", None)
+        if gallery is not None:
+            gallery.stop()
+        if discovery is not None:
+            discovery.stop()
+        if local_discovery is not None:
+            local_discovery.stop()
+        if probe is not None:
+            probe.stop()
+            if (
+                probe.worker is not None
+                or probe.applying
+                or (discovery is not None and discovery.worker is not None)
+                or (local_discovery is not None and local_discovery.worker is not None)
+            ):
+                self._library_probe_close_pending = True
+                event.ignore()
+                return
+        self._close_after_library_probe(event)
+        if variants is not None and not event.isAccepted():
+            variants.resume()
+        if probe is not None and not event.isAccepted():
+            if publication is not None:
+                publication.closing = False
+                call_later(0, self, self._on_enable_publication_idle)
+            if activation is not None:
+                activation.closing = False
+                call_later(0, self, self._apply_migoto_for_current_game)
+            if overview is not None:
+                overview.resume()
+            if gallery is not None:
+                gallery.resume()
+            if discovery is not None:
+                discovery.resume()
+            if local_discovery is not None:
+                local_discovery.closing = False
+            if metadata is not None:
+                metadata.resume()
+            probe.resume()
+
+    def _on_library_probe_stopped(self) -> None:
+        """库探测停止后清除关闭等待标记，并在下一轮事件循环重新发起窗口关闭。"""
+        if self._library_probe_close_pending:
+            self._library_probe_close_pending = False
+            call_later(0, self, self.close)
+
+    def _close_after_library_probe(self, event: QCloseEvent) -> None:
+        """处理退出确认与剩余任务的停止，保存窗口状态并释放插件、监视和图像资源。
+        文件任务未能及时停止或用户取消退出时拒绝关闭，保留主窗口供后续继续操作。
+        """
+        intake_worker = self._intake_worker
+        if intake_worker is not None and intake_worker.isRunning():
+            # 关闭程序前确认是否终止仍在后台执行的纳管任务。
+            if not self._confirm_quit_during_intake():
+                event.ignore()
+                return
+            intake_worker.request_cancel()
+            # 工作线程等待提交决定时，拒绝当前结果并释放等待，使回滚仍在工作线程执行。
+            intake_worker.acknowledge(committed=False)
+            if not intake_worker.wait(5000):
+                event.ignore()
+                self._ensure_toast().done(
+                    tr("正在停止 Mod 纳管，请稍候"),
+                    ok=False,
+                    hold_ms=2500,
+                )
+                return
+        if self._preset_apply_worker is not None or getattr(self, "_preset_apply_preparing", False):
+            if not self._stop_preset_apply():
+                event.ignore()
+                self._ensure_toast().done(tr("正在取消预设切换，请稍候"), ok=False, hold_ms=2500)
+                return
+        disable_worker = getattr(self, "_disable_worker", None)
+        if disable_worker is not None and disable_worker.isRunning():
+            # 批量禁用在项目之间检查中断；等待当前文件操作返回后再提交已完成的结果。
+            disable_worker.requestInterruption()
+            if not disable_worker.wait(5000):
+                event.ignore()
+                self._ensure_toast().done(tr("正在停止批量禁用，请稍候"), ok=False, hold_ms=2500)
+                return
+        if disable_worker is not None and not getattr(disable_worker, "committed", False):
+            # 关闭期间可能不再投递排队信号，直接提交尚未处理的禁用结果。
+            try:
+                self._on_disable_batch_finished(getattr(disable_worker, "results", None) or [], True)
+            except Exception as e:
+                logger.warning("关窗前补提交批量禁用失败: %s", e)
+        if disable_worker is not None:
+            self._clear_disable_ui(disable_worker)
+        export_ctl = getattr(self, "_export_controller", None)
+        export_worker = getattr(export_ctl, "_worker", None) if export_ctl else None
+        if export_worker is not None and export_worker.isRunning():
+            # 导出不修改库数据，可直接请求中断；关闭时禁止完成回调自动打开输出目录。
+            export_ctl._open_dir_on_finish = False
+            export_worker.terminate_export()
+            if not export_worker.wait(5000):
+                event.ignore()
+                self._ensure_toast().done(tr("正在停止导出，请稍候"), ok=False, hold_ms=2500)
+                return
+        if self._stack.currentIndex() == self.PAGE_GAME and not self._game_page.confirm_pending_changes():
+            event.ignore()
+            return
+        if not self._stop_async_deploys():
+            event.ignore()
+            self._ensure_toast().done(tr("正在停止 Mod 部署，请稍候"), ok=False, hold_ms=2500)
+            return
+        from src.ui.mod_update_actions import confirm_stop_updates
+
+        svc = self._mod_update_service
+        if svc.active_update_ids(all_games=True) and not confirm_stop_updates(self, svc, exiting=True):
+            event.ignore()
+            return
+        if not svc.shutdown_updates():
+            event.ignore()
+            self._ensure_toast().done(tr("正在停止 Mod 更新，请稍候"), ok=False, hold_ms=2500)
+            return
+        operations = getattr(self, "_plugin_operations", None)
+        if operations is not None and not operations.shutdown():
+            event.ignore()
+            self._ensure_toast().done(tr("正在停止插件操作，请稍候"), ok=False, hold_ms=2500)
+            return
+        # 保存窗口尺寸和最大化状态；最大化时记录 normalGeometry，以便正确还原。
+        try:
+            is_max = self.isMaximized()
+            self._config.set("ui.window_maximized", bool(is_max))
+            geo = self.normalGeometry() if is_max else self.geometry()
+            if geo.width() > 0 and geo.height() > 0:
+                self._config.set("ui.window_width", int(geo.width()))
+                self._config.set("ui.window_height", int(geo.height()))
+        except Exception as e:
+            logger.warning("持久化窗口尺寸失败: %s", e)
+        # 退出前、停止监控和关闭数据库前再采集一次运行时变体，
+        # 读取加载器在游戏退出时保存到 d3dx_user.ini 的最新值。
+        try:
+            self._mod_manager.variants.collect(trigger="app_exit")
+        except Exception as e:
+            logger.warning("退出前变体采集失败: %s", e)
+        # 停止文件监控
+        roots = getattr(self, "_deployment_root_watch", None)
+        if roots is not None:
+            roots.close()
+        self._file_watcher.stop()
+        self._deploy_watcher.stop()
+        self._deploy_state_poll.stop()
+        self._source_state_poll.stop()
+        self._mod_manager.stop_ini_sync()
+        self._mod_manager.variants.stop_watch()  # 停 d3dx_user.ini 监视
+        # 停用全部插件（调用 deactivate + 注销订阅/命令）
+        if getattr(self, "_plugin_manager", None) is not None:
+            try:
+                self._plugin_manager.shutdown()
+            except Exception as e:
+                logger.warning("关闭插件系统失败: %s", e)
+        # 关闭前刷新待持久化的预览图重排
+        self._overview_page._flush_pending_preview_reorder()
+        # 停止总览页后台图片/详情线程
+        self._image_memory_monitor.stop()
+        for attr in ("_pixmap_worker", "_panel_preview_worker", "_key_bindings_worker"):
+            worker = getattr(self._overview_page, attr, None)
+            if worker is not None and worker.isRunning():
+                worker.stop()
+                worker.wait(500)
+        # 停止后台图片加载线程（画廊页）
+        if hasattr(self._gallery_page, "_pixmap_worker"):
+            self._gallery_page._pixmap_worker.stop()
+            self._gallery_page._pixmap_worker.wait(500)
+        # 关闭 GameBanana 后台资源（worker loop + httpx client）
+        if hasattr(self, "_gb_store_page") and self._gb_store_page is not None:
+            try:
+                self._gb_store_page.shutdown()
+            except Exception as e:
+                logger.warning("关闭 GB 后台失败: %s", e)
+        # 关闭图片加载器的共享事件循环，并等待剩余请求完成取消和资源释放。
+        if hasattr(self, "_gb_image_loader") and self._gb_image_loader is not None:
+            try:
+                self._gb_image_loader.shutdown()
+            except Exception as e:
+                logger.warning("关闭 ImageLoader 失败: %s", e)
+        self._appearance_disposed = True
+        queue = getattr(self, "_appearance_queue", None)
+        if queue is not None:
+            queue.dispose()
+        if hasattr(self, "_bg_blur_throttle"):
+            self._bg_blur_throttle.stop()
+        if getattr(self, "_bg_overlay", None) is not None:
+            if hasattr(self, "_background_controller"):
+                self._background_controller.dispose()
+            self._bg_overlay.dispose()
+        logger.info("应用关闭")
+        super().closeEvent(event)
