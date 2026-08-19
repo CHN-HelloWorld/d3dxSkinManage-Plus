@@ -6524,3 +6524,78 @@ class MainWindow(QMainWindow):
         worker.step_completed.connect(lambda steps, op=plan.operation_id: self._record_preset_steps(op, steps))
         self._preset_apply_progress.show_phase("deploy", tr("正在执行预设部署…"))
         self._set_preset_worker(worker, self._on_preset_execution_finished)
+
+    def _cancel_preset_apply(self) -> None:
+        """标记取消并请求可中断阶段停止，必须完成的回滚或发布阶段继续执行。"""
+        self._preset_apply_cancelled = True
+        worker = self._preset_apply_worker
+        if worker is not None and not getattr(worker, "_must_finish", False):
+            worker.requestInterruption()
+        dialog = self._preset_apply_progress
+        if dialog is not None:
+            dialog.show_cancelling()
+
+    def _on_preset_execution_finished(self, worker) -> None:
+        """移除后台持久化入口，再按执行错误、日志写入和取消状态选择提交或回滚。"""
+        self._preset_preparation.patch_sink = None
+        plan = self._preset_apply_plan
+        journal_error = getattr(self, "_preset_journal_error", None)
+        if worker.error is not None:
+            error = worker.error
+            if journal_error is not None:
+                from src.core.preset_apply_service import PresetApplyError
+
+                error = PresetApplyError(
+                    tr("保存预设执行进度失败：{journal_error}", journal_error=journal_error),
+                    completed=getattr(error, "completed", ()),
+                    rollback_errors=getattr(error, "rollback_errors", ()),
+                )
+            self._finish_preset_apply_failure(plan, error)
+        elif journal_error is not None:
+            self._rollback_preset_apply(plan, worker.completed, journal_error)
+        elif self._preset_apply_cancelled:
+            self._rollback_preset_apply(plan, worker.completed, InterruptedError("preset apply cancelled"))
+        else:
+            self._finish_preset_apply_success(plan, worker.completed)
+
+    def _record_preset_steps(self, operation_id, steps) -> None:
+        """为当前预设操作持久化已完成步骤，写入失败时记录原因并中断后续部署。"""
+        plan = self._preset_apply_plan
+        if plan is None or plan.operation_id != operation_id:
+            return
+        try:
+            self._mod_manager.preset_manager.record_preset_apply_steps(operation_id, steps)
+        except Exception as error:
+            self._preset_journal_error = error
+            worker = self._preset_apply_worker
+            if worker is not None:
+                worker.requestInterruption()
+
+    def _persist_preset_patch(self, worker, request) -> None:
+        """在数据库所属线程保存运行时日志补丁，无论成功或失败都唤醒等待结果的工作线程。"""
+        if request.done.is_set():
+            return
+        try:
+            self._mod_manager.preset_manager._get_index().update_journal_runtime_patch(
+                request.operation_id, request.patch_json
+            )
+        except Exception as error:
+            request.error = error
+        finally:
+            request.done.set()
+
+    def _on_preset_apply_progress(self, index: int, total: int, action, frac: float) -> None:
+        """把预设文件操作的项目进度、动作名称和目标目录同步到仍存在的进度窗口。"""
+        dialog = self._preset_apply_progress
+        if dialog is None:
+            return
+        verbs = {"park": tr("停用"), "restore": tr("恢复"), "materialize_active": tr("首次部署")}
+        name = Path(action.active_path).name
+        dialog.set_item_progress(index, total, verbs.get(action.action, action.action), name, frac)
+
+    def _on_preset_apply_phase(self, label) -> None:
+        """切换到进度未知的预设处理阶段，并更新阶段说明。"""
+        dialog = self._preset_apply_progress
+        if dialog is not None:
+            dialog.setRange(0, 0)
+            dialog.setLabelText(label)
