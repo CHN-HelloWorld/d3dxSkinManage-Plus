@@ -6395,3 +6395,132 @@ class MainWindow(QMainWindow):
             self._bg_overlay.dispose()
         logger.info("应用关闭")
         super().closeEvent(event)
+
+    # 预设
+
+    def _refresh_preset_combo(self, rename_id: str | None = None) -> None:
+        """刷新总览页预设选择器。rename_id 给出时进入该预设的内联重命名"""
+        gid = self._game_service.current_game_id
+        if not gid:
+            return
+        pm = self._mod_manager.preset_manager
+        pm.ensure_default(gid)
+        presets = pm.get_all_presets(gid)
+        cur = pm.get_current(gid)
+        self._overview_page.set_presets(presets, cur.id, rename_id=rename_id)
+
+    @_invalidates_library_probe
+    def _on_preset_apply(self, preset_id: str, *, after_success=None) -> None:
+        """用户点了某个预设的「应用」按钮"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if not preset_id:
+            return
+        pm = self._mod_manager.preset_manager
+        gid = self._game_service.current_game_id
+        if pm.get_current(gid).id == preset_id:
+            if after_success is not None:
+                after_success()
+            return
+        if self._preset_apply_worker is not None or getattr(self, "_preset_apply_preparing", False):
+            return
+        if self._deploy_workers or getattr(self, "_disable_worker", None) is not None:
+            QMessageBox.information(self, tr("暂时无法切换预设"), tr("Mod 正在后台部署，请等待部署完成后重试。"))
+            return
+        from src.ui.dialogs.preset_progress import PresetProgressDialog
+
+        target = pm.get_preset(preset_id)
+        dialog = PresetProgressDialog(target.display_name if target is not None else tr("所选预设"), self)
+        selector = getattr(self._overview_page, "_preset_selector", None)
+        if selector is not None:
+            selector.setEnabled(False)
+        self._preset_apply_progress = dialog
+        self._preset_apply_game_id = gid
+        self._preset_apply_preparing = True
+        self._preset_apply_cancelled = False
+        self._preset_apply_completed = after_success
+        self._preset_journal_error = None
+        self._preset_apply_plan = None
+        self._preset_preparation = None
+        token = self._preset_apply_token = object()
+        self._game_page.setEnabled(False)
+        dialog.canceled.connect(self._cancel_preset_apply)
+        dialog.show()
+        call_later(0, self, lambda: self._begin_preset_preparation(preset_id, token))
+
+    def _begin_preset_preparation(self, preset_id, token) -> None:
+        """在有效任务令牌下准备预设相关 Mod，独占保护涉及的库路径并启动后台预检。"""
+        if self._preset_apply_token is not token:
+            return
+        if self._preset_apply_cancelled:
+            self._clear_preset_apply_ui()
+            return
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        try:
+            pm = self._mod_manager.preset_manager
+            target = pm.get_preset(preset_id)
+            current = pm.get_current(self._mod_manager.current_game_id)
+            mod_ids = set(target.enabled_mod_ids) | set(current.enabled_mod_ids)
+            mod_ids.update(
+                mod.mod_id for mod in self._mod_manager._index.get_enabled_mods(self._mod_manager.current_game_id)
+            )
+            preparation = self._mod_manager.create_deployment_preparation(
+                trigger="preset_apply_before_io", mod_ids=mod_ids
+            )
+            self._preset_preparation = preparation
+            self._mod_manager.protect_library_operation(
+                "preset-apply",
+                mod_ids=tuple(mod.mod_id for mod in preparation.mods),
+                paths=tuple(p for mod in preparation.mods for p in (mod.path, mod.deployed_path)),
+                exclusive=True,
+            )
+            worker = DeploymentPhaseWorker(preparation.prepare, self)
+            self._set_preset_worker(worker, lambda w: self._on_preset_prepared(w, preset_id))
+        except Exception as error:
+            self._finish_preset_apply_failure(None, error)
+
+    def _set_preset_worker(self, worker, callback) -> None:
+        """接管新阶段工作线程，释放上一阶段对象并绑定仅消费一次的完成回调。"""
+        previous = self._preset_apply_worker
+        self._preset_apply_worker = worker
+        if previous is not None:
+            previous.deleteLater()
+        worker._owner_finished = callback
+        worker._owner_consumed = False
+        worker.finished.connect(lambda w=worker: self._consume_preset_worker(w))
+        worker.start(QThread.Priority.LowPriority)
+
+    def _consume_preset_worker(self, worker) -> None:
+        """仅消费当前阶段工作线程的完成结果一次，回调异常交由统一失败流程结算。"""
+        if self._preset_apply_worker is not worker or worker._owner_consumed:
+            return
+        worker._owner_consumed = True
+        try:
+            worker._owner_finished(worker)
+        except Exception as error:
+            self._finish_preset_apply_failure(self._preset_apply_plan, error)
+
+    def _on_preset_prepared(self, worker, preset_id) -> None:
+        """准备成功且未取消时建立部署计划、登记执行阶段并启动后台文件操作。"""
+        if worker.error is not None:
+            self._finish_preset_apply_failure(None, worker.error)
+            return
+        if self._preset_apply_cancelled:
+            self._clear_preset_apply_ui()
+            return
+        pm = self._mod_manager.preset_manager
+        plan = pm.prepare_preset_apply(preset_id, preparation=self._preset_preparation)
+        self._preset_apply_plan = plan
+        self._preset_apply_preparing = False
+        pm.mark_preset_apply_executing(plan.operation_id)
+        from src.ui.preset_deploy_worker import PresetDeployWorker
+
+        worker = PresetDeployWorker(plan, self._mod_manager._storage, self, preparation=self._preset_preparation)
+        self._preset_preparation.patch_sink = worker.persist_patch_on_owner
+        worker.patch_ready.connect(lambda request, w=worker: self._persist_preset_patch(w, request))
+        worker.progress.connect(self._on_preset_apply_progress)
+        worker.phase.connect(self._on_preset_apply_phase)
+        worker.step_completed.connect(lambda steps, op=plan.operation_id: self._record_preset_steps(op, steps))
+        self._preset_apply_progress.show_phase("deploy", tr("正在执行预设部署…"))
+        self._set_preset_worker(worker, self._on_preset_execution_finished)
