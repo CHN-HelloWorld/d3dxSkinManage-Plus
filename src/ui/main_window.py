@@ -6599,3 +6599,141 @@ class MainWindow(QMainWindow):
         if dialog is not None:
             dialog.setRange(0, 0)
             dialog.setLabelText(label)
+
+    @_invalidates_library_probe
+    def _finish_preset_apply_success(self, plan, completed) -> None:
+        """提交预设数据库状态，失败时回滚文件操作；提交成功后执行不可取消的同步阶段。"""
+        preparation = self._preset_preparation
+        dialog = self._preset_apply_progress
+        if dialog is not None:
+            dialog.show_phase("finalize", tr("正在提交预设状态…"))
+            dialog.setCancelButton(None)
+        try:
+            affected = self._mod_manager.preset_manager.commit_preset_apply(plan, completed, preparation=preparation)
+        except Exception as exc:
+            self._rollback_preset_apply(plan, completed, exc)
+            return
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        if dialog is not None:
+            dialog.setLabelText(tr("预设已提交，正在完成同步…"))
+        worker = DeploymentPhaseWorker(lambda: preparation.after_commit(plan), self)
+        worker._must_finish = True
+        self._set_preset_worker(worker, lambda w: self._finish_preset_publication(w, plan, affected))
+
+    def _finish_preset_publication(self, worker, plan, affected) -> None:
+        """发布已提交预设的引用和界面状态，清理切换资源后调用仍有效的后续操作。"""
+        follow_up = getattr(self, "_preset_apply_completed", None) if not self._preset_apply_cancelled else None
+        try:
+            # 数据库已经提交，后续界面或同步错误不能触发回滚。
+            if worker.error is not None:
+                logger.warning("预设已提交，后续同步失败：%s", worker.error)
+            preparation = self._preset_preparation
+            preparation.publish_ini_refs(self._mod_manager, plan)
+            self._mod_manager.preset_manager.finish_prepared_apply(plan, affected, preparation)
+            if self._preset_apply_progress is not None:
+                self._preset_apply_progress.setRange(0, 1000)
+                self._preset_apply_progress.setValue(1000)
+            target = self._mod_manager.preset_manager.get_preset(plan.to_preset_id)
+            self._toast_done(tr("已切换到「{name}」", name=target.display_name) if target else tr("预设已切换"))
+        finally:
+            self._clear_preset_apply_ui()
+        if follow_up is not None:
+            follow_up()
+
+    def _rollback_preset_apply(self, plan, completed, error) -> None:
+        """启动必须完成的后台回滚阶段，并在结束后统一报告原始错误和恢复结果。"""
+        from src.core.preset_apply_service import PresetApplyError
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        if self._preset_apply_progress is not None:
+            self._preset_apply_progress.show_rollback()
+        worker = DeploymentPhaseWorker(lambda: self._preset_preparation.rollback(plan, completed), self)
+        worker._must_finish = True
+
+        def finished(w):
+            """合并原始失败原因与回滚异常，再交给预设失败流程保存恢复状态。"""
+            errors = (str(w.error),) if w.error else w.result
+            wrapped = PresetApplyError(str(error), completed=completed, rollback_errors=errors)
+            self._finish_preset_apply_failure(plan, wrapped)
+
+        self._set_preset_worker(worker, finished)
+
+    @_invalidates_library_probe
+    def _finish_preset_apply_failure(self, plan, error) -> None:
+        """记录切换失败与恢复状态，释放界面资源，并按取消和回滚结果决定是否提示。"""
+        details = str(error)
+        rollback_errors = getattr(error, "rollback_errors", ())
+        try:
+            if plan is not None:
+                preparation = getattr(self, "_preset_preparation", None)
+                self._mod_manager.preset_manager.fail_preset_apply(plan, error, preparation=preparation)
+                if preparation is not None:
+                    preparation.publish_ini_refs(self._mod_manager, plan, notify_variants=False)
+        except Exception as failure:
+            logger.exception("预设失败状态保存异常")
+            details += tr("\n\n保存恢复状态失败：{failure}", failure=failure)
+        finally:
+            self._clear_preset_apply_ui()
+        if rollback_errors:
+            details += tr("\n\n回滚未完成：\n") + "\n".join(rollback_errors)
+        if not getattr(self, "_preset_apply_cancelled", False) or rollback_errors:
+            from src.core.operation_preflight import OperationPreflightError
+
+            cause = error
+            while cause is not None and not isinstance(cause, OperationPreflightError):
+                cause = cause.__cause__
+            if isinstance(cause, OperationPreflightError):
+                self._mod_manager.report_operation_failure(cause)
+            else:
+                QMessageBox.critical(self, tr("预设切换失败"), details)
+
+    @_invalidates_library_probe
+    def _clear_preset_apply_ui(self) -> None:
+        """工作线程停止后释放预设操作保护及进度窗口，恢复选择控件和延后任务。"""
+        worker = self._preset_apply_worker
+        if worker is not None and worker.isRunning():
+            return
+        self._mod_manager.release_library_operation("preset-apply")
+        if self._preset_apply_progress is not None:
+            try:
+                self._preset_apply_progress.canceled.disconnect(self._cancel_preset_apply)
+            except TypeError:
+                pass
+            self._preset_apply_progress.hide()
+            self._preset_apply_progress.deleteLater()
+        self._preset_apply_progress = None
+        self._preset_apply_worker = None
+        self._preset_apply_preparing = False
+        self._preset_apply_token = None
+        self._preset_apply_game_id = ""
+        self._preset_apply_plan = None
+        self._preset_preparation = None
+        self._preset_apply_completed = None
+        if worker is not None:
+            worker.deleteLater()
+        selector = getattr(self._overview_page, "_preset_selector", None)
+        if selector is not None:
+            selector.setEnabled(True)
+        self._game_page.setEnabled(True)
+        resume = getattr(self, "_resume_deferred_library_environment", None)
+        if resume is not None:
+            resume()
+
+    def _stop_preset_apply(self, timeout_ms=5000) -> bool:
+        """关闭事件无法投递排队信号时，仍处理已完成的工作步骤。"""
+        self._cancel_preset_apply()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while self._preset_apply_worker is not None:
+            worker = self._preset_apply_worker
+            request = getattr(worker, "pending_patch", None)
+            if request is not None:
+                self._persist_preset_patch(worker, request)
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            if not worker.wait(min(50, remaining)):
+                if time.monotonic() >= deadline:
+                    return False
+                continue
+            self._consume_preset_worker(worker)
+        self._clear_preset_apply_ui()
+        return True
