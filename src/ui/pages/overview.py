@@ -1137,3 +1137,63 @@ class BatchAddCharacterDialog(QDialog):
             )
         if self._results:
             self.accept()
+
+    def get_results(self) -> list[dict]:
+        """返回已收集的批量类别字段，尚未确认时为空列表。"""
+        return self._results
+
+
+class _PixmapLoadWorker(QThread):
+    """后台线程：从原生路径解码显示用 QImage，避免阻塞主线程。
+
+    使用 Python queue.Queue 做线程安全的任务队列，主线程只需 enqueue/clear，
+    工作线程持续从队列取任务并 emit 已解码的 QImage。缓存尺寸覆盖卡片允许的
+    200% 最大缩放，既避免保存整张 2K/4K 位图，也不会在放大卡片时失真。
+    """
+
+    _MAX_CACHE_SIZE = QSize(
+        ModCard.CARD_WIDTH * 2 - 8,
+        int(ModCard.CARD_HEIGHT * 2 * 0.64),
+    )
+
+    image_loaded = Signal(str, str, int, object)  # item_id, path, request_id, DecodedPreview
+
+    def __init__(self, parent=None):
+        """创建卡片预览工作队列，初始化允许处理任务的运行标记。"""
+        super().__init__(parent)
+        import queue as _queue
+
+        self._queue: _queue.Queue = _queue.Queue()
+        self._running = True
+
+    def enqueue(
+        self,
+        item_id: str,
+        path: str,
+        width: int,
+        height: int,
+        request_id: int = 0,
+        *,
+        mode: str = "contain",
+        dpr: float = 1.0,
+    ) -> None:
+        """主线程调用：添加加载任务"""
+        if self._running:
+            layout = PreviewLayout(width, height, mode, dpr)
+            self._queue.put((item_id, path, layout, request_id, preview_cache_token()))
+
+    @classmethod
+    def cache_size(cls, layout: PreviewLayout) -> QSize:
+        """按布局物理像素尺寸和缓存基准尺寸的较大值选择解码尺寸。"""
+        return QSize(
+            max(round(layout.width * layout.dpr), cls._MAX_CACHE_SIZE.width()),
+            max(round(layout.height * layout.dpr), cls._MAX_CACHE_SIZE.height()),
+        )
+
+    def clear_queue(self) -> None:
+        """主线程调用：数据全量刷新时清空待处理任务。"""
+        while not self._queue.empty():
+            try:
+                self._queue.get_nowait()
+            except Exception:
+                break
