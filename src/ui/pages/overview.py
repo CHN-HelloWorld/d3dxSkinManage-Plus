@@ -828,3 +828,57 @@ class _DragDropImageLabel(QLabel):
         super().__init__(text, parent)
         self.setAcceptDrops(True)
         self._on_image_dropped = None  # callback(path)
+
+    def set_drop_callback(self, callback):
+        """设置图片拖入后的回调"""
+        self._on_image_dropped = callback
+
+    def dragEnterEvent(self, event):
+        """仅检查 URL 拖放格式并显示目标样式，避免进入阶段读取外部文件数据。"""
+        # 仅检查格式可用性，不读取实际数据，避免 COM IPC 卡顿
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.setStyleSheet(
+                f"QLabel {{ border: 2px dashed {theme.color('accent')}; border-radius: 4px; "
+                f"background-color: {theme.color('bg.subtle')}; color: {theme.color('accent')}; font-size: 9px; }}"
+            )
+            return
+        event.ignore()
+
+    def dragLeaveEvent(self, event):
+        """拖放离开图片标签时恢复默认虚线边框和文字颜色。"""
+        self.setStyleSheet(
+            f"QLabel {{ border: 1px dashed {theme.color('stroke.control')}; border-radius: 4px; "
+            f"background-color: {theme.color('bg.subtle')}; color: {theme.color('text.tertiary')}; font-size: 9px; }}"
+        )
+
+    def dropEvent(self, event):
+        """选取首个具有支持扩展名的本地拖入路径，交给图片回调处理。"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    p = Path(url.toLocalFile())
+                    if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
+                        event.acceptProposedAction()
+                        if self._on_image_dropped:
+                            self._on_image_dropped(str(p))
+                        return
+        event.ignore()
+
+
+class BatchAddCharacterDialog(QDialog):
+    """批量添加类别对话框 - 新建类别的批量版，每个条目有完整表单"""
+
+    def __init__(self, parent=None):
+        """创建批量类别编辑窗口，建立条目与结果集合，并初始添加一条空记录。"""
+        super().__init__(parent)
+        self._entries: list[dict] = []
+        self._results: list[dict] = []
+        self._built_theme = theme.current_theme()
+        self.setWindowTitle(tr("批量添加类别"))
+        self.setFixedSize(600, 580)
+        self.setModal(True)
+        self._setup_ui()
+        # 默认添加一个空条目
+        self._add_entry()
+        acrylic.apply_dialog_acrylic(self)
