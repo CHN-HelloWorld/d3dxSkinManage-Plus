@@ -6869,3 +6869,122 @@ class MainWindow(QMainWindow):
             worker.start(QThread.Priority.LowPriority)
         except Exception as error:
             self._finish_preset_delete(error)
+
+    def _preset_delete_written(self):
+        """接收当前删除任务的写入结果，提交预设变更后启动不可取消的无用缓存清理。"""
+        worker = self.sender()
+        if worker is not self._preset_delete_worker:
+            return
+        candidate = self._preset_delete_candidate
+        if self._preset_delete_cancelled or worker.error is not None:
+            self._finish_preset_delete(None if self._preset_delete_cancelled else worker.error)
+            return
+        try:
+            self._mod_manager.preset_manager.commit_delete_presets(candidate)
+            self._preset_delete_progress.setCancelButton(None)
+            if not candidate.cleanup_records:
+                self._finish_preset_delete()
+                return
+            from src.ui.preset_deploy_worker import PresetCleanupWorker
+
+            cleanup = PresetCleanupWorker(
+                candidate.cleanup_records, self._mod_manager._storage.get_deploy_dir(), self._mod_manager._storage, self
+            )
+            cleanup._must_finish = True
+            self._preset_delete_worker = cleanup
+            worker.deleteLater()
+            self._preset_delete_progress.show_phase("finalize", tr("正在清理不再使用的缓存…"))
+            cleanup.progress.connect(self._on_preset_delete_progress)
+            cleanup.finished.connect(self._preset_delete_cleanup_finished)
+            cleanup.start(QThread.Priority.LowPriority)
+        except Exception as error:
+            self._finish_preset_delete(error)
+
+    def _on_preset_delete_progress(self, done, total, name):
+        """将预设缓存清理的完成数量和当前项目同步到删除进度窗口。"""
+        dialog = self._preset_delete_progress
+        if dialog is not None:
+            dialog.setRange(0, total)
+            dialog.setValue(done)
+            dialog.progress_label.setText(tr("{done} / {total} 项", done=done, total=total))
+            dialog.setLabelText(tr("清理缓存 · {name}", name=name))
+
+    def _preset_delete_cleanup_finished(self):
+        """发布当前任务已移除的预设部署记录，保留清理失败项并完成删除结算。"""
+        worker = self.sender()
+        if worker is not self._preset_delete_worker:
+            return
+        try:
+            if worker.error is not None:
+                raise worker.error
+            removed, errors = worker.result
+            self._mod_manager.preset_manager.publish_deleted_preset_deployments(removed, self._preset_delete_game_id)
+            if errors:
+                logger.warning("部分预设缓存未清理，将保留到下次清理: %s", errors)
+            self._finish_preset_delete()
+        except Exception as error:
+            self._finish_preset_delete(error)
+
+    def _cancel_preset_delete(self):
+        """仅在预设删除尚未提交时登记取消，并通知候选写入与工作线程停止。"""
+        candidate = getattr(self, "_preset_delete_candidate", None)
+        if candidate is not None and candidate.committed:
+            return
+        self._preset_delete_cancelled = True
+        if candidate is not None:
+            candidate.cancelled.set()
+        worker = getattr(self, "_preset_delete_worker", None)
+        if worker is not None:
+            worker.requestInterruption()
+
+    def _finish_preset_delete(self, error=None):
+        """丢弃未提交候选、释放操作保护和进度窗口，按提交状态提示结果并继续关闭或延后任务。"""
+        from src.core.preset_delete import discard_prepared_preset_delete
+
+        candidate = getattr(self, "_preset_delete_candidate", None)
+        worker = getattr(self, "_preset_delete_worker", None)
+        if candidate is not None and not candidate.committed:
+            discard_prepared_preset_delete(candidate)
+        self._preset_delete_worker = None
+        self._preset_delete_preparing = False
+        if worker is not None:
+            worker.deleteLater()
+        self._mod_manager.release_library_operation("preset-delete")
+        dialog = self._preset_delete_progress
+        self._preset_delete_progress = None
+        dialog.hide()
+        dialog.deleteLater()
+        self._overview_page._preset_selector.setEnabled(True)
+        self._game_page.setEnabled(True)
+        if error is not None:
+            QMessageBox.critical(
+                self,
+                tr("预设删除失败") if not candidate or not candidate.committed else tr("缓存清理未完成"),
+                str(error),
+            )
+        elif candidate is not None and candidate.committed:
+            self._toast_done(tr("已删除 {count} 个预设", count=len(candidate.removed_presets)))
+        self._preset_delete_candidate = None
+        if getattr(self, "_preset_delete_close_pending", False):
+            self._preset_delete_close_pending = False
+            call_later(0, self, self.close)
+        else:
+            self._resume_deferred_library_environment()
+
+    @_invalidates_library_probe
+    def _on_preset_duplicate_batch(self, preset_ids: list) -> None:
+        """Ctrl+V 粘贴：为每个 id 复制一份，命名带 copy 后缀避免冲突"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        gid = self._game_service.current_game_id
+        pm = self._mod_manager.preset_manager
+        for src_id in preset_ids:
+            src = pm.get_preset(src_id)
+            if not src:
+                continue
+            new_name = pm.generate_unique_name(gid, src.display_name + tr(" 副本"))
+            try:
+                # copied_from 让运行时变体偏好把源预设下各 Mod 的变体状态一并复制过去
+                pm.create_preset(gid, new_name, snapshot=src.character_mods, copied_from=src.id)
+            except ValueError as e:
+                logger.warning("复制预设失败 %s: %s", src_id, e)
