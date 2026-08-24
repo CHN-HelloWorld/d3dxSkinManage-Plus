@@ -739,3 +739,92 @@ class CharacterDialog(QDialog):
             event.acceptProposedAction()
             return
         event.ignore()
+
+    def _thumb_drop(self, event):
+        """缩略图拖拽放下"""
+        if event.mimeData().hasUrls():
+            for url in event.mimeData().urls():
+                if url.isLocalFile():
+                    p = Path(url.toLocalFile())
+                    if p.suffix.lower() in (".png", ".jpg", ".jpeg", ".bmp", ".webp"):
+                        self._thumbnail_path = str(p)
+                        self._update_thumbnail_preview()
+                        event.acceptProposedAction()
+                        return
+        event.ignore()
+
+    def _on_clear_thumbnail(self):
+        """清除待保存的类别图片路径，并恢复图片选择提示。"""
+        self._thumbnail_path = ""
+        self._thumb_preview.clear()
+        self._thumb_preview.setText(tr("点击选择\n或拖拽图片"))
+
+    def _update_thumbnail_preview(self):
+        """读取仍存在的有效图片，按比例缩放到预览区域并显示已选择样式。"""
+        if self._thumbnail_path and fs.exists(self._thumbnail_path):
+            pixmap = load_pixmap_file(self._thumbnail_path)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    self._thumb_preview.size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                self._thumb_preview.setPixmap(scaled)
+                self._thumb_preview.setStyleSheet(
+                    f"QLabel {{ border: 2px solid {theme.color('accent')}; border-radius: 8px; "
+                    f"background-color: {theme.color('bg.card')}; }}"
+                )
+
+    def _on_ok(self):
+        """校验必填名称、同级重名和角色全局重名，成功后保存结果并接受对话框。"""
+        name = self._name_input.text().strip()
+        if not name:
+            self._name_input.setStyleSheet(
+                f"QLineEdit {{ padding: 8px 12px; border: 1px solid {theme.color('danger')}; border-radius: 6px; "
+                f"background-color: {theme.color('bg.card')}; color: {theme.color('text.primary')}; font-size: 13px; }}"
+            )
+            return
+        # 同级重名检测
+        if name.lower() in self._existing_names:
+            self._name_input.setStyleSheet(
+                f"QLineEdit {{ padding: 8px 12px; border: 1px solid {theme.color('danger')}; border-radius: 6px; "
+                f"background-color: {theme.color('bg.card')}; color: {theme.color('text.primary')}; font-size: 13px; }}"
+            )
+            QMessageBox.warning(
+                self, tr("名称重复"), tr('同级目录下已存在名为 "{name}" 的类别或角色/对象，请使用其他名称。', name=name)
+            )
+            return
+        # 角色或对象名称在当前游戏范围内检查重名。
+        selected_type = self._type_combo.currentData()
+        if selected_type == "character" and name.lower() in self._all_character_names:
+            self._name_input.setStyleSheet(
+                f"QLineEdit {{ padding: 8px 12px; border: 1px solid {theme.color('danger')}; border-radius: 6px; "
+                f"background-color: {theme.color('bg.card')}; color: {theme.color('text.primary')}; font-size: 13px; }}"
+            )
+            QMessageBox.warning(
+                self, tr("角色名称重复"), tr('当前游戏中已存在名为 "{name}" 的角色/对象，请使用其他名称。', name=name)
+            )
+            return
+        self._result = {
+            "name": name,
+            "name_en": self._name_en_input.text().strip(),
+            "thumbnail": self._thumbnail_path,
+            "node_type": self._type_combo.currentData(),
+        }
+        self.accept()
+
+    def get_result(self):
+        """返回确认后的类别字段，尚未确认时返回空值。"""
+        return self._result
+
+
+class _DragDropImageLabel(QLabel):
+    """支持拖拽图片的Label"""
+
+    image_dropped = None  # 由外部设置回调
+
+    def __init__(self, text="", parent=None):
+        """创建允许接收文件拖放的图片标签，初始不绑定图片处理回调。"""
+        super().__init__(text, parent)
+        self.setAcceptDrops(True)
+        self._on_image_dropped = None  # callback(path)
