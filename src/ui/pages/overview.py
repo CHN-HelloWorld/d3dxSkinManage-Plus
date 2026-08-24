@@ -882,3 +882,258 @@ class BatchAddCharacterDialog(QDialog):
         # 默认添加一个空条目
         self._add_entry()
         acrylic.apply_dialog_acrylic(self)
+
+    def prepare_for_open(self) -> None:
+        """保留已准备的窗口与表单，替换旧编辑草稿。"""
+        self._results = []
+        self.setResult(QDialog.DialogCode.Rejected)
+        for entry in self._entries[1:]:
+            self._entries_layout.removeWidget(entry["frame"])
+            entry["frame"].hide()
+            entry["frame"].deleteLater()
+        self._entries = self._entries[:1]
+        entry = self._entries[0]
+        entry["name_input"].clear()
+        entry["name_en_input"].clear()
+        entry["type_combo"].setCurrentIndex(0)
+        self._clear_thumbnail(entry)
+        self._renumber()
+        self._entries_scroll.verticalScrollBar().setValue(0)
+        self._entries_scroll.horizontalScrollBar().setValue(0)
+        entry["name_input"].setFocus(Qt.FocusReason.OtherFocusReason)
+
+    @staticmethod
+    def _clear_thumbnail(entry: dict) -> None:
+        """清空指定条目的图片路径，并恢复图片选择占位和默认边框。"""
+        entry["thumbnail_path"] = ""
+        preview = entry["thumb_preview"]
+        preview.setText(tr("选择\n图片"))
+        preview.setStyleSheet(
+            f"QLabel {{ border: 1px dashed {theme.color('stroke.control')}; border-radius: 4px; "
+            f"background-color: {theme.color('bg.subtle')}; color: {theme.color('text.tertiary')}; font-size: 9px; }}"
+        )
+
+    def _setup_ui(self):
+        """构建可滚动的批量类别条目区、数量提示及添加、确认和取消操作。"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(12)
+
+        # 标题
+        header = QLabel(tr("批量添加类别"))
+        header.setStyleSheet(f"font-size: 18px; font-weight: bold; color: {theme.color('text.primary')};")
+        layout.addWidget(header)
+
+        subtitle = QLabel(tr("逐个填写类别信息，每个类别可设置名称、英文名和图片。点击「+」添加更多。"))
+        subtitle.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 11px;")
+        subtitle.setWordWrap(True)
+        layout.addWidget(subtitle)
+
+        # 分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"color: {theme.color('stroke.divider')};")
+        layout.addWidget(line)
+
+        # 条目列表（滚动）
+        scroll = QScrollArea()
+        self._entries_scroll = scroll
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("QScrollArea { border: none; }")
+        self._scroll_content = QWidget()
+        self._entries_layout = QVBoxLayout(self._scroll_content)
+        self._entries_layout.setContentsMargins(0, 0, 0, 0)
+        self._entries_layout.setSpacing(8)
+        self._entries_layout.addStretch()
+        scroll.setWidget(self._scroll_content)
+        layout.addWidget(scroll, 1)
+
+        # 添加按钮
+        add_row = QHBoxLayout()
+        add_btn = QPushButton(tr("＋ 添加类别"))
+        add_btn.setStyleSheet(
+            f"QPushButton "
+            f"{{ background-color: transparent; "
+            f"color: {theme.color('accent')}; "
+            f"border: 1px dashed {theme.color('accent')}; "
+            f"border-radius: 6px; padding: 8px 16px; font-size: 12px; font-weight: bold; }}"
+            f"QPushButton:hover {{ background-color: rgba(30, 136, 229, 0.1); }}"
+        )
+        add_btn.clicked.connect(self._add_entry)
+        add_row.addWidget(add_btn)
+        add_row.addStretch()
+
+        self._entry_count_label = QLabel(tr("共 1 个类别"))
+        self._entry_count_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 11px;")
+        add_row.addWidget(self._entry_count_label)
+        layout.addLayout(add_row)
+
+        # 底部按钮
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.Shape.HLine)
+        line2.setStyleSheet(f"color: {theme.color('stroke.divider')};")
+        layout.addWidget(line2)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton(tr("取消"))
+        cancel_btn.setFixedSize(90, 36)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        ok_btn = QPushButton(tr("全部添加"))
+        ok_btn.setFixedSize(110, 36)
+        ok_btn.setDefault(True)
+        ok_btn.setProperty("accent", True)
+        ok_btn.clicked.connect(self._on_ok)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def _add_entry(self):
+        """添加一个角色条目"""
+        entry_frame = QFrame()
+        entry_frame.setStyleSheet(
+            f"QFrame#batchEntry {{ background-color: {theme.color('bg.card')}; border-radius: 8px; "
+            f"border: 1px solid {theme.color('stroke.divider')}; }}"
+        )
+        entry_frame.setObjectName("batchEntry")
+        entry_layout = QHBoxLayout(entry_frame)
+        entry_layout.setContentsMargins(12, 10, 12, 10)
+        entry_layout.setSpacing(12)
+
+        # 序号
+        idx = len(self._entries) + 1
+        num_label = QLabel(f"#{idx}")
+        num_label.setFixedWidth(28)
+        num_label.setStyleSheet(f"font-size: 14px; font-weight: bold; color: {theme.color('accent')};")
+        entry_layout.addWidget(num_label)
+
+        # 缩略图 - 支持拖拽图片
+        thumb_preview = _DragDropImageLabel(tr("选择\n图片"))
+        thumb_preview.setFixedSize(60, 75)
+        thumb_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        thumb_preview.setCursor(Qt.CursorShape.PointingHandCursor)
+        entry_layout.addWidget(thumb_preview)
+
+        # 表单区
+        form_layout = QVBoxLayout()
+        form_layout.setSpacing(6)
+
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        name_input = QLineEdit()
+        name_input.setPlaceholderText(tr("类别名称 *"))
+        name_row.addWidget(name_input, 2)
+
+        name_en_input = QLineEdit()
+        name_en_input.setPlaceholderText(tr("英文名（可选）"))
+        name_row.addWidget(name_en_input, 2)
+
+        # 节点类型选择（紧凑内联）
+        type_combo = QComboBox()
+        type_combo.addItem(icons.get_icon("meta/category"), tr("类别"), "category")
+        type_combo.addItem(icons.get_icon("meta/character"), tr("角色/对象"), "character")
+        type_combo.setToolTip(tr("类别：允许同时启用多个Mod\n角色/对象：同一时间只能启用一个Mod"))
+        # 收起态须容下「角色/对象」+ 图标 + 下拉箭头，否则文字被截断。
+        type_combo.setMinimumWidth(132)
+        type_combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        name_row.addWidget(type_combo)
+
+        form_layout.addLayout(name_row)
+
+        entry_layout.addLayout(form_layout, 1)
+
+        # 删除按钮
+        remove_btn = QPushButton()
+        icons.apply_icon(remove_btn, "actions/dismiss", "text.tertiary")
+        remove_btn.setIconSize(QSize(16, 16))
+        remove_btn.setFixedSize(28, 28)
+        remove_btn.setStyleSheet(
+            f"QPushButton {{ background-color: transparent; border: none; border-radius: 6px; }}"
+            f"QPushButton:hover {{ background-color: {theme.rgba('danger', 0.14)}; }}"
+        )
+        entry_layout.addWidget(remove_btn, alignment=Qt.AlignmentFlag.AlignTop)
+
+        entry = {
+            "frame": entry_frame,
+            "name_input": name_input,
+            "name_en_input": name_en_input,
+            "type_combo": type_combo,
+            "thumb_preview": thumb_preview,
+            "thumbnail_path": "",
+            "num_label": num_label,
+        }
+        self._clear_thumbnail(entry)
+
+        # 点击缩略图选择图片
+        def select_thumb(e, ent=entry):
+            """为回调绑定的类别条目选择图片，成功选择后应用该条目的预览。"""
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                tr("选择类别图片"),
+                "",
+                tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)"),
+            )
+            if path:
+                _apply_thumb(path, ent)
+
+        def _apply_thumb(path, ent):
+            """将图片应用到缩略图"""
+            ent["thumbnail_path"] = path
+            pixmap = load_pixmap_file(path)
+            if not pixmap.isNull():
+                scaled = pixmap.scaled(
+                    ent["thumb_preview"].size(),
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                ent["thumb_preview"].setPixmap(scaled)
+                ent["thumb_preview"].setStyleSheet(
+                    f"QLabel {{ border: 1px solid {theme.color('accent')}; border-radius: 4px; "
+                    f"background-color: {theme.color('bg.subtle')}; }}"
+                )
+
+        thumb_preview.mousePressEvent = select_thumb
+        # 拖拽图片支持
+        thumb_preview.set_drop_callback(lambda path, ent=entry: _apply_thumb(path, ent))
+
+        # 删除条目
+        def remove_entry(e=entry):
+            """删除指定类别编辑行并重新编号，始终保留至少一条可编辑记录。"""
+            if len(self._entries) <= 1:
+                return  # 至少保留一个
+            self._entries.remove(e)
+            e["frame"].deleteLater()
+            self._renumber()
+
+        remove_btn.clicked.connect(lambda: remove_entry())
+
+        self._entries.append(entry)
+        self._entries_layout.insertWidget(self._entries_layout.count() - 1, entry_frame)
+        self._renumber()
+
+    def _renumber(self):
+        """重新编号"""
+        for i, e in enumerate(self._entries):
+            e["num_label"].setText(f"#{i + 1}")
+        self._entry_count_label.setText(tr("共 {count} 个类别", count=len(self._entries)))
+
+    def _on_ok(self):
+        """收集名称非空的类别条目，存在可提交条目时保存结果并接受对话框。"""
+        self._results = []
+        for entry in self._entries:
+            name = entry["name_input"].text().strip()
+            if not name:
+                continue  # 跳过空条目
+            self._results.append(
+                {
+                    "name": name,
+                    "name_en": entry["name_en_input"].text().strip(),
+                    "thumbnail": entry.get("thumbnail_path", ""),
+                    "node_type": entry["type_combo"].currentData(),
+                }
+            )
+        if self._results:
+            self.accept()
