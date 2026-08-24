@@ -6737,3 +6737,135 @@ class MainWindow(QMainWindow):
             self._consume_preset_worker(worker)
         self._clear_preset_apply_ui()
         return True
+
+    @_invalidates_library_probe
+    def _on_preset_applied(self, _affected_ids: list) -> None:
+        """发布已提交差异，文件监控另行对账。"""
+        self._refresh_preset_combo()
+        mods = [mod for mid in _affected_ids if (mod := self._mod_manager.get_mod(mid)) is not None]
+        self._overview_page.update_mods_in_place(mods)
+        chars = self._mod_manager.get_characters_for_ui(self._game_service.current_game_id)
+        self._overview_page.set_characters(chars, refresh=False)
+        if self._stack.currentIndex() == self.PAGE_GALLERY and hasattr(self._gallery_page, "refresh_from_index"):
+            self._gallery_page.refresh_from_index()
+
+    @_invalidates_library_probe
+    def _on_preset_rename(self, preset_id: str, new_name: str) -> None:
+        """内联重命名提交"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        pm = self._mod_manager.preset_manager
+        if not new_name.strip():
+            QMessageBox.warning(self, tr("提示"), tr("名称不能为空"))
+            return
+        if not pm.update_preset_meta(preset_id, name=new_name):
+            QMessageBox.warning(self, tr("提示"), tr("此预设已不存在，请刷新后重试"))
+        # preset_list_changed 信号会触发刷新
+
+    @_invalidates_library_probe
+    def _on_preset_create(self) -> None:
+        """新建预设 → 默认名 + 立即进入重命名模式
+
+        新预设是**空预设**（character_mods={}），不继承任何状态。
+        - 切换到新预设：全部 Mod 被关闭
+        - 在新预设下启用 Mod：自动写入新预设
+        - 若想复制现有状态：选中预设后 Ctrl+C / Ctrl+V
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        gid = self._game_service.current_game_id
+        pm = self._mod_manager.preset_manager
+        base_name = pm.generate_unique_name(gid, tr("新建预设"))
+        try:
+            new_p = pm.create_preset(gid, base_name)
+        except ValueError as e:
+            QMessageBox.warning(self, tr("提示"), str(e))
+            return
+        # preset_list_changed 已经触发常规刷新；这里再调一次带 rename_id 的刷新让选择器进入编辑模式
+        self._refresh_preset_combo(rename_id=new_p.id)
+
+    @_invalidates_library_probe
+    def _on_preset_delete_batch(self, preset_ids: list) -> None:
+        """确认显式选择后异步切换并删除。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if not preset_ids:
+            return
+        gid = self._game_service.current_game_id
+        if self._preset_apply_worker is not None:
+            return
+        pm = self._mod_manager.preset_manager
+        deletable = [
+            preset
+            for pid in dict.fromkeys(preset_ids)
+            if (preset := pm.get_preset(pid)) is not None and preset.game_id == gid and not preset.is_default
+        ]
+        if not deletable:
+            QMessageBox.warning(self, tr("提示"), tr("默认预设不可删除"))
+            return
+        from src.ui.dialogs.preset_progress import confirm_preset_delete
+
+        cur_id = pm.get_current(gid).id
+        if not confirm_preset_delete(self, deletable, cur_id):
+            return
+        if (
+            gid != self._game_service.current_game_id
+            or _plugin_operation_busy(self)
+            or _deployment_operation_busy(self)
+        ):
+            return
+        ids = [preset.id for preset in deletable]
+        if cur_id in ids:
+            default = pm.ensure_default(gid)
+            self._on_preset_apply(default.id, after_success=lambda: self._start_preset_delete(ids, gid))
+        else:
+            self._start_preset_delete(ids, gid)
+
+    def _start_preset_delete(self, preset_ids, game_id):
+        """为当前游戏建立预设删除进度，锁定游戏与预设选择，再延后启动准备阶段。"""
+        if game_id != self._game_service.current_game_id:
+            return
+        from src.ui.dialogs.preset_progress import PresetProgressDialog
+
+        pm = self._mod_manager.preset_manager
+        names = [preset.name for pid in preset_ids if (preset := pm.get_preset(pid)) is not None]
+        dialog = PresetProgressDialog(
+            names[0] if len(names) == 1 else tr("{count} 个预设", count=len(names)), self, deleting=True
+        )
+        self._preset_delete_progress = dialog
+        self._preset_delete_game_id = game_id
+        self._preset_delete_candidate = None
+        self._preset_delete_worker = None
+        self._preset_delete_preparing = True
+        self._preset_delete_cancelled = False
+        self._overview_page._preset_selector.setEnabled(False)
+        self._game_page.setEnabled(False)
+        dialog.canceled.connect(self._cancel_preset_delete)
+        dialog.show()
+        call_later(0, self, lambda: self._begin_preset_delete(preset_ids, game_id))
+
+    def _begin_preset_delete(self, preset_ids, game_id):
+        """准备预设删除候选并保护相关库路径，在后台写入待提交的预设变更。"""
+        if self._preset_delete_cancelled:
+            self._finish_preset_delete()
+            return
+        from src.core.preset_delete import write_prepared_preset_delete
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        try:
+            candidate = self._mod_manager.preset_manager.prepare_delete_presets(preset_ids, game_id)
+            self._preset_delete_candidate = candidate
+            self._mod_manager.protect_library_operation(
+                "preset-delete",
+                paths=(candidate.target, self._mod_manager._storage.get_deploy_dir()),
+                mod_ids=tuple(record.mod_id for record in candidate.cleanup_records),
+                exclusive=True,
+            )
+            worker = DeploymentPhaseWorker(lambda: write_prepared_preset_delete(candidate), self)
+            self._preset_delete_worker = worker
+            self._preset_delete_preparing = False
+            self._preset_delete_progress.show_phase("deploy", tr("正在保存预设变更…"))
+            worker.finished.connect(self._preset_delete_written)
+            worker.start(QThread.Priority.LowPriority)
+        except Exception as error:
+            self._finish_preset_delete(error)
