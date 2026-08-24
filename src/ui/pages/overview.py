@@ -523,3 +523,219 @@ class CharacterCard(QFrame):
                 smooth=False,
             )
             self._thumb.setPixmap(scaled)
+
+    def _elide_name(self, text: str) -> None:
+        """根据卡片宽度省略过长的名称"""
+        from PySide6.QtGui import QFontMetrics
+
+        fm = QFontMetrics(self._name_label.font())
+        avail_w = self._card_width - 16  # 内容边距。
+        elided = fm.elidedText(text, Qt.TextElideMode.ElideRight, avail_w)
+        self._name_label.setText(elided)
+        if elided != text:
+            self._name_label.setToolTip(text)
+        else:
+            self._name_label.setToolTip("")
+
+    # 预览图拖放由 OverviewPage 统一处理，避免拖动时逐卡调用 setStyleSheet。
+
+
+class CharacterDialog(QDialog):
+    """新建和编辑分类目录的对话框。"""
+
+    def __init__(
+        self,
+        char_data: dict | None = None,
+        existing_names: list[str] | None = None,
+        all_character_names: list[str] | None = None,
+        parent=None,
+    ):
+        """创建顶层所属的分类编辑窗口，准备重名检查集合，编辑时排除自身并回填名称和图片。"""
+        # 原生对话框归顶层窗口所有，避免使总览子控件和祖先原生化而影响视频绘制。
+        super().__init__(parent.window() if parent is not None else None)
+        self._data = char_data
+        self._result = None
+        self._thumbnail_path = ""
+        # 同级已有名称列表，用于类别重名检测。
+        self._existing_names = [n.lower() for n in (existing_names or [])]
+        # 全局角色/对象名称列表，用于角色重名检测。
+        self._all_character_names = [n.lower() for n in (all_character_names or [])]
+        # 编辑时排除自身
+        if char_data and char_data.get("name"):
+            own = char_data["name"].lower()
+            self._existing_names = [n for n in self._existing_names if n != own]
+            self._all_character_names = [n for n in self._all_character_names if n != own]
+        is_edit = char_data is not None
+        self._is_edit = is_edit
+        self.setWindowTitle(t("编辑类别") if is_edit else t("新建类别"))
+        self.setFixedSize(520, 480)
+        self.setModal(True)
+        self._setup_ui()
+        acrylic.apply_dialog_acrylic(self)
+        if is_edit and char_data:
+            self._name_input.setText(char_data.get("name", ""))
+            self._name_en_input.setText(char_data.get("name_en", ""))
+            if char_data.get("thumbnail", ""):
+                self._thumbnail_path = char_data["thumbnail"]
+                self._update_thumbnail_preview()
+
+    def _setup_ui(self):
+        """构建分类名称、英文名和图片表单，新建时显示节点类型选择，并连接确认与取消操作。"""
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(16)
+
+        # 标题区
+        header = QLabel(tr("新建类别") if not self._data else tr("编辑类别"))
+        header.setStyleSheet(
+            f"font-size: 18px; font-weight: bold; color: {theme.color('text.primary')}; padding-bottom: 4px;"
+        )
+        layout.addWidget(header)
+
+        # 分割线
+        line = QFrame()
+        line.setFrameShape(QFrame.Shape.HLine)
+        line.setStyleSheet(f"color: {theme.color('stroke.divider')};")
+        layout.addWidget(line)
+
+        # 主体内容 - 左右布局
+        body = QHBoxLayout()
+        body.setSpacing(20)
+
+        # 左侧：角色图片
+        thumb_section = QVBoxLayout()
+        thumb_section.setSpacing(8)
+
+        thumb_title = QLabel(tr("类别图片"))
+        thumb_title.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme.color('text.secondary')};")
+        thumb_section.addWidget(thumb_title)
+
+        self._thumb_preview = QLabel()
+        self._thumb_preview.setFixedSize(140, 180)
+        self._thumb_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._thumb_preview.setAcceptDrops(True)
+        self._thumb_preview.setStyleSheet(
+            f"QLabel {{ border: 2px dashed {theme.color('stroke.control')}; border-radius: 8px; "
+            f"background-color: {theme.color('bg.card')}; color: {theme.color('text.tertiary')}; font-size: 12px; }}"
+        )
+        self._thumb_preview.setText(tr("点击选择\n或拖拽图片"))
+        self._thumb_preview.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._thumb_preview.mousePressEvent = lambda e: self._on_select_thumbnail()
+        # 拖拽图片支持
+        self._thumb_preview.dragEnterEvent = self._thumb_drag_enter
+        self._thumb_preview.dropEvent = self._thumb_drop
+        thumb_section.addWidget(self._thumb_preview, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        thumb_btn_row = QHBoxLayout()
+        thumb_btn_row.setSpacing(6)
+        select_img_btn = QPushButton(tr("选择"))
+        select_img_btn.setFixedWidth(60)
+        select_img_btn.clicked.connect(self._on_select_thumbnail)
+        thumb_btn_row.addWidget(select_img_btn)
+
+        clear_img_btn = QPushButton(tr("清除"))
+        clear_img_btn.setFixedWidth(60)
+        clear_img_btn.clicked.connect(self._on_clear_thumbnail)
+        thumb_btn_row.addWidget(clear_img_btn)
+        thumb_section.addLayout(thumb_btn_row)
+        thumb_section.addStretch()
+        body.addLayout(thumb_section)
+
+        # 右侧：表单
+        form_section = QVBoxLayout()
+        form_section.setSpacing(12)
+
+        # 类别名称（中文）
+        name_group = QVBoxLayout()
+        name_group.setSpacing(4)
+        name_label = QLabel(tr("类别名称 *"))
+        name_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme.color('text.secondary')};")
+        name_group.addWidget(name_label)
+        self._name_input = QLineEdit()
+        self._name_input.setPlaceholderText(t("输入类别名称"))
+        self._name_input.setMinimumHeight(36)
+        name_group.addWidget(self._name_input)
+        form_section.addLayout(name_group)
+
+        # 英文名称
+        name_en_group = QVBoxLayout()
+        name_en_group.setSpacing(4)
+        name_en_label = QLabel(tr("英文名称"))
+        name_en_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme.color('text.secondary')};")
+        name_en_group.addWidget(name_en_label)
+        self._name_en_input = QLineEdit()
+        self._name_en_input.setPlaceholderText(t("用于Mod匹配和搜索。"))
+        self._name_en_input.setMinimumHeight(36)
+        name_en_group.addWidget(self._name_en_input)
+        form_section.addLayout(name_en_group)
+
+        # 节点类型选择仅在新建时显示，编辑时隐藏。
+        self._type_section = QWidget()
+        type_group = QVBoxLayout(self._type_section)
+        type_group.setContentsMargins(0, 0, 0, 0)
+        type_group.setSpacing(4)
+        type_label = QLabel(tr("节点类型"))
+        type_label.setStyleSheet(f"font-size: 12px; font-weight: bold; color: {theme.color('text.secondary')};")
+        type_group.addWidget(type_label)
+
+        self._type_combo = QComboBox()
+        self._type_combo.addItem(icons.get_icon("meta/category"), tr("类别（可同时启用多个Mod）"), "category")
+        self._type_combo.addItem(icons.get_icon("meta/character"), tr("角色/对象（同时只能启用一个Mod）"), "character")
+        if self._data and self._data.get("node_type") == "character":
+            self._type_combo.setCurrentIndex(1)
+        type_group.addWidget(self._type_combo)
+
+        type_hint = QLabel(tr("角色/对象类型会限制其下所有子类别中同时只能启用一个Mod。"))
+        type_hint.setStyleSheet(f"color: {theme.color('warning')}; font-size: 10px;")
+        type_hint.setWordWrap(True)
+        type_group.addWidget(type_hint)
+        form_section.addWidget(self._type_section)
+        # 编辑模式下完全隐藏节点类型选择
+        if self._is_edit:
+            self._type_section.setVisible(False)
+
+        form_section.addStretch()
+        body.addLayout(form_section, 1)
+        layout.addLayout(body, 1)
+
+        # 底部按钮区
+        line2 = QFrame()
+        line2.setFrameShape(QFrame.Shape.HLine)
+        line2.setStyleSheet(f"color: {theme.color('stroke.divider')};")
+        layout.addWidget(line2)
+
+        btn_layout = QHBoxLayout()
+        btn_layout.setSpacing(10)
+        btn_layout.addStretch()
+
+        cancel_btn = QPushButton(t("取消"))
+        cancel_btn.setFixedSize(90, 36)
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+
+        ok_btn = QPushButton(tr("确认") if not self._data else tr("保存"))
+        ok_btn.setFixedSize(90, 36)
+        ok_btn.setDefault(True)
+        ok_btn.setProperty("accent", True)
+        ok_btn.clicked.connect(self._on_ok)
+        btn_layout.addWidget(ok_btn)
+        layout.addLayout(btn_layout)
+
+    def _on_select_thumbnail(self):
+        """选择本地类别图片并更新预览，取消文件选择时保留原值。"""
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            tr("选择类别图片"),
+            "",
+            tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.webp);;所有文件 (*.*)"),
+        )
+        if path:
+            self._thumbnail_path = path
+            self._update_thumbnail_preview()
+
+    def _thumb_drag_enter(self, event):
+        """缩略图拖拽进入 - 仅检查格式可用性，不读取数据避免 COM IPC 卡顿"""
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
