@@ -446,3 +446,80 @@ class CharacterCard(QFrame):
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
+    def set_selected(self, selected: bool):
+        """设置选中状态（批量模式）"""
+        if self._selected == selected:
+            return
+        self._selected = selected
+        self._apply_style()
+
+    def set_cut_state(self, cut: bool):
+        """设置剪切状态视觉反馈"""
+        self._cut_state = cut
+        self._apply_style()
+
+    def _apply_style(self):
+        """根据选中和剪切状态应用样式"""
+        if self._cut_state:
+            style = (
+                f"#charCard {{ border: 2px dashed {theme.color('warning')}; "
+                "background-color: rgba(232,168,56,0.08); opacity: 0.6; }"
+            )
+        elif self._selected:
+            # 选中状态仅增加边框，保留卡片基础背景及透明材质。
+            style = f"#charCard {{ border: 2px solid {theme.color('accent')}; }}"
+        else:
+            style = ""
+        if self.styleSheet() != style:
+            self.setStyleSheet(style)
+
+    def _apply_info_style(self) -> None:
+        """按卡片尺寸选择数量说明字号，仅在样式变化时重设，并同步文字行高。"""
+        size = int(theme.font("size_caption" if self._card_height < 160 else "size_secondary"))
+        style = f"color: {theme.surface_text_color('text.secondary')}; font-size: {size}px;"
+        if self._info_label.styleSheet() != style:
+            self._info_label.setStyleSheet(style)
+        self._info_label.setFixedHeight(size + 6)
+
+    def retheme(self) -> None:
+        """刷新活动或回收卡片，保留当前绑定状态。"""
+        self._apply_info_style()
+        self._type_badge.update_for_card(self._badge_kind, self._card_width)
+        self._apply_style()
+
+    def resize_card(self, new_w: int, new_h: int, *, defer_preview: bool = False) -> None:
+        """调整卡片尺寸 — 完整更新内部控件"""
+        if self._card_width == new_w and self._card_height == new_h:
+            return
+        self._card_width = new_w
+        self._card_height = new_h
+        self.setFixedSize(new_w, new_h)
+
+        # 更新预览图容器和缩略图高度（动态比例）
+        compact = new_h < 160
+        font_size = int(theme.font("size_card_title_compact" if compact else "size_card_title"))
+        self._preview_h = self._preview_height_for(new_h)
+        self._preview_container.setFixedHeight(self._preview_h)
+        self._thumb.setFixedHeight(self._preview_h)
+
+        # 更新名称和信息的字体大小
+        name_min_h = font_size + 8
+        name_max_h = name_min_h
+        self._name_label.setStyleSheet(f"font-weight: bold; font-size: {font_size}px;")
+        self._name_label.setMinimumHeight(name_min_h)
+        self._name_label.setMaximumHeight(name_max_h)
+        self._elide_name(self._data.get("name", tr("未知")))
+        self._apply_info_style()
+        self._type_badge.update_for_card(self._badge_kind, new_w)
+
+        # 重缩放缓存的预览图
+        if not defer_preview and self._cached_pixmap and not self._cached_pixmap.isNull():
+            scaled = fill_crop_rounded(
+                self._cached_pixmap,
+                new_w - 8,
+                self._preview_h,
+                radius=8,
+                smooth=False,
+            )
+            self._thumb.setPixmap(scaled)
