@@ -334,3 +334,115 @@ class CharacterCard(QFrame):
                 total=data.get("mod_count", 0),
             )
         )
+
+    def scroll_render_key(self) -> tuple | None:
+        """组合预览、文字、选择、剪切及节点类型状态，生成可复用的滚动绘制缓存键。"""
+        preview = preview_cache_key(self._thumb)
+        if preview is None:
+            return None
+        return (
+            preview,
+            self._name_label.text(),
+            self._info_label.text(),
+            self._selected,
+            self._cut_state,
+            self._badge_kind,
+        )
+
+    def set_no_preview(self) -> None:
+        """结束预览等待并释放图片，以分类名称作为占位。"""
+        self._preview_requested = False
+        self._preview_resolved = True
+        self._cached_pixmap = None
+        self._thumb.setText(self._data.get("name", ""))
+
+    def _show_context_menu(self, pos):
+        """同步选择分类后展示菜单并转发操作；按住 Ctrl 或 Shift 时直接粘贴剪贴板预览。"""
+        cat_id = self._data.get("id", "")
+        global_pos = self.mapToGlobal(pos)
+        # 右键时若该卡片尚未被选中，先让 OverviewPage 选中它（加强视觉表现）。
+        # 直连槽是同步执行，菜单弹出前选中态/高亮已更新。
+        self.context_select_requested.emit(cat_id)
+        # 与 Mod 卡片同一套约定：Ctrl/Shift + 右键 = 直接贴剪贴板图当预览图、不弹菜单；
+        # 裸右键仍然弹菜单，菜单里也留了粘贴/选择两项。类别是单图，贴上即替换。
+        if QApplication.keyboardModifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier):
+            path = clipboard_image_path()
+            if path:
+                self.preview_dropped.emit(cat_id, path)
+            return
+        menu = QMenu(self)
+        enter_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("进入"))
+        menu.addSeparator()
+        self.clipboard_menu_requested.emit(menu)
+        menu.addSeparator()
+        open_dir_act = menu.addAction(icons.get_icon("actions/folder"), tr("打开源目录"))
+        online_act = menu.addAction(icons.get_icon("actions/search", "success"), tr("在线查找"))
+        menu.addSeparator()
+        paste_act = menu.addAction(icons.get_icon("actions/image"), tr("粘贴预览图"))
+        paste_act.setEnabled(clipboard_has_image())
+        browse_act = menu.addAction(icons.get_icon("actions/add"), tr("选择预览图"))
+        menu.addSeparator()
+        edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+        export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+        delete_act = menu.addAction(icons.get_icon("actions/remove"), t("删除"))
+
+        # menus：追加插件 character-context 贡献点
+        from src.ui import plugin_menu
+
+        plugin_actions = plugin_menu.menu_actions("character-context", cat_id)
+        plugin_act_map = {}
+        if plugin_actions:
+            menu.addSeparator()
+            for _title, _cb in plugin_actions:
+                _a = menu.addAction(_title)
+                plugin_act_map[_a] = _cb
+
+        action = menu.exec(global_pos)
+        try:
+            menu.deleteLater()
+        except RuntimeError:
+            # 菜单事件循环内的刷新可能删除当前卡片和菜单。
+            return
+        if action in plugin_act_map:
+            plugin_act_map[action]()
+            return
+        if action == enter_act:
+            self.double_clicked.emit(cat_id)
+        elif action == paste_act:
+            path = clipboard_image_path()
+            if path:
+                self.preview_dropped.emit(cat_id, path)
+        elif action == browse_act:
+            path, _ = QFileDialog.getOpenFileName(
+                self,
+                tr("选择预览图"),
+                "",
+                tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*)"),
+            )
+            if path and fs.exists(path):
+                self.preview_dropped.emit(cat_id, path)
+        elif action == open_dir_act:
+            self.open_folder_requested.emit(cat_id)
+        elif action == online_act:
+            self.online_search_requested.emit(cat_id)
+        elif action == edit_act:
+            self.edit_requested.emit(cat_id)
+        elif action == export_act:
+            self.export_requested.emit(cat_id)
+        elif action == delete_act:
+            self.delete_requested.emit(cat_id)
+
+    def mousePressEvent(self, event):
+        """左键点击时发布分类标识，交由概览处理选择。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit(self._data.get("id", ""))
+        super().mousePressEvent(event)
+
+    def mouseDoubleClickEvent(self, event):
+        """左键双击时请求进入分类并接收事件，避免默认双击处理再次选中已离开的卡片。"""
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit(self._data.get("id", ""))
+            # QWidget 的默认双击处理会再次调用 mousePressEvent，导航后会重新选中旧卡片。
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
