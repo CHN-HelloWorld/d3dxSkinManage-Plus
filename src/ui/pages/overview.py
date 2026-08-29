@@ -2300,3 +2300,153 @@ class OverviewPage(QWidget):
         self._characters = self._children_map.get(self._current_parent_id, [])
         self._update_breadcrumb()
         self._update_filter_empty(bool(self._display_items), view.search_text)
+
+    def set_source_observations(self, observations) -> None:
+        """身份检查期间可先显示已确认的路径观察。"""
+        count = len({observation.mod_id for observation in observations})
+        self._source_reconcile_notice.setText(
+            tr("已检测到 {count} 个 Mod 的源路径变动，正在核对关联项…", count=count) if count else ""
+        )
+        self._source_reconcile_notice.setVisible(bool(count))
+
+    def set_pending_missing_mods(self, mod_ids) -> None:
+        """登记等待缺失确认的 Mod，并禁用其可见卡片、列表行和详情启用操作。"""
+        if not hasattr(self, "_pending_missing_mods"):
+            self._pending_missing_mods = set()
+        newly_missing = set(mod_ids) - self._pending_missing_mods
+        self._pending_missing_mods.update(newly_missing)
+        for mid in newly_missing:
+            card = self._vs_card_cache.get(mid)
+            if card is not None:
+                card.setEnabled(False)
+            row = self._display_idx_map.get(mid, -1)
+            if row >= 0 and self._view_mode == "list":
+                item = self._table.item(row, 0)
+                if item is not None:
+                    item.setFlags(item.flags() & ~Qt.ItemFlag.ItemIsEnabled)
+            if self._selected_mod and self._selected_mod.mod_id == mid:
+                self._panel_toggle_btn.setEnabled(False)
+
+    def apply_node_delta(self, nodes) -> None:
+        """仅替换变化的节点及其父子关系。"""
+        structural = False
+        current_children_changed = False
+        positions = getattr(self, "_delta_node_positions", {})
+        for node in nodes:
+            nid = node["id"]
+            if hasattr(self, "_delta_node_parents"):
+                self._delta_node_parents[nid] = node.get("parent_id") or ""
+            index = positions.get(nid)
+            if index is not None:
+                previous = self._all_characters[index]
+                old_parent = previous.get("parent_id") or ""
+                new_parent = node.get("parent_id") or ""
+                changed = (old_parent, previous.get("name"), previous.get("name_en")) != (
+                    new_parent,
+                    node.get("name"),
+                    node.get("name_en"),
+                )
+                structural |= changed
+                current_children_changed |= changed and self._current_parent_id in (old_parent, new_parent)
+                self._all_characters[index] = node
+                if old_parent == new_parent:
+                    self._children_map[old_parent] = [
+                        node if child["id"] == nid else child for child in self._children_map.get(old_parent, ())
+                    ]
+                else:
+                    self._children_map[old_parent] = [
+                        child for child in self._children_map.get(old_parent, ()) if child["id"] != nid
+                    ]
+                    self._children_map.setdefault(new_parent, []).append(node)
+            else:
+                structural = True
+                current_children_changed |= (node.get("parent_id") or "") == self._current_parent_id
+                positions[nid] = len(self._all_characters)
+                self._all_characters.append(node)
+                self._children_map.setdefault(node.get("parent_id") or "", []).append(node)
+            row = self._display_idx_map.get(nid, -1)
+            if row >= 0:
+                if self._display_items[row]["data"].get("thumbnail") != node.get("thumbnail"):
+                    self._vs_invalidate_prefetch(schedule=True)
+                self._display_items[row]["data"] = node
+                if self._view_mode == "list" and row not in self._table._pending_rows:
+                    item = self._table.item(row, 4)
+                    if item is not None:
+                        item.setText(f"{node.get('enabled_count', 0)} / {node.get('mod_count', 0)}")
+            card = self._vs_card_cache.get(nid)
+            if isinstance(card, CharacterCard):
+                card.update_counts(node)
+        self._characters = self._children_map.get(self._current_parent_id, [])
+        if current_children_changed:
+            self._refresh_current_level()
+        elif structural:
+            self._update_breadcrumb()
+
+    def set_characters(self, characters: list[dict], refresh: bool = True, force_root: bool = False) -> None:
+        """替换分类快照与父子索引，移除已删除目录的位置缓存，必要时回到根目录并刷新。"""
+        all_ids = {c.get("id", "") for c in characters} | {""}
+        self._view_positions = {key: position for key, position in self._view_positions.items() if key[1] in all_ids}
+        presented_deleted = self._presented_view is not None and self._presented_view.key[1] not in all_ids
+        target_deleted = self._current_parent_id not in all_ids
+        if presented_deleted or target_deleted:
+            # 失败回调不能重新创建已删除的源或目标。
+            self._invalidate_view_position()
+            force_root = True
+        self._all_characters = characters
+        self._delta_node_parents = {node["id"]: node.get("parent_id") or "" for node in characters}
+        self._delta_node_positions = {node["id"]: i for i, node in enumerate(characters)}
+        self._build_children_map()
+        if force_root:
+            # 切换游戏时强制回到根目录
+            self._request_view_position(parent_id="")
+            self._end_loading()
+            self.set_source_observations(())
+            self._tag_filter.clear(emit=False)
+            self._current_parent_id = ""
+            self._current_mods = []
+            self._subtree_mods = []
+            self._selected_ids.clear()
+            self._selected_mod = None
+            self._selected_category = None
+            self._hide_panel()
+        elif self._current_parent_id:
+            # 常规刷新时：检查当前目录是否仍存在
+            all_ids = {c.get("id", "") for c in self._all_characters}
+            if self._current_parent_id not in all_ids:
+                self._tag_filter.clear(emit=False)
+                self._current_parent_id = ""
+                self._current_mods = []
+                self._subtree_mods = []
+        if refresh:
+            self._refresh_current_level()
+        else:
+            self._characters = self._children_map.get(self._current_parent_id, [])
+            self._update_character_counts()
+
+    def _update_character_counts(self) -> None:
+        """更新已有分类绑定，不重建整个视图。"""
+        for category in self._all_characters:
+            category_id = category.get("id", "")
+            row = self._display_idx_map.get(category_id, -1)
+            if 0 <= row < len(self._display_items):
+                item = self._display_items[row]
+                if item["type"] == "category" and item["id"] == category_id:
+                    if item["data"].get("thumbnail") != category.get("thumbnail"):
+                        self._vs_invalidate_prefetch(schedule=True)
+                    # 延迟列表行和回收卡片读取同一条记录。
+                    item["data"] = category
+            card = self._vs_card_cache.get(category_id)
+            if isinstance(card, CharacterCard):
+                card.update_counts(category)
+            if self._selected_category and self._selected_category.get("id") == category_id:
+                self._selected_category = category
+            if 0 <= row < self._table.rowCount() and row not in self._table._pending_rows:
+                identity = self._table.item(row, 0)
+                if (
+                    identity
+                    and identity.data(Qt.ItemDataRole.UserRole) == category_id
+                    and identity.data(Qt.ItemDataRole.UserRole + 1) == "category"
+                ):
+                    count_item = self._table.item(row, 4)
+                    if count_item is not None:
+                        count_item.setText(f"{category.get('enabled_count', 0)} / {category.get('mod_count', 0)}")
