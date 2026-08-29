@@ -2186,3 +2186,117 @@ class OverviewPage(QWidget):
     def _view_scrollbar(self, mode: str):
         """按卡片或列表模式返回对应的纵向滚动条。"""
         return (self._table if mode == "list" else self._scroll_area).verticalScrollBar()
+
+    def _remember_presented_position(self) -> None:
+        """停止平滑滚动并保存当前已呈现视图的位置，位置恢复过程中不覆盖缓存。"""
+        self._smooth_scroller.cancel()
+        view = self._presented_view
+        if view is not None and not self._applying_position:
+            self._view_positions[view.key] = (view.signature, self._view_scrollbar(view.key[2]).value())
+
+    def _request_view_position(self, *, parent_id=None, mode=None) -> None:
+        """记录离开前的位置，为待切换的游戏、目录和布局创建新的请求代次。"""
+        # 连续请求切换期间，仍显示的视图拥有当前控件。
+        self._remember_presented_position()
+        self._view_request_generation += 1
+        self._pending_view = (
+            self._view_request_generation,
+            self._current_game_id,
+            self._current_parent_id if parent_id is None else parent_id,
+            self._view_mode if mode is None else mode,
+        )
+
+    def _invalidate_view_position(self, *, clear=False) -> None:
+        """停止平滑滚动并使待切换与已呈现快照失效，可同时清空历史位置。"""
+        self._smooth_scroller.cancel()
+        self._view_request_generation += 1
+        self._pending_view = None
+        self._presented_view = None
+        if clear:
+            self._view_positions.clear()
+
+    def _prepare_view_position(self, filter_text: str) -> tuple[_PresentedOverviewView, int]:
+        """捕获当前筛选快照，只有同一视图的筛选签名一致时才恢复保存的滚动位置。"""
+        # 替换布局前重新采样滚动位置，覆盖后台读取期间的用户滚动。
+        self._remember_presented_position()
+        tags = tuple(sorted(tag_id for tag_id in self._tag_filter.selected_ids if tag_id in self._tag_filter.catalog))
+        effective_tags = tags if self._tag_filter.button.isEnabled() else ()
+        signature = (
+            tag_key(filter_text),
+            self._type_filter.currentData() or "",
+            self._age_filter.currentData() or "",
+            effective_tags,
+            self._tag_filter.match_mode if effective_tags else "",
+            self._sort_key,
+        )
+        view = _PresentedOverviewView(
+            (self._current_game_id, self._current_parent_id, self._view_mode),
+            signature,
+            self._search_input.text(),
+            tags,
+            self._tag_filter.match_mode,
+        )
+        saved = self._view_positions.get(view.key)
+        return view, saved[1] if saved is not None and saved[0] == signature else 0
+
+    def _commit_view_position(
+        self, view: _PresentedOverviewView, value: int, *, grid_height: int | None = None
+    ) -> None:
+        """先确定布局与滚动范围，再应用受范围约束的位置并发布已呈现视图快照。"""
+        self._smooth_scroller.cancel()
+        scrollbar = self._view_scrollbar(view.key[2])
+        if grid_height is not None:
+            # 首次绑定前确定内容与视口范围，避免等待下一布局事件。
+            self._scroll_content.resize(self._scroll_content.width(), grid_height)
+            scrollbar.setRange(0, max(0, grid_height - self._scroll_area.viewport().height()))
+            scrollbar.setPageStep(self._scroll_area.viewport().height())
+            # 绑定卡片和捕获首张像素图前先确定滚动条及视口宽度。
+            QApplication.sendEvent(self._scroll_area, QEvent(QEvent.Type.LayoutRequest))
+        else:
+            self._table.doItemsLayout()
+        scrollbar.setValue(max(scrollbar.minimum(), min(value, scrollbar.maximum())))
+        self._smooth_scroller.cancel()
+        self._presented_view = view
+        self._pending_view = None
+
+    def _restore_presented_conditions(self) -> None:
+        """将目录、布局和筛选恢复为已呈现快照，阻断回填信号并更新面包屑与空状态。"""
+        view = self._presented_view
+        if view is None:
+            return
+        self._current_parent_id = view.key[1]
+        self._view_mode = view.key[2]
+        self._search_timer.stop()
+        widgets = (
+            self._search_input,
+            self._type_filter,
+            self._age_filter,
+            self._sort_combo,
+            self._view_combo,
+            self._tag_filter,
+        )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        try:
+            self._search_input.setText(view.search_text)
+            self._pending_search_text = view.search_text.strip()
+            for combo, value in (
+                (self._type_filter, view.signature[1]),
+                (self._age_filter, view.signature[2]),
+                (self._sort_combo, view.signature[5]),
+                (self._view_combo, view.key[2]),
+            ):
+                combo.setCurrentIndex(max(0, combo.findData(value)))
+            self._sort_key = view.signature[5]
+            self._tag_filter.selected_ids = [tag for tag in view.tag_ids if tag in self._tag_filter.catalog]
+            self._tag_filter.set_match_mode(view.tag_mode)
+            self._tag_filter.set_mod_types_enabled(view.signature[1] not in ("category", "character"))
+            self._tag_filter._render_selection()
+            self._age_filter.setVisible(view.signature[1] == "mod")
+        finally:
+            for blocker in blockers:
+                blocker.unblock()
+        self._card_size_slider.setVisible(self._view_mode == "grid")
+        self._card_size_label.setVisible(self._view_mode == "grid")
+        self._characters = self._children_map.get(self._current_parent_id, [])
+        self._update_breadcrumb()
+        self._update_filter_empty(bool(self._display_items), view.search_text)
