@@ -4413,3 +4413,77 @@ class OverviewPage(QWidget):
     def _on_card_double_clicked(self, char_id: str) -> None:
         """类别卡片双击 → 进入类别"""
         self._navigate_to(char_id)
+
+    def _on_mod_card_clicked(self, mod_id: str) -> None:
+        """Mod 卡片单击 → 选择并显示管理面板"""
+        self._cancel_directory_intro()
+        self._scroll_area.setFocus(Qt.FocusReason.MouseFocusReason)
+        # 切换到不同的Mod时，先持久化上一个Mod的预览图选择
+        if self._selected_mod and self._selected_mod.mod_id != mod_id:
+            self._flush_pending_preview_reorder()
+        modifiers = QApplication.keyboardModifiers()
+        item_index = self._find_display_index(mod_id)
+
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            if mod_id in self._selected_ids:
+                self._selected_ids.discard(mod_id)
+                if self._selected_mod and self._selected_mod.mod_id == mod_id:
+                    self._selected_mod = None
+                    self._hide_panel()
+            else:
+                self._selected_ids.add(mod_id)
+            self._last_clicked_index = item_index
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            self._select_range(item_index)
+        else:
+            self._selected_ids.clear()
+            self._selected_ids.add(mod_id)
+            self._last_clicked_index = item_index
+
+        # 先提交选中态。右栏图片和 INI 都是后台请求，不能再挡住卡片视觉反馈。
+        self._update_card_selection()
+        self._show_selection_panel()
+
+    def _mod_by_id(self, mod_id: str) -> Mod | None:
+        """按已显示的子树结果解析操作，包括嵌套 Mod。"""
+        index = self._display_idx_map.get(mod_id, -1)
+        if 0 <= index < len(self._display_items):
+            item = self._display_items[index]
+            if item["id"] == mod_id and item["type"] == "mod":
+                return item["data"]
+        return next((mod for mod in self._subtree_mods or self._current_mods if mod.mod_id == mod_id), None)
+
+    def _show_selection_panel(self) -> None:
+        """按零选、单选或多选切换详情面板，单选时优先解析 Mod，再匹配分类。"""
+        self._selected_mod = None
+        self._selected_category = None
+        if len(self._selected_ids) > 1:
+            self._show_multi_select_panel()
+            return
+        if self._selected_ids:
+            item_id = next(iter(self._selected_ids))
+            mod = self._mod_by_id(item_id)
+            if mod is not None:
+                self._selected_mod = mod
+                self._show_mod_panel(mod)
+                return
+            cat = next((cat for cat in self._all_characters or self._characters if cat.get("id") == item_id), None)
+            if cat is not None:
+                self._selected_category = cat
+                self._show_category_panel(cat)
+                return
+        self._hide_panel()
+
+    def _prune_selection(self) -> None:
+        """剔除已不在显示集合中的选择，必要时刷新详情并重置范围选择锚点。"""
+        previous = self._selected_ids.copy()
+        self._selected_ids.intersection_update(self._display_idx_map)
+        refreshed = self._selected_mod and self._mod_by_id(self._selected_mod.mod_id) is not self._selected_mod
+        if self._selected_ids != previous or refreshed:
+            self._last_clicked_index = -1
+            self._show_selection_panel()
+
+    def _on_mod_card_double_clicked(self, mod_id: str) -> None:
+        """Mod 卡片双击 → 切换启用/禁用"""
+        if mod_id not in self._deploying_frac:
+            self.mod_toggle_requested.emit(mod_id)
