@@ -3533,3 +3533,206 @@ class OverviewPage(QWidget):
                 break
         path.reverse()
         return path
+
+    def get_current_path(self) -> list[tuple[str, str]]:
+        """暴露当前导航路径 (供 MainWindow 使用)"""
+        return self._get_path_to_current()
+
+    def set_updatable(self, mod_ids: set[str]) -> None:
+        """设置"有更新"的本地 mod id 集合，并刷新可见卡片角标。"""
+        self._updatable_ids = set(mod_ids or set())
+        for item_id, card in self._vs_card_cache.items():
+            if isinstance(card, ModCard):
+                card.set_update_available(item_id in self._updatable_ids)
+        if self._view_mode == "list":
+            for row, item in enumerate(self._display_items):
+                if item["type"] == "mod":
+                    self._set_table_mod_name(row, item["data"])
+
+    def set_update_status_text(self, text: str) -> None:
+        """在状态栏显示更新检查进度或结果。"""
+        if hasattr(self, "_status_label") and self._status_label is not None:
+            self._status_label.setText(text)
+
+    def _dispose_vs_card(self, card) -> None:
+        """停止卡片动画和加载占位后延迟销毁控件。
+
+        先移除图形效果及共享动画驱动注册，防止异步绘制访问已销毁的 Qt 对象。
+        """
+        try:
+            for attr in ("_move_anim", "_geom_anim"):
+                a = getattr(card, attr, None)
+                if a is not None:
+                    a.stop()
+            if card.graphicsEffect() is not None:
+                card.setGraphicsEffect(None)  # 同步删除特效 + 让其上的动画 QPointer 置空
+            lbl = getattr(card, "_preview_label", None)
+            stop = getattr(lbl, "_stop_loading", None)
+            if callable(stop):
+                stop()  # 停止加载占位并注销共享动画驱动。
+        except RuntimeError:
+            pass
+        card.hide()
+        card.setParent(None)
+        card.deleteLater()
+
+    def _refresh_cards(self, filter_text: str = "") -> None:
+        """虚拟滚动版: 只计算布局参数, 按需创建可视区域的卡片 Widget"""
+        if self._mods_loading:
+            return
+        view, position = self._prepare_view_position(filter_text)
+        self._applying_position = True
+        try:
+            self._rebuild_cards(filter_text, view, position)
+        finally:
+            self._applying_position = False
+
+    def _rebuild_cards(self, filter_text: str, view: _PresentedOverviewView, position: int) -> None:
+        """撤销旧图片绑定并回收卡片，按筛选与排序建立混合索引，再恢复滚动位置并渐进绑定可见内容。"""
+        self._end_card_scale()
+        if self._card_reveal.is_active():
+            self._cancel_directory_intro()
+        self._vs_scroll_timer.stop()
+        self._vs_population_timer.stop()
+        self._vs_pixmap_timer.setInterval(self._VS_PIXMAP_INTERVAL_MS)
+        self._fresh_population = False
+        self._vs_population_pending = False
+        # 新视图使旧图片绑定失效，取消在途加载；保留滚动区拥有的控件供后续复用。
+        self._vs_pixmap_timer.stop()
+        self._vs_pending_pixmap_cards.clear()
+        self._vs_invalidate_prefetch()
+        self._pixmap_worker.clear_queue()
+
+        # 将旧绑定归还有界视口控件池。
+        for card in self._vs_card_cache.values():
+            self._vs_card_pool.release(card)
+        self._vs_card_cache.clear()
+        self._vs_window = None
+        self._vs_image_requests.clear()
+        for overlay in self._deploy_overlays.values():
+            overlay.hide()
+            overlay.deleteLater()
+        self._deploy_overlays.clear()
+        # 清空 grid_layout（仅用于空状态提示）
+        while self._grid_layout.count():
+            item = self._grid_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        # 过滤当前目录内容。
+        filtered_cats, filtered_mods = self._filtered_content(filter_text)
+
+        # 构建混合显示条目及索引映射。
+        self._display_items = []
+        self._display_idx_map = {}
+        items_order: list[tuple[str, object]] = []
+        if self._sort_key == "status_desc":
+            items_order.extend([("mod", mod) for mod in filtered_mods])
+            items_order.extend([("category", cat) for cat in filtered_cats])
+        else:
+            items_order.extend([("category", cat) for cat in filtered_cats])
+            items_order.extend([("mod", mod) for mod in filtered_mods])
+
+        for item_type, payload in items_order:
+            idx = len(self._display_items)
+            if item_type == "category":
+                cat = payload
+                item_id = cat.get("id", "")
+                self._display_items.append({"id": item_id, "type": "category", "data": cat})
+                self._display_idx_map[item_id] = idx
+            else:
+                mod = payload
+                self._display_items.append({"id": mod.mod_id, "type": "mod", "data": mod})
+                self._display_idx_map[mod.mod_id] = idx
+
+        # 根据目录和筛选条件处理空状态。
+        self._prune_selection()
+        if self._update_filter_empty(bool(self._display_items), filter_text):
+            self._scroll_content.setMinimumHeight(0)
+            self._scroll_content.setMaximumHeight(16777215)
+            self._commit_view_position(view, 0, grid_height=0)
+            self._update_status_bar_selection()
+            return
+        if not self._display_items:
+            empty_container = QWidget()
+            empty_layout = QVBoxLayout(empty_container)
+            empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            empty_layout.setSpacing(12)
+
+            if self._current_parent_id:
+                empty_label = QLabel(tr("当前类别为空，可以新建子类别或拖拽导入 Mod"))
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 14px;")
+                empty_layout.addWidget(empty_label)
+
+                btn_row = QHBoxLayout()
+                btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                btn_row.setSpacing(12)
+
+                add_sub_btn = QPushButton(tr("+ 新建子类别"))
+                icons.apply_icon(add_sub_btn, "actions/new-folder")
+                add_sub_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                add_sub_btn.clicked.connect(self._on_add_character)
+                btn_row.addWidget(add_sub_btn)
+
+                import_btn = QPushButton(tr("导入 Mod"))
+                icons.apply_icon(import_btn, "actions/mod")
+                import_btn.setIconSize(QSize(16, 16))
+                import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                import_btn.clicked.connect(self.mod_import_requested.emit)
+                btn_row.addWidget(import_btn)
+
+                empty_layout.addLayout(btn_row)
+            else:
+                # 根目录不直接接收 Mod，提供显式创建类别入口以引导后续导入。
+                empty_label = QLabel(t("暂无类别\n点击下方「+ 新建类别」按钮添加，或导入分类预设"))
+                empty_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                empty_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 14px;")
+                empty_layout.addWidget(empty_label)
+
+                btn_row = QHBoxLayout()
+                btn_row.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                btn_row.setSpacing(12)
+                add_cat_btn = QPushButton(t("+ 新建类别"))
+                icons.apply_icon(add_cat_btn, "actions/new-folder")
+                add_cat_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                add_cat_btn.clicked.connect(self._on_add_character)
+                btn_row.addWidget(add_cat_btn)
+                empty_layout.addLayout(btn_row)
+
+            empty_container.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+            self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            self._grid_layout.addWidget(empty_container, 0, 0, Qt.AlignmentFlag.AlignCenter)
+            self._status_label.setText(t("共 {count} 个类别，{mod_count} 个 Mod", count=0, mod_count=0))
+            self._scroll_content.setMinimumHeight(0)
+            self._scroll_content.setMaximumHeight(16777215)
+            self._commit_view_position(view, 0, grid_height=0)
+            self._cancel_directory_intro()
+            return
+
+        # 计算虚拟滚动布局参数。
+        scaled_w = int(CharacterCard.CARD_WIDTH * self._card_scale / 100)
+        scaled_h = int(CharacterCard.CARD_HEIGHT * self._card_scale / 100)
+        avail_w = (
+            self._main_splitter.widget(0).width() if self._main_splitter.widget(0).width() > 100 else self.width() - 48
+        )
+        cols = max(1, (avail_w - 48) // (scaled_w + 12))
+
+        self._vs_card_w = scaled_w
+        self._vs_card_h = scaled_h
+        self._vs_row_h = scaled_h + 12
+        self._vs_cols = cols
+        self._vs_total_rows = (len(self._display_items) + cols - 1) // cols
+        total_h = self._vs_total_rows * self._vs_row_h + 12
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+        self._last_cards_per_row = cols
+
+        self._update_status_bar_selection()
+
+        # 恢复位置并开始绑定可见区域。
+        self._commit_view_position(view, position, grid_height=total_h)
+        # 首帧前提交已有缓存的可见卡片，缓冲行和新绑定继续分时处理。
+        self._vs_population_anchor_value = self._scroll_area.verticalScrollBar().value()
+        self._fresh_population = True
+        self._vs_update_visible()
