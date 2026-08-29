@@ -3384,3 +3384,66 @@ class OverviewPage(QWidget):
             f"QTableWidget {{ background-color: {theme.surface_color('bg.card', 'list')};"
             f" alternate-background-color: {list_alt}; }}"
         )
+
+    def _apply_panel_text_style(self) -> None:
+        """按表面颜色和语义字号刷新详情作者、描述及路径文本。"""
+        ink = theme.surface_text_color("text.secondary")
+        for label, role in (
+            (self._panel_author_label, "size_secondary"),
+            (self._panel_desc_label, "size_body"),
+            (self._panel_path_label, "size_caption"),
+        ):
+            label.setStyleSheet(f"color: {ink}; font-size: {theme.font(role)}px;")
+
+    def _apply_detail_style(self) -> None:
+        """统一设置详情标签页、字段标题和空状态样式，保持各滚动区域背景透明。"""
+        ink = theme.surface_text_color("text.secondary")
+        self._panel_details.setStyleSheet(
+            "#modPreviewDetails, #modPreviewHeader, #modPreviewTabs,"
+            " #modPreviewTabs QTabBar, #modPreviewTabs QStackedWidget,"
+            " #modPreviewTabs QScrollArea, #modPreviewTabs QScrollArea > QWidget { background: transparent; }"
+            "#modPreviewTabs::pane { border: none; background: transparent; }"
+            "#modPreviewTabs QTabBar::tab { padding: 8px 10px; }"
+            f"#previewVariantName, #previewFactCaption {{ color: {ink}; font-size: 12px; }}"
+            f"#previewSectionTitle {{ color: {theme.surface_text_color('text.primary')};"
+            f" border-top: 1px solid {theme.color('stroke.divider')}; font-size: 12px;"
+            " font-weight: 600; padding-top: 10px; margin-top: 4px; background: transparent; }"
+            "#modPreviewDetails QLabel { background: transparent; }"
+        )
+        self._panel_keys_host.setStyleSheet("background: transparent;")
+        self._panel_source_label.setStyleSheet(f"color: {ink}; font-size: 11px;")
+        self._panel_keys_empty.setStyleSheet(f"color: {ink}; padding: 20px 6px; font-size: 12px;")
+        for label in (self._panel_version_label, self._panel_category_label, self._panel_size_label):
+            label.setStyleSheet(f"color: {theme.surface_text_color('text.primary')}; font-size: 12px;")
+
+    def _detail_scrollbar(self, index: int):
+        """按信息、按键或变体标签索引返回对应的纵向滚动条。"""
+        return (self._panel_info_scroll, self._panel_keys_scroll, self._variant_panel.scroll_area)[
+            index
+        ].verticalScrollBar()
+
+    def _remember_detail_scroll(self) -> None:
+        """按 Mod 与标签记录位置，只保存已绑定当前 Mod 的按键和变体页面滚动位置。"""
+        if self._detail_mod_id:
+            for index in range(3):
+                if index == 1 and self._keys_panel_mod_id != self._detail_mod_id:
+                    continue
+                if index == 2 and self._variant_panel.mod_id != self._detail_mod_id:
+                    continue
+                self._detail_scroll_positions[(self._detail_mod_id, index)] = self._detail_scrollbar(index).value()
+
+    def _restore_detail_scroll(self, mod_id: str, index: int) -> None:
+        """仅在详情仍绑定指定 Mod 时恢复对应标签页的滚动位置。"""
+        if self._panel_mode == "mod" and self._detail_mod_id == mod_id:
+            self._detail_scrollbar(index).setValue(self._detail_scroll_positions.get((mod_id, index), 0))
+
+    def _on_detail_tab_changed(self, index: int) -> None:
+        """保存离开标签的位置并恢复新标签位置，在 Mod 模式下记住最后使用的详情标签。"""
+        if self._detail_mod_id:
+            self._detail_scroll_positions[(self._detail_mod_id, self._last_detail_tab)] = self._detail_scrollbar(
+                self._last_detail_tab
+            ).value()
+            self._detail_scrollbar(index).setValue(self._detail_scroll_positions.get((self._detail_mod_id, index), 0))
+        self._last_detail_tab = index
+        if getattr(self, "_panel_mode", "none") == "mod":
+            self._mod_detail_tab = index
