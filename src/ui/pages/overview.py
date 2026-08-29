@@ -2632,3 +2632,72 @@ class OverviewPage(QWidget):
             result.append(node)
             queue.extend(self._children_map.get(node.get("id", ""), []))
         return result
+
+    def _get_search_base_categories(self, type_filter: str, has_search: bool) -> list[dict]:
+        """搜索时返回当前目录下所有子孙对象，非搜索时仅当前层级。"""
+        source = self._get_descendant_categories(self._current_parent_id) if has_search else list(self._characters)
+        if type_filter == "character":
+            return [c for c in source if c.get("node_type") == "character"]
+        if type_filter == "category":
+            return [c for c in source if c.get("node_type", "category") != "character"]
+        if type_filter == "mod":
+            return []
+        return source
+
+    def _get_search_base_mods(self, type_filter: str, has_search: bool) -> list[Mod]:
+        """分类类型筛选不包含 Mod；存在搜索时使用子树数据，否则仅返回当前目录内容。"""
+        if type_filter in ("category", "character"):
+            return []
+        return list(self._subtree_mods if has_search else self._current_mods)
+
+    def _set_searching_state(self, searching: bool) -> None:
+        """搜索期间显示检索提示，结束后恢复选择与条目数量说明。"""
+        if searching:
+            self._status_label.setText(tr("正在检索中..."))
+        else:
+            self._update_status_bar_selection()
+
+    def set_mod_loader(self, request) -> None:
+        """向宿主请求新查询需要的数据范围。"""
+        self._request_mods = request
+
+    def set_enabled_mod_ids_loader(self, getter) -> None:
+        """批量目录操作按完整范围处理，不依赖当前显示数据。"""
+        self._enabled_mod_ids_loader = getter
+
+    def begin_loading(self) -> None:
+        """保留当前卡片，停止上一个查询的未完成工作。"""
+        self._end_card_scale()
+        self._set_searching_state(True)
+        self._table.cancel_row_reveal()
+        if self._mods_loading:
+            return
+        self._cancel_directory_intro()
+        if self._pending_view is None:
+            self._request_view_position()
+        self._mods_loading = True
+        for timer in (
+            self._search_timer,
+            self._vs_population_timer,
+            self._vs_scroll_timer,
+            self._vs_pixmap_timer,
+            self._resize_timer,
+            self._scale_timer,
+        ):
+            timer.stop()
+        self._fresh_population = False
+        self._vs_population_pending = False
+        self._vs_pending_pixmap_cards.clear()
+        self._vs_invalidate_prefetch()
+        self._vs_image_requests.clear()
+        self._pixmap_worker.clear_queue()
+        self._vs_window = None
+        for card in self._vs_card_cache.values():
+            card._preview_requested = False
+            label = card._preview_label if isinstance(card, ModCard) else card._thumb
+            label._stop_loading()
+        # 替换范围加载期间保留已有单元格，不在绘制和滚动中继续填充旧数据。
+        self._loading_table_state = (self._table._row_factory, self._table._syncing_rows)
+        self._table._row_factory = None
+        self._table._syncing_rows = True
+        self._table_reveal_gen = getattr(self, "_table_reveal_gen", 0) + 1
