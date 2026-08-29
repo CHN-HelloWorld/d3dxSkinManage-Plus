@@ -2545,3 +2545,90 @@ class OverviewPage(QWidget):
         if has_tags:
             mods = [mod for mod in mods if self._tag_filter.matches(mod.info.tags)]
         return self._apply_sort(cats, mods)
+
+    def _make_category_preset_link(self) -> QPushButton:
+        """创建分类预设导入入口，将点击请求交给宿主处理。"""
+        link = QPushButton(tr("从分类预设开始"))
+        link.setObjectName("categoryPresetStart")
+        icons.apply_icon(link, "actions/import")
+        link.setCursor(Qt.CursorShape.PointingHandCursor)
+        link.clicked.connect(self.category_preset_import_requested.emit)
+        return link
+
+    def _update_filter_empty(self, has_results: bool, filter_text: str) -> bool:
+        """区分筛选无结果与游戏根目录未分类状态，切换相应提示和布局，并返回是否显示空状态。"""
+        active = bool(
+            filter_text.strip()
+            or self._tag_filter.selected_ids
+            or self._type_filter.currentData()
+            or self._age_filter.currentData()
+        )
+        show = active and not has_results
+        empty_game = bool(
+            self._current_game_id and not self._current_parent_id and not self._all_characters and not active
+        )
+        preset_start = empty_game and not has_results
+        self._category_preset_empty.setVisible(preset_start)
+        self._category_preset_inline_link.setVisible(empty_game and has_results)
+        self._filter_empty.setVisible(show)
+        self._scroll_area.setVisible(self._view_mode == "grid" and not show and not preset_start)
+        self._table.setVisible(self._view_mode == "list" and not show and not preset_start)
+        if show:
+            parts = [tr("已检索当前类别及子类别。")]
+            if filter_text.strip():
+                parts.append(tr("搜索：{value}", value=filter_text.strip()))
+            if self._tag_filter.selected_ids and self._tag_filter.button.isEnabled():
+                names = [self._tag_filter.catalog[tag_id].name for tag_id in self._tag_filter.selected_ids]
+                mode = tr("满足全部") if self._tag_filter.match_mode == "all" else tr("满足任一")
+                parts.append(tr("标签{mode}：{value}", mode=mode, value="、".join(names)))
+            self._filter_empty_description.setText("\n".join(parts))
+            self._empty_clear_tags.setVisible(bool(self._tag_filter.selected_ids))
+        return show or preset_start
+
+    def _set_table_mod_name(self, row: int, mod: Mod) -> None:
+        """填充列表名称单元格及标签代理数据，同时标记该 Mod 是否存在可用更新。"""
+        item = QTableWidgetItem(mod.display_name)
+        item.setToolTip(mod.display_name)
+        item.setData(TagNameDelegate.ROLE_HAS_TAG_CELL, True)
+        self._table.setItem(row, 1, item)
+        self._table.set_name_data(
+            row,
+            mod.display_name,
+            tags_for_names(mod.info.tags, self._tag_catalog_by_name),
+            updatable=mod.mod_id in self._updatable_ids,
+        )
+
+    def _sort_text_key(self, text: str) -> object:
+        """生成并缓存文本排序键，优先拼音并以原文区分同音名称，转换器变化时重建缓存。"""
+        value = (text or "").strip()
+        converter = self._lazy_pinyin
+        if not hasattr(self, "_sort_text_cache") or self._sort_text_converter is not converter:
+            self._sort_text_cache = OrderedDict()
+            self._sort_text_converter = converter
+        cache = self._sort_text_cache
+        if value in cache:
+            cache.move_to_end(value)
+            return cache[value]
+        result = (value.casefold(),)
+        if self._lazy_pinyin is not None and value:
+            try:
+                py = "".join(self._lazy_pinyin(value, errors="ignore"))
+                if py:
+                    result = (py.casefold(), value.casefold())
+            except Exception:
+                pass
+        # 按名称文本缓存排序键，改名立即生效，不复用过期身份缓存。
+        cache[value] = result
+        if len(cache) > 20_000:
+            cache.popitem(last=False)
+        return result
+
+    def _get_descendant_categories(self, parent_id: str) -> list[dict]:
+        """获取 parent_id 下全部子孙类别（不含 parent_id 自身）"""
+        result: list[dict] = []
+        queue = list(self._children_map.get(parent_id, []))
+        while queue:
+            node = queue.pop(0)
+            result.append(node)
+            queue.extend(self._children_map.get(node.get("id", ""), []))
+        return result
