@@ -1197,3 +1197,75 @@ class _PixmapLoadWorker(QThread):
                 self._queue.get_nowait()
             except Exception:
                 break
+
+    def stop(self) -> None:
+        """停止工作线程"""
+        self._running = False
+        self.clear_queue()
+        self._queue.put(None)  # 哨兵值唤醒 get
+
+    def run(self) -> None:
+        """按队列解码并准备卡片预览，持续检查运行状态，携带请求编号发布仍有效的结果。"""
+        while self._running:
+            try:
+                task = self._queue.get(timeout=0.05)
+            except Exception:
+                continue
+            if task is None:  # 哨兵 → 退出
+                break
+            item_id, path, layout, request_id, token = task
+            preview = None
+            try:
+                # 由 QImageReader 直接读取原生路径，并在解码时限制显示缓存尺寸。
+                preview = load_preview(
+                    path,
+                    self.cache_size(layout),
+                    load_scaled_qimage_file,
+                    cache_token=token,
+                    cancelled=lambda: not self._running,
+                )
+                if self._running:
+                    preview = prepare_preview(preview, layout, cancelled=lambda: not self._running)
+            except Exception:
+                preview = None
+            if self._running:
+                self.image_loaded.emit(item_id, path, request_id, preview)
+            preview = None  # 空闲线程不保留上一张图片。
+
+
+class _PanelPreviewLoadWorker(QThread):
+    """侧栏首图专用线程；新选择会丢弃尚未开始的旧请求。"""
+
+    image_loaded = Signal(int, str, str, object)
+
+    def __init__(self, parent=None):
+        """创建详情预览解码队列并初始化运行状态。"""
+        super().__init__(parent)
+        self._queue: queue.Queue = queue.Queue()
+        self._running = True
+
+    def enqueue(
+        self,
+        request_id: int,
+        mod_id: str,
+        path: str,
+        target_w: int,
+        target_h: int,
+    ) -> None:
+        """清除尚未开始的详情图片请求，仅排入最新目标及其请求编号。"""
+        self.clear_queue()
+        self._queue.put((request_id, mod_id, path, target_w, target_h))
+
+    def clear_queue(self) -> None:
+        """丢弃尚未开始的详情图片解码任务，保留正在执行的任务。"""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def stop(self) -> None:
+        """标记详情图片工作线程停止，清空队列并用哨兵唤醒阻塞读取。"""
+        self._running = False
+        self.clear_queue()
+        self._queue.put(None)
