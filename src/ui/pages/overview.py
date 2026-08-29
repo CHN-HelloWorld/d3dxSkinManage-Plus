@@ -1332,3 +1332,857 @@ class _KeyBindingsLoadWorker(QThread):
             except Exception:
                 bindings = []
             self.bindings_loaded.emit(request_id, mod.mod_id, bindings)
+
+
+class _EnabledRowDelegate(QStyledItemDelegate):
+    """在列表第 0 列左边缘绘制 success 色圆角竖条，标识已启用的 Mod。
+
+    竖条与状态列的对钩和胶囊共同提示启用状态。竖条宽 3px，位于 x∈[0,3)，
+    与约 4px 起始的类型图标分离；在 super.paint 后叠加，不占列宽并保留选中高亮。
+    启用状态读取第 0 列的 ``UserRole + 3``，未设置该值的类别行不绘制标记。
+    """
+
+    ROLE_ENABLED = ModListTable.ROLE_ENABLED
+    BAR_W = 3.0
+
+    def paint(self, painter, option, index):
+        """在已启用条目的首列左侧绘制状态色圆角标记，其他单元格保留默认绘制。"""
+        super().paint(painter, option, index)
+        if index.column() != 0 or not bool(index.data(self.ROLE_ENABLED)):
+            return
+        rect = option.rect
+        h = max(8.0, rect.height() - 8.0)
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(theme.color("success")))
+        painter.drawRoundedRect(
+            QRectF(float(rect.left()), rect.top() + (rect.height() - h) / 2.0, self.BAR_W, h),
+            self.BAR_W / 2.0,
+            self.BAR_W / 2.0,
+        )
+        painter.restore()
+
+
+class OverviewPage(QWidget):
+    """类别总览页面 - 混合类别+Mod视图"""
+
+    # 首屏已缓存的池卡片在有界批次内完整绑定；新建、未缓存和离屏缓冲仍按短预算让步。
+    _VS_INITIAL_BATCH_INTERVAL_MS = 0
+    _VS_INITIAL_BUFFER_ROWS = 1
+    _VS_INITIAL_REUSE_BUDGET_S = 0.064
+    _VS_INITIAL_MAX_BINDINGS = 96
+    _VS_SCROLL_BUFFER_ROWS = 1
+    _VS_SCROLL_CREATION_BUDGET_S = 0.008
+    _VS_PIXMAP_BATCH_SIZE = 4
+    _VS_PIXMAP_INTERVAL_MS = 32
+    _VS_MAX_IMAGE_REQUESTS = 8
+    _VS_MAX_PREFETCH_REQUESTS = 2
+
+    character_selected = Signal(str)
+    settings_requested = Signal()
+    category_preset_import_requested = Signal()
+    character_add_requested = Signal(dict)
+    character_edit_requested = Signal(str, dict)
+    character_delete_requested = Signal(str)
+    character_batch_add_requested = Signal(list)  # list[dict]
+    character_batch_delete_requested = Signal(list)  # list[str]
+    game_changed = Signal(str)
+    check_updates_requested = Signal()  # 工具条 🔄 检查更新
+    # 预设信号
+    preset_apply_requested = Signal(str)  # preset_id
+    preset_rename_requested = Signal(str, str)  # preset_id, new_name
+    preset_create_requested = Signal()  # 默认名由 MainWindow 生成
+    preset_delete_requested = Signal(list)  # preset_ids（空=删最后一项）
+    preset_duplicate_requested = Signal(list)  # preset_ids
+    # Mod 操作信号
+    mod_toggle_requested = Signal(str)
+    mod_delete_requested = Signal(str)
+    mod_batch_delete_requested = Signal(list)  # list[str]
+    mod_import_requested = Signal()
+    mod_edit_requested = Signal(str)  # mod_id
+    files_dropped_for_import = Signal(list, str)  # paths, node_id
+    # 导航信号
+    category_navigated = Signal(str)  # parent_id
+    # 剪切/粘贴
+    items_move_requested = Signal(list, list, str)  # cat_ids, mod_ids, target_parent
+    # 预览图操作信号（从面板转发）
+    preview_image_dropped = Signal(str, str)  # mod_id/cat_id, image_path
+    category_preview_dropped = Signal(str, str)  # cat_id, image_path
+    mod_preview_delete_requested = Signal(str, str)  # mod_id, image_path
+    mod_preview_delete_all_requested = Signal(str)  # mod_id
+    # 载荷是**图片路径**而非索引：顺序现在是实时落库的，DB 里的排列会随时变，
+    # 而预览栏内部的图片列表保持加载时的顺序不动（否则翻页会在用户手下跳序）。
+    # 两边索引因此对不上，只有路径是稳定标识。
+    mod_preview_reorder_requested = Signal(str, str)  # mod_id, 设为主图的图片路径
+    adult_mode_changed = Signal(str)  # 同步到其他页面（"show"|"hide"|"blur"）
+    batch_disable_requested = Signal(list)  # 待禁用的 Mod 标识列表。
+    items_export_requested = Signal(list, list)  # cat_ids, mod_ids —— 类别由 MainWindow 展开成子树 Mod 后导出
+    variant_context_changed = Signal(str)  # 未选择单个 Mod 时为空。
+
+    def __init__(self, parent: QWidget | None = None):
+        """初始化分类导航、筛选、多选和剪贴板，以及虚拟卡片复用和独立的图片、详情与按键解析线程。
+        从配置恢复视图和缩放，建立防抖调度、预览排序持久化及请求代次，随后构建页面。
+        """
+        super().__init__(parent)
+        self._characters: list[dict] = []
+        self._all_characters: list[dict] = []  # 所有类别（不分层级）
+        self._children_map: dict[str, list[dict]] = {}  # parent_id -> 直接子类别
+        self._current_parent_id: str = ""  # 当前导航层级
+        self._current_game_id: str = ""
+        self._batch_add_dialog: BatchAddCharacterDialog | None = None
+        self._presented_view: _PresentedOverviewView | None = None
+        self._view_positions: dict[tuple[str, str, str], tuple[tuple, int]] = {}
+        self._pending_view: tuple[int, str, str, str] | None = None
+        self._view_request_generation = 0
+        self._applying_position = False
+        self._tag_catalog_by_name: dict[str, TagDefinition] = {}
+        self._detail_mod_id = ""
+        self._mod_detail_tab = 0
+        self._last_detail_tab = 0
+        self._detail_scroll_positions: dict[tuple[str, int], int] = {}
+        # 视图模式（grid/list）：从配置恢复上次的选择（视图模式记忆）。
+        from src.core.config import Config as _Cfg
+
+        _vm = _Cfg.instance().get("ui.overview_view_mode", "grid")
+        self._view_mode = _vm if _vm in ("grid", "list") else "grid"
+        # 卡片缩放百分比（50~200）：从配置恢复上次的值（持久化缩放）
+        self._card_scale = max(50, min(200, int(_Cfg.instance().get("ui.overview_card_scale", 100))))
+        # 当前层级下的Mod列表
+        self._current_mods: list[Mod] = []
+        # 当前层级（含子孙层级）所有 Mod，用于递归搜索
+        self._subtree_mods: list[Mod] = []
+        self._request_mods = None
+        self._enabled_mod_ids_loader = None
+        self._mods_loading = False
+        self._loading_table_state = None
+        # 混合显示项列表 [{"id":..., "type":"category"|"mod", ...}]
+        self._display_items: list[dict] = []
+        self._display_idx_map: dict[str, int] = {}  # item_id → index（O(1) 查找）
+        # 多选
+        self._selected_ids: set[str] = set()
+        self._last_clicked_index: int = -1
+        # 剪切板
+        self._clipboard_cat_ids: list[str] = []
+        self._clipboard_mod_ids: list[str] = []
+        self._clipboard_source_parent: str = ""
+        # 当前选中的Mod（用于右侧面板）
+        self._selected_mod: Mod | None = None
+        self._mod_manager = None  # 主窗口注入（parse_mod_key_bindings/edit_mod_key/部署用）
+        self._adult_mode = "show"
+        self._sort_key = "alpha_asc"  # 排序方式
+        self._collator = QCollator()
+        self._collator.setLocale(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
+        self._collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._lazy_pinyin = _lazy_pinyin
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(80)
+        self._search_timer.timeout.connect(self._execute_search_refresh)
+        self._search_token = 0
+        self._pending_search_text = ""
+        self._resize_timer = QTimer()
+        self._resize_timer.setSingleShot(True)
+        self._resize_timer.setInterval(50)
+        self._resize_timer.timeout.connect(self._deferred_refresh)
+        # 卡片大小调整结束后再缩放 pixmap，避免拖动时重复计算。
+        self._card_scale_active = False
+        self._scale_timer = QTimer(self)
+        self._scale_timer.setSingleShot(True)
+        self._scale_timer.setInterval(150)
+        self._scale_timer.timeout.connect(self._apply_card_scale_pixmaps)
+        self._last_cards_per_row: int = -1
+        # 虚拟滚动。
+        # 只为可视区域 + 缓冲区的条目创建卡片 Widget，其余只保留数据。
+        # 滚动时动态创建 / 回收 Widget，大幅降低 Widget 数量和布局开销。
+        self._vs_card_cache: dict[str, QFrame] = {}  # item_id → 卡片 Widget
+        self._vs_card_pool = CardPool()
+        self._directory_intro_pending = False
+        self._vs_window: tuple | None = None
+        self._vs_population_pending = False
+        self._vs_image_request_id = 0
+        self._vs_image_requests: dict[str, tuple[int, QFrame | None, str]] = {}
+        self._vs_pending_prefetch: list[tuple[str, str]] = []
+        self._vs_prefetch_key: tuple | None = None
+        self._vs_waiting_prefetch: dict[str, tuple[int, str, tuple]] = {}
+        # 部署环形进度：正在后台部署的 mod_id → 最新进度 frac；卡片存在时挂 DeployOverlay。
+        # 只保留进度数值，浮层随卡片销毁；重建卡片时恢复浮层，避免悬空控件引用。
+        self._deploying_frac: dict[str, float] = {}  # Mod 标识到当前部署进度。
+        self._deploy_overlays: dict[str, DeployOverlay] = {}  # mod_id → 蒙层(随卡片析构)
+        self._updatable_ids: set[str] = set()
+        self._vs_card_w: int = CharacterCard.CARD_WIDTH
+        self._vs_card_h: int = CharacterCard.CARD_HEIGHT
+        self._vs_row_h: int = CharacterCard.CARD_HEIGHT + 12
+        self._vs_cols: int = 1
+        self._vs_total_rows: int = 0
+        self._vs_scroll_timer = QTimer(self)
+        self._vs_scroll_timer.setSingleShot(True)
+        self._vs_scroll_timer.setInterval(8)  # 合并高频滚动事件。
+        self._vs_scroll_timer.timeout.connect(self._vs_update_visible)
+        # 大目录首屏按帧渐进创建，避免全屏下一次构造几十张复杂卡片而冻结双击反馈。
+        self._vs_population_timer = QTimer(self)
+        self._vs_population_timer.setInterval(self._VS_INITIAL_BATCH_INTERVAL_MS)
+        self._vs_population_timer.timeout.connect(self._vs_update_visible)
+        self._vs_population_anchor_value = 0
+        # 滚动期间合并批次仍持续推进。
+        self._vs_pixmap_timer = QTimer(self)
+        self._vs_pixmap_timer.setSingleShot(True)
+        self._vs_pixmap_timer.setInterval(self._VS_PIXMAP_INTERVAL_MS)
+        self._vs_pixmap_timer.timeout.connect(self._vs_load_deferred_pixmaps)
+        self._vs_pending_pixmap_cards: list[tuple[str, QFrame]] = []  # 待加载pixmap的卡片
+        # 由工作线程读取和解码图片。
+        self._pixmap_worker = _PixmapLoadWorker(self)
+        manage_page_worker(self, self._pixmap_worker)
+        self._pixmap_worker.image_loaded.connect(self._on_bg_pixmap_loaded)
+        self._pixmap_worker.start()
+        self._panel_preview_request_id = 0
+        self._panel_preview_worker = _PanelPreviewLoadWorker(self)
+        manage_page_worker(self, self._panel_preview_worker)
+        self._panel_preview_worker.image_loaded.connect(self._on_panel_preview_loaded)
+        self._panel_preview_worker.start()
+        self._key_bindings_request_id = 0
+        self._keys_panel_mod_id = None
+        self._keys_panel_signature = None
+        self._key_bindings_worker = _KeyBindingsLoadWorker(self)
+        manage_page_worker(self, self._key_bindings_worker)
+        self._key_bindings_worker.bindings_loaded.connect(self._on_key_bindings_loaded)
+        self._key_bindings_worker.start()
+        # 连续翻页合并为一次主图排序写入，减少数据库操作；离开 Mod 或退出前显式提交待处理顺序。
+        self._pending_reorder_mod_id: str = ""
+        self._pending_reorder_path: str = ""
+        self._preview_reorder_timer = QTimer(self)
+        self._preview_reorder_timer.setSingleShot(True)
+        self._preview_reorder_timer.setInterval(200)
+        self._preview_reorder_timer.timeout.connect(self._flush_pending_preview_reorder)
+        # 保存当前选中的预览路径，供卡片和列表切换后重建时复用。
+        # 预览排序持久化后与数据库保持一致。
+        self._preview_override_paths: dict[str, str] = {}
+        # 拖拽路径收集器（后台线程）
+        self._drop_collector = None
+        # 拖拽悬停视觉反馈：当前高亮的卡片
+        self._drag_hover_card: CharacterCard | None = None
+        self._overview_col_ratios = (0.12, 0.33, 0.22, 0.13, 0.20)
+        self._overview_col_min_widths = (78, 160, 115, 96, 110)
+        self._overview_syncing_widths = False
+        self._overview_header_dragging = False
+        self._overview_user_resized = False
+        self.setAcceptDrops(True)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._setup_ui()
+        # 启动时预览栏进入未选中状态（隐藏按钮、清空内容）
+        self._hide_panel()
+        # 恢复上次的视图模式：grid 是默认布局无需动作；list 需主动切到表格视图。
+        if self._view_mode == "list":
+            self._set_view("list")
+            # 首帧布局后按真实视口宽度重新分配列宽，避免初始化尺寸造成右侧留白。
+            call_later(0, self, lambda: self._apply_overview_column_widths(force_ratio=True))
+
+    def _setup_ui(self):
+        """组装预设与筛选工具栏、混合卡片和列表视图，以及预览、信息、按键与变体详情面板。
+        连接导航、选择和业务请求，恢复分栏尺寸，并建立加载与空状态入口。
+        """
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 12, 16, 12)
+        layout.setSpacing(8)
+
+        # 顶部工具栏
+        toolbar = QHBoxLayout()
+        title = QLabel(t("类别总览"))
+        title.setStyleSheet("font-size: 20px; font-weight: bold;")
+        toolbar.addWidget(title)
+        toolbar.addStretch()
+
+        # 游戏切换由游戏页的卡片和详情栏处理。
+
+        # 预设选择器使用自定义下拉浮层。
+        from src.ui.widgets.preset_selector import PresetSelector
+
+        self._preset_selector = PresetSelector()
+        self._preset_selector.apply_requested.connect(self.preset_apply_requested.emit)
+        self._preset_selector.rename_requested.connect(self.preset_rename_requested.emit)
+        self._preset_selector.create_requested.connect(self.preset_create_requested.emit)
+        self._preset_selector.delete_requested.connect(self.preset_delete_requested.emit)
+        self._preset_selector.duplicate_requested.connect(self.preset_duplicate_requested.emit)
+        toolbar.addWidget(self._preset_selector)
+
+        # 批量添加类别
+        batch_add_btn = QPushButton(tr("批量添加"))
+        icons.apply_icon(batch_add_btn, "actions/new-folder")
+        batch_add_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        batch_add_btn.clicked.connect(self._on_batch_add)
+        toolbar.addWidget(batch_add_btn)
+
+        # 视图切换（下拉框 + SVG 图标）
+        self._view_combo = QComboBox()
+        self._view_combo.addItem(icons.get_icon("actions/card-view"), tr("卡片视图"), "grid")
+        self._view_combo.addItem(icons.get_icon("actions/list-view"), tr("列表视图"), "list")
+        icons.apply_combo_item_icon(self._view_combo, 0, "actions/card-view")
+        icons.apply_combo_item_icon(self._view_combo, 1, "actions/list-view")
+        self._view_combo.setToolTip(tr("切换 卡片 / 列表 视图"))
+        self._view_combo.currentIndexChanged.connect(lambda _i: self._set_view(self._view_combo.currentData()))
+        toolbar.addWidget(self._view_combo)
+
+        # 成人级 Mod 预览模式与 Mod 商店保持一致，眼睛图标仅显示在下拉框当前值前方。
+        self._adult_mode_combo = LeadingIconComboBox("status/visible")
+        self._adult_mode_combo.addItem(tr("显示 NSFW"), "show")
+        self._adult_mode_combo.addItem(tr("隐藏 NSFW"), "hide")
+        self._adult_mode_combo.addItem(tr("模糊 NSFW"), "blur")
+        self._adult_mode_combo.setToolTip(
+            tr("显示：正常显示 NSFW Mod 预览\n隐藏：用占位遮挡\n模糊：模糊预览（与在线 Mod 一致）")
+        )
+        self._adult_mode_combo.currentIndexChanged.connect(self._on_adult_mode_changed)
+        toolbar.addWidget(self._adult_mode_combo)
+
+        # 检查更新按钮
+        self._check_updates_btn = QPushButton(tr("检查更新"))
+        icons.apply_icon(self._check_updates_btn, "actions/refresh")
+        self._check_updates_btn.setIconSize(QSize(16, 16))
+        self._check_updates_btn.setToolTip(tr("检查已从 GameBanana 导入的 Mod 是否有新版本"))
+        self._check_updates_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._check_updates_btn.clicked.connect(lambda: self.check_updates_requested.emit())
+        toolbar.addWidget(self._check_updates_btn)
+
+        layout.addLayout(toolbar)
+
+        # 面包屑在分配宽度内从左侧折叠，并使用 SVG 分隔符，避免内容最小宽度挤压导航栏。
+        from src.ui.widgets.breadcrumb_bar import BreadcrumbBar
+
+        self._breadcrumb_frame = QFrame()
+        self._breadcrumb_frame.setObjectName("breadcrumbFrame")
+        self._apply_breadcrumb_style()
+        self._breadcrumb_frame.setFixedHeight(32)
+        _bc_outer = QHBoxLayout(self._breadcrumb_frame)
+        _bc_outer.setContentsMargins(8, 0, 8, 0)
+        _bc_outer.setSpacing(0)
+        self._breadcrumb = BreadcrumbBar()
+        self._breadcrumb.navigate.connect(self._navigate_to)
+        _bc_outer.addWidget(self._breadcrumb)
+        layout.addWidget(self._breadcrumb_frame)
+
+        # 搜索、类别和分级筛选，以及批量操作栏。
+        search_layout = QHBoxLayout()
+        self._search_input = QLineEdit()
+        self._search_input.setPlaceholderText(tr("搜索名称、作者、标签..."))
+        self._search_input.setClearButtonEnabled(True)
+        self._search_input.textChanged.connect(self._on_search)
+        self._search_input.returnPressed.connect(
+            lambda: self._execute_search_refresh(force_text=self._search_input.text().strip())
+        )
+        search_layout.addWidget(self._search_input)
+
+        self._tag_filter = TagFilter(self)
+        self._tag_filter.changed.connect(self._on_tag_filter_changed)
+        search_layout.addWidget(self._tag_filter.button)
+
+        # 类型筛选
+        self._type_filter = QComboBox()
+        self._type_filter.setFixedWidth(120)
+        self._type_filter.addItem(tr("全部类型"), "")
+        self._type_filter.addItem(icons.get_icon("meta/category"), tr("类别"), "category")
+        self._type_filter.addItem(icons.get_icon("meta/character"), tr("角色/对象"), "character")
+        self._type_filter.addItem(icons.get_icon("actions/mod"), "Mod", "mod")
+        icons.apply_combo_item_icon(self._type_filter, 1, "meta/category")
+        icons.apply_combo_item_icon(self._type_filter, 2, "meta/character")
+        icons.apply_combo_item_icon(self._type_filter, 3, "actions/mod")
+        self._type_filter.currentIndexChanged.connect(self._on_filter_changed)
+        search_layout.addWidget(self._type_filter)
+
+        # 分级筛选仅在选择 Mod 类型后显示。
+        self._age_filter = QComboBox()
+        self._age_filter.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self._age_filter.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed)
+        self._age_filter.addItem(tr("全部分级"), "")
+        self._age_filter.addItem(tr("G - 全年龄"), "G")
+        self._age_filter.addItem(tr("P - 轻微敏感"), "P")
+        self._age_filter.addItem(tr("R - 限制级"), "R")
+        self._age_filter.addItem(tr("X · 18+ 内容"), "X")
+        self._age_filter.currentIndexChanged.connect(self._on_filter_changed)
+        self._age_filter.setVisible(False)  # 初始隐藏，仅Mod类型时显示
+        search_layout.addWidget(self._age_filter)
+
+        # 批量禁用按钮
+        self._batch_disable_btn = QPushButton(tr("全部禁用"))
+        icons.apply_icon(self._batch_disable_btn, "status/disabled")
+        self._batch_disable_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._batch_disable_btn.clicked.connect(self._on_batch_disable)
+        search_layout.addWidget(self._batch_disable_btn)
+
+        # 排序选项
+        self._sort_combo = QComboBox()
+        self._sort_combo.setFixedWidth(180)
+        self._sort_combo.addItem(tr("按字母升序"), "alpha_asc")
+        self._sort_combo.addItem(tr("按字母降序"), "alpha_desc")
+        self._sort_combo.addItem(tr("按导入时间升序"), "time_asc")
+        self._sort_combo.addItem(tr("按导入时间降序"), "time_desc")
+        self._sort_combo.addItem(tr("按作者名升序"), "author_asc")
+        self._sort_combo.addItem(tr("按作者名降序"), "author_desc")
+        self._sort_combo.addItem(tr("按年龄分级升序"), "age_asc")
+        self._sort_combo.addItem(tr("按年龄分级降序"), "age_desc")
+        self._sort_combo.addItem(tr("按Mod启用状态降序"), "status_desc")
+        self._sort_combo.setToolTip(tr("排序方式"))
+        self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
+        search_layout.addWidget(self._sort_combo)
+
+        # 卡片大小滑动条
+        self._card_size_label = QLabel()
+        icons.apply_pixmap(self._card_size_label, "actions/search", 16, "text.tertiary")
+        self._card_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self._card_size_slider.setRange(50, 200)
+        self._card_size_slider.setValue(self._card_scale)  # 恢复持久化的缩放值
+        self._card_size_slider.setFixedWidth(100)
+        self._card_size_slider.setToolTip(tr("调整卡片大小"))
+        self._card_size_slider.valueChanged.connect(self._on_card_scale_changed)
+        self._card_size_slider.sliderPressed.connect(self._begin_card_scale)
+        self._card_size_slider.sliderReleased.connect(self._apply_card_scale_pixmaps)
+        search_layout.addWidget(self._card_size_label)
+        search_layout.addWidget(self._card_size_slider)
+
+        layout.addLayout(search_layout)
+        layout.addWidget(self._tag_filter.selection_row)
+
+        # 主分割器（左侧=卡片/列表 + 右侧=预览面板）
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        # 分栏手柄透明并紧贴预览面板边框，使拖动命中区域与视觉边界一致。
+        self._main_splitter.setObjectName("mainSplitter")
+        self._main_splitter.setHandleWidth(6)
+
+        # 左侧 - 卡片/列表内容
+        left_widget = QWidget()
+        left_layout = QVBoxLayout(left_widget)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(0)
+
+        self._filter_empty = QWidget()
+        empty_layout = QVBoxLayout(self._filter_empty)
+        empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.setSpacing(12)
+        empty_title = QLabel(tr("没有找到匹配的 Mod"))
+        empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_title.setStyleSheet("font-size: 16px; font-weight: bold;")
+        empty_layout.addWidget(empty_title)
+        self._filter_empty_description = QLabel()
+        self._filter_empty_description.setTextFormat(Qt.TextFormat.PlainText)
+        self._filter_empty_description.setWordWrap(True)
+        self._filter_empty_description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        empty_layout.addWidget(self._filter_empty_description)
+        empty_actions = QHBoxLayout()
+        empty_actions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty_clear_tags = QPushButton(tr("清除标签"))
+        self._empty_clear_tags.clicked.connect(self._tag_filter.clear)
+        empty_actions.addWidget(self._empty_clear_tags)
+        clear_all = QPushButton(tr("清除全部条件"))
+        clear_all.clicked.connect(self._clear_all_conditions)
+        empty_actions.addWidget(clear_all)
+        empty_layout.addLayout(empty_actions)
+        self._filter_empty.hide()
+        left_layout.addWidget(self._filter_empty, 1)
+
+        self._category_preset_empty = QWidget()
+        preset_empty_layout = QVBoxLayout(self._category_preset_empty)
+        preset_empty_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preset_empty_layout.setSpacing(14)
+        preset_empty_title = QLabel(t("暂无类别\n点击下方「+ 新建类别」按钮添加，或导入分类预设"))
+        preset_empty_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preset_empty_title.setStyleSheet(f"color: {theme.color('text.secondary')}; font-size: 14px;")
+        preset_empty_layout.addWidget(preset_empty_title)
+        preset_empty_actions = QHBoxLayout()
+        preset_empty_actions.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        preset_empty_actions.setSpacing(18)
+        preset_add = QPushButton(t("+ 新建类别"))
+        icons.apply_icon(preset_add, "actions/new-folder")
+        preset_add.setCursor(Qt.CursorShape.PointingHandCursor)
+        preset_add.clicked.connect(self._on_add_character)
+        preset_empty_actions.addWidget(preset_add)
+        preset_link = self._make_category_preset_link()
+        preset_empty_actions.addWidget(preset_link)
+        preset_empty_layout.addLayout(preset_empty_actions)
+        self._category_preset_empty.hide()
+        left_layout.addWidget(self._category_preset_empty, 1)
+        self._category_preset_inline_link = self._make_category_preset_link()
+        self._category_preset_inline_link.hide()
+        left_layout.addWidget(self._category_preset_inline_link, 0, Qt.AlignmentFlag.AlignHCenter)
+
+        # 滚动区域
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._scroll_content = QWidget()
+        self._grid_layout = QGridLayout(self._scroll_content)
+        self._grid_layout.setSpacing(12)
+        self._grid_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        scroll.setWidget(self._scroll_content)
+        self._scroll_area = scroll
+        self._scroll_edge_fade = ScrollEdgeFade(
+            self._scroll_area,
+            lambda cache=self._vs_card_cache: cache.values(),
+            cache_key_provider=lambda card: (
+                None if isinstance(card, ModCard) and card.mod_id in self._deploying_frac else card.scroll_render_key()
+            ),
+        )
+        self._card_reveal = CardRevealQueue(
+            self, self._scroll_edge_fade, lambda card, item_id: self._vs_card_cache.get(item_id) is card
+        )
+        # 滚轮平滑缓动（与商店/画廊一致的柔和滚动手感）
+        self._smooth_scroller = SmoothScroller.attach(self._scroll_area)
+        # 在滚动区视口安装事件过滤器，处理空白区域的点击。
+        scroll.viewport().installEventFilter(self)
+        # 性能优化：滚动时触发可视区域优先加载
+        scroll.verticalScrollBar().valueChanged.connect(self._on_scroll_value_changed)
+        left_layout.addWidget(scroll)
+
+        # 列表视图 (QTableWidget)
+        self._table = ModListTable()
+        self._table.tag_clicked.connect(self.select_tag_filter)
+        self._table.setColumnCount(5)
+        self._table.setHorizontalHeaderLabels(
+            [tr("类型"), tr("名称"), tr("英文名/作者"), tr("年龄分级"), tr("Mod/状态")]
+        )
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(60)  # 禁止把列拖到 0 宽度导致内容不可见
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        header.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        self._table.setTextElideMode(Qt.TextElideMode.ElideMiddle)
+        self._table.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._table.setHorizontalScrollMode(QAbstractItemView.ScrollMode.ScrollPerPixel)
+        self._table.setColumnWidth(0, 90)
+        self._table.setColumnWidth(1, 220)
+        self._table.setColumnWidth(2, 170)
+        self._table.setColumnWidth(3, 120)
+        self._table.setColumnWidth(4, 140)
+        self._table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self._table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._table.setAlternatingRowColors(True)
+        # 通过内联样式设置表格视口背景。背景图模式下交替行透明，避免两层叠色遮蔽背景；
+        # 普通模式保留不透明的隔行底色。
+        self._apply_overview_table_style()
+        # 「已启用」行标记：第 0 列左侧 success 竖条（详见 _EnabledRowDelegate）
+        self._enabled_row_delegate = _EnabledRowDelegate(self._table)
+        self._table.setItemDelegateForColumn(0, self._enabled_row_delegate)
+        self._tag_name_delegate = TagNameDelegate(self._table)
+        self._table.setItemDelegateForColumn(1, self._tag_name_delegate)
+        self._table.verticalHeader().setVisible(False)
+        self._table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self._table.cellDoubleClicked.connect(self._on_table_double_clicked)
+        self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._table.customContextMenuRequested.connect(self._show_table_context_menu)
+        self._table.setVisible(False)
+        header.sectionResized.connect(self._on_overview_header_section_resized)
+        header.viewport().installEventFilter(self)
+        # 安装事件过滤器 - 列表视图空白处点击取消选中
+        self._table.viewport().installEventFilter(self)
+        self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+        left_layout.addWidget(self._table)
+
+        self._main_splitter.addWidget(left_widget)
+
+        # 右侧 - 统一预览面板
+        # 根据选中对象在类别预览和 Mod 预览模式之间切换。
+        self._preview_panel = QWidget()
+        self._preview_panel.setFocusPolicy(Qt.FocusPolicy.ClickFocus)
+        self._preview_panel.setObjectName("previewPanel")
+        preview_panel_layout = QVBoxLayout(self._preview_panel)
+        preview_panel_layout.setContentsMargins(12, 12, 12, 12)
+        preview_panel_layout.setSpacing(0)
+
+        # 类别和 Mod 共用的预览图区域。
+        self._panel_preview = PreviewWidget()
+        # 短窗口为详情标签预留空间，保留预览操作控件并允许图片缩小。
+        self._panel_preview._image_label.setMinimumHeight(8)
+        self._panel_preview.preview_changed.connect(self._on_panel_preview_changed)
+        self._panel_preview.image_dropped.connect(self._on_panel_preview_dropped)
+
+        # Mod 预览图管理信号。
+        self._panel_preview.delete_current_requested.connect(self._on_panel_delete_current)
+        self._panel_preview.delete_all_requested.connect(self._on_panel_delete_all)
+
+        # 标题和标签栏位于各自独立滚动的详情页面之外。
+        self._panel_details = QWidget()
+        self._panel_details.setObjectName("modPreviewDetails")
+        self._panel_details.setMinimumSize(0, 280)
+        details_layout = QVBoxLayout(self._panel_details)
+        details_layout.setContentsMargins(0, 0, 0, 0)
+        details_layout.setSpacing(0)
+        header = QWidget()
+        header.setObjectName("modPreviewHeader")
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(3, 7, 3, 8)
+        header_layout.setSpacing(4)
+        title_row = QHBoxLayout()
+        title_row.setSpacing(8)
+        self._panel_name_label = _ElidedLabel(tr("选择项目查看详情"))
+        self._panel_name_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._panel_name_label.setStyleSheet("font-size: 16px; font-weight: bold;")
+        title_row.addWidget(self._panel_name_label, 1)
+        self._panel_rating_label = QLabel()
+        self._panel_rating_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._panel_rating_label.setVisible(False)
+        title_row.addWidget(self._panel_rating_label)
+        header_layout.addLayout(title_row)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(7)
+        self._panel_status_label = QLabel()
+        status_row.addWidget(self._panel_status_label)
+        self._panel_variant_label = _ElidedLabel()
+        self._panel_variant_label.setObjectName("previewVariantName")
+        self._panel_variant_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._panel_variant_label.hide()
+        status_row.addWidget(self._panel_variant_label, 1)
+        header_layout.addLayout(status_row)
+        self._panel_deploy_hint = QLabel()
+        self._panel_deploy_hint.setTextFormat(Qt.TextFormat.PlainText)
+        self._panel_deploy_hint.setWordWrap(True)
+        self._panel_deploy_hint.hide()
+        header_layout.addWidget(self._panel_deploy_hint)
+        details_layout.addWidget(header)
+        self._detail_tabs = QTabWidget()
+        self._detail_tabs.setObjectName("modPreviewTabs")
+        self._detail_tabs.setDocumentMode(True)
+        self._detail_tabs.tabBar().setExpanding(True)
+        self._detail_tabs.setUsesScrollButtons(False)
+        self._detail_tabs.setMinimumSize(0, 0)
+        details_layout.addWidget(self._detail_tabs, 1)
+
+        # 信息页。
+        self._panel_info_scroll = QScrollArea()
+        self._panel_info_scroll.setWidgetResizable(True)
+        self._panel_info_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._panel_info_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+
+        self._panel_info_frame = QFrame()
+        self._panel_info_frame.setObjectName("previewInfoFrame")
+        self._panel_info_frame.setFrameStyle(QFrame.Shape.StyledPanel)
+        self._panel_info_frame.setMinimumWidth(0)
+        self._panel_info_frame.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        panel_info_layout = QVBoxLayout(self._panel_info_frame)
+        panel_info_layout.setContentsMargins(3, 13, 5, 8)
+        panel_info_layout.setSpacing(9)
+        facts = QGridLayout()
+        facts.setHorizontalSpacing(12)
+        facts.setVerticalSpacing(10)
+        facts.setColumnMinimumWidth(0, 68)
+        facts.setColumnStretch(1, 1)
+        self._panel_author_label = QLabel()
+        self._panel_version_label = QLabel()
+        self._panel_category_label = QLabel()
+        self._panel_size_label = QLabel()
+        self._panel_fact_captions = []
+        for index, (text, value) in enumerate(
+            (
+                (tr("作者"), self._panel_author_label),
+                (tr("版本"), self._panel_version_label),
+                (tr("所属分类"), self._panel_category_label),
+                (tr("资源大小"), self._panel_size_label),
+            )
+        ):
+            caption = QLabel(text)
+            caption.setObjectName("previewFactCaption")
+            self._panel_fact_captions.append(caption)
+            value.setTextFormat(Qt.TextFormat.PlainText)
+            value.setWordWrap(True)
+            value.setMinimumWidth(0)
+            value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            facts.addWidget(caption, index, 0)
+            facts.addWidget(value, index, 1)
+        panel_info_layout.addLayout(facts)
+        self._panel_tags_title = QLabel(tr("标签"))
+        self._panel_tags_title.setObjectName("previewSectionTitle")
+        panel_info_layout.addWidget(self._panel_tags_title)
+        self._panel_tags = TagStrip(limit=None, height=24, font_size=int(theme.font("size_caption")))
+        self._panel_tags.tag_clicked.connect(self.select_tag_filter)
+        self._panel_tags.hide()
+        panel_info_layout.addWidget(self._panel_tags)
+        self._panel_desc_title = QLabel(tr("描述"))
+        self._panel_desc_title.setObjectName("previewSectionTitle")
+        panel_info_layout.addWidget(self._panel_desc_title)
+        self._panel_desc_label = QLabel("")
+        self._panel_desc_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._panel_desc_label.setWordWrap(True)
+        self._panel_desc_label.setMinimumWidth(0)
+        self._panel_desc_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._panel_desc_label.setVisible(False)
+        panel_info_layout.addWidget(self._panel_desc_label)
+        self._panel_file_title = QLabel(tr("文件与来源"))
+        self._panel_file_title.setObjectName("previewSectionTitle")
+        panel_info_layout.addWidget(self._panel_file_title)
+        self._panel_path_label = QLabel("")
+        self._panel_path_label.setTextFormat(Qt.TextFormat.PlainText)
+        self._panel_path_label.setWordWrap(True)
+        # 长 Windows 路径缺少自然分词边界，保留完整可选文本，但宽度由父布局分配。
+        self._panel_path_label.setMinimumWidth(0)
+        self._panel_path_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
+        self._apply_panel_text_style()
+        self._panel_path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._panel_path_label.setVisible(False)
+        panel_info_layout.addWidget(self._panel_path_label)
+        self._panel_source_label = QLabel()
+        self._panel_source_label.setWordWrap(True)
+        self._panel_source_label.setOpenExternalLinks(True)
+        self._panel_source_label.setMinimumWidth(0)
+        self._panel_source_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        panel_info_layout.addWidget(self._panel_source_label)
+        panel_info_layout.addStretch()
+        self._panel_info_scroll.setWidget(self._panel_info_frame)
+        self._detail_tabs.addTab(self._panel_info_scroll, tr("信息"))
+
+        # 按键页使用独立容器，整体替换异步解析结果并保留滚动位置。
+        self._panel_keys_scroll = QScrollArea()
+        self._panel_keys_scroll.setObjectName("previewKeysScroll")
+        self._panel_keys_scroll.setWidgetResizable(True)
+        self._panel_keys_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._panel_keys_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._panel_keys_host = QWidget()
+        self._panel_keys_host.setMinimumWidth(0)
+        self._panel_keys_host.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        keys_host_layout = QVBoxLayout(self._panel_keys_host)
+        keys_host_layout.setContentsMargins(3, 10, 5, 6)
+        keys_host_layout.setSpacing(6)
+        self._panel_keys_container = QWidget()
+        self._panel_keys_container.setMinimumWidth(0)
+        self._panel_keys_container.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._panel_keys_layout = QVBoxLayout(self._panel_keys_container)
+        self._panel_keys_layout.setContentsMargins(0, 0, 0, 0)
+        self._panel_keys_layout.setSpacing(2)
+        self._panel_keys_container.hide()
+        keys_host_layout.addWidget(self._panel_keys_container)
+        self._panel_keys_empty = QLabel(tr("这个 Mod 没有可编辑的按键配置"))
+        self._panel_keys_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._panel_keys_empty.setWordWrap(True)
+        keys_host_layout.addWidget(self._panel_keys_empty)
+        keys_host_layout.addStretch()
+        self._panel_keys_scroll.setWidget(self._panel_keys_host)
+        self._detail_tabs.addTab(self._panel_keys_scroll, tr("按键 0"))
+        self._variant_panel = ModVariantPanel()
+        self._variant_panel.info_requested.connect(lambda: self._detail_tabs.setCurrentIndex(0))
+        self._detail_tabs.addTab(self._variant_panel, tr("变体 0"))
+        self._detail_tabs.currentChanged.connect(self._on_detail_tab_changed)
+        self._apply_detail_style()
+
+        # 分割线：预览图与信息之间（细分割线见 fluent.qss #previewSplitter）
+        self._panel_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._panel_splitter.setObjectName("previewSplitter")
+        self._panel_splitter.setHandleWidth(7)
+        self._panel_splitter.addWidget(self._panel_preview)
+        self._panel_splitter.addWidget(self._panel_details)
+        # 保存预览和文本区的像素高度，并按比例恢复。
+        from src.core.config import Config as _Cfg
+
+        _psplit = _Cfg.instance().get("ui.overview_preview_split", [250, 150])
+        self._panel_splitter.setSizes(
+            [int(_psplit[0]), int(_psplit[1])] if isinstance(_psplit, list) and len(_psplit) == 2 else [250, 150]
+        )
+        self._panel_splitter.setChildrenCollapsible(False)
+        self._panel_splitter.splitterMoved.connect(self._on_panel_splitter_moved)
+        preview_panel_layout.addWidget(self._panel_splitter, 1)
+
+        # 操作按钮栏（根据模式显示不同按钮）
+        self._panel_btn_layout = TagFlowLayout(spacing=6)
+        self._panel_btn_layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        self._panel_btn_layout.setContentsMargins(0, 10, 0, 0)
+
+        self._panel_toggle_btn = QPushButton(tr("启用/禁用"))
+        icons.apply_icon(self._panel_toggle_btn, "status/enabled")
+        self._panel_toggle_btn.setIconSize(QSize(16, 16))
+        self._panel_toggle_btn.setEnabled(False)
+        self._panel_toggle_btn.clicked.connect(self._on_panel_toggle)
+        self._panel_btn_layout.addWidget(self._panel_toggle_btn)
+
+        self._panel_edit_btn = QPushButton(tr("编辑"))
+        icons.apply_icon(self._panel_edit_btn, "actions/edit")
+        self._panel_edit_btn.setIconSize(QSize(16, 16))
+        self._panel_edit_btn.setEnabled(False)
+        self._panel_edit_btn.clicked.connect(self._on_panel_edit)
+        self._panel_btn_layout.addWidget(self._panel_edit_btn)
+
+        self._panel_open_btn = QPushButton(tr("打开源目录"))
+        icons.apply_icon(self._panel_open_btn, "actions/folder-open")
+        self._panel_open_btn.setIconSize(QSize(16, 16))
+        self._panel_open_btn.setToolTip(tr("打开该 Mod / 类别的源目录"))
+        self._panel_open_btn.setEnabled(False)
+        self._panel_open_btn.clicked.connect(self._on_panel_open_folder)
+        self._panel_btn_layout.addWidget(self._panel_open_btn)
+
+        self._panel_delete_btn = QPushButton(tr("删除"))
+        icons.apply_icon(self._panel_delete_btn, "actions/remove")
+        self._panel_delete_btn.setIconSize(QSize(16, 16))
+        self._panel_delete_btn.setEnabled(False)
+        self._panel_delete_btn.clicked.connect(self._on_panel_delete)
+        self._panel_btn_layout.addWidget(self._panel_delete_btn)
+        for button in (self._panel_toggle_btn, self._panel_edit_btn, self._panel_open_btn, self._panel_delete_btn):
+            button.setStyleSheet("font-size: 12px; padding: 5px 8px; min-width: 0;")
+
+        # 在线查找按钮（仅类别模式可见，受 Config 开关控制）
+        self._panel_gb_search_btn = QPushButton(tr("在线查找"))
+        self._panel_gb_search_btn.setToolTip(tr("在线查找该类别的 Mod（GameBanana）"))
+        icons.apply_icon(self._panel_gb_search_btn, "actions/search")
+        self._panel_gb_search_btn.setIconSize(QSize(16, 16))
+        self._panel_gb_search_btn.setEnabled(False)
+        self._panel_gb_search_btn.setVisible(False)
+        self._panel_gb_search_btn.clicked.connect(self._on_panel_gb_search)
+        self._panel_btn_layout.addWidget(self._panel_gb_search_btn)
+        preview_panel_layout.addLayout(self._panel_btn_layout)
+
+        self._panel_preview.setMinimumWidth(340)
+        self._preview_panel.setMinimumWidth(380)
+        # 当前面板模式: "none", "category", "mod"
+        self._panel_mode = "none"
+        # 当前选中的类别
+        self._selected_category: dict | None = None
+
+        # 先将预览面板加入分栏，再设为可见，避免无父控件时作为顶级窗口短暂弹出。
+        self._main_splitter.addWidget(self._preview_panel)
+        self._preview_panel.setVisible(True)  # 重新指定父控件后恢复预览栏可见状态。
+        # 预览栏保持已保存宽度，左侧区域吸收窗口尺寸变化。
+        _pw = max(200, int(_Cfg.instance().get("ui.overview_preview_width", 350)))
+        self._main_splitter.setSizes([600, _pw])
+        self._main_splitter.setStretchFactor(0, 1)
+        self._main_splitter.setStretchFactor(1, 0)
+        self._main_splitter.setChildrenCollapsible(True)  # 允许通过拖动分割线收起预览栏。
+        self._main_splitter.splitterMoved.connect(self._on_main_splitter_moved)
+
+        layout.addWidget(self._main_splitter, 1)
+
+        # 状态栏保持固定高度。
+        self._status_label = QLabel(t("就绪"))
+        self._status_label.setFixedHeight(20)
+        self._status_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 11px;")
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(self._status_label, 1)
+        self._source_reconcile_notice = QLabel("")
+        self._source_reconcile_notice.setFixedHeight(20)
+        self._source_reconcile_notice.setStyleSheet(f"color: {theme.color('text.secondary')}; font-size: 11px;")
+        self._source_reconcile_notice.hide()
+        status_layout.addWidget(self._source_reconcile_notice)
+        self._deploy_status_label = QLabel("")
+        self._deploy_status_label.setFixedHeight(20)
+        self._deploy_status_label.hide()
+        status_layout.addWidget(self._deploy_status_label)
+        layout.addLayout(status_layout)
+
+    def set_current_game(self, game_id: str) -> None:
+        """游戏变化时重置导航、位置与源观测状态，清空标签筛选并加载新游戏的标签目录。"""
+        if self._current_game_id != game_id:
+            self.begin_loading()
+            self._invalidate_view_position(clear=True)
+            self.set_source_observations(())
+            self._current_game_id = game_id
+            self._current_parent_id = ""
+            self._tag_filter.close_popup()
+            self._tag_filter.clear(emit=False)
+            self.refresh_tags(refresh_view=False)
+            self._end_loading()
+
+    def _view_scrollbar(self, mode: str):
+        """按卡片或列表模式返回对应的纵向滚动条。"""
+        return (self._table if mode == "list" else self._scroll_area).verticalScrollBar()
