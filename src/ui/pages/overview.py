@@ -3736,3 +3736,223 @@ class OverviewPage(QWidget):
         self._vs_population_anchor_value = self._scroll_area.verticalScrollBar().value()
         self._fresh_population = True
         self._vs_update_visible()
+
+    # 虚拟滚动。
+
+    def _vs_visible_rows(self, buffer_rows: int | None = None) -> tuple[int, int, int, int]:
+        """返回当前滚动位置对应的行和索引范围。
+
+        结果为 (first_row, last_row, first_idx, last_idx)，供可视更新和重新布局
+        共同使用，确保离屏卡片也能按一致的范围重新定位。
+        """
+        if buffer_rows is None:
+            buffer_rows = self._VS_SCROLL_BUFFER_ROWS
+        buffer_rows = max(0, int(buffer_rows))
+        scroll_y = self._scroll_area.verticalScrollBar().value()
+        viewport_h = self._scroll_area.viewport().height()
+        row_h = self._vs_row_h if self._vs_row_h > 0 else 1
+        cols = self._vs_cols if self._vs_cols > 0 else 1
+        first_row = max(0, scroll_y // row_h - buffer_rows)
+        # 两端额外行覆盖部分可见区域，同一行内滚动不重建控件窗口。
+        last_row = min(self._vs_total_rows - 1, scroll_y // row_h + (viewport_h + row_h - 1) // row_h + buffer_rows)
+        first_idx = first_row * cols
+        last_idx = min(len(self._display_items) - 1, (last_row + 1) * cols - 1)
+        return first_row, last_row, first_idx, last_idx
+
+    def _vs_update_visible(self) -> None:
+        """根据当前滚动位置，创建/显示可视区域内的卡片，隐藏/回收远离区域的卡片。
+        已有图片立即复用，缺失图片按小批次后台加载。
+        """
+        if self._mods_loading:
+            return
+        if self._view_mode != "grid" or not self._display_items:
+            self._vs_population_timer.stop()
+            self._fresh_population = False
+            self._vs_population_pending = False
+            return
+
+        initial_population = bool(getattr(self, "_fresh_population", False))
+        cols = self._vs_cols if self._vs_cols > 0 else 1
+        # 首屏只预建 1 行缓冲，后续滚动再使用完整缓冲。大窗口下每一行可能有十几张卡，
+        # 若首屏直接构造 5 行缓冲，虚拟滚动反而会制造 100~300ms 的同步加载瓶颈。
+        buffer_rows = self._VS_INITIAL_BUFFER_ROWS if initial_population else self._VS_SCROLL_BUFFER_ROWS
+        first_row, last_row, first_idx, last_idx = self._vs_visible_rows(buffer_rows)
+
+        window = (first_idx, last_idx, cols, self._vs_card_w, self._vs_card_h, self._scroll_content.devicePixelRatioF())
+        if (
+            window == self._vs_window
+            and not initial_population
+            and not self._vs_population_pending
+            and not getattr(self, "_reflowing", False)
+        ):
+            # 即使行未变，策略或缓存变化也可能需要重新处理。
+            self._vs_schedule_pixmaps()
+            return
+        if window != self._vs_window:
+            self._vs_invalidate_prefetch()
+            # 重定向已有图片工作，最多提交八个解码任务，避免跳转积压过期请求。
+            self._vs_pending_pixmap_cards.clear()
+            self._vs_image_requests = {
+                item_id: (request_id, None, path)
+                for item_id, (request_id, _card, path) in self._vs_image_requests.items()
+            }
+            for card in self._vs_card_cache.values():
+                card._preview_requested = False
+        self._vs_window = window
+        visible_ids = {self._display_items[i]["id"] for i in range(first_idx, last_idx + 1)}
+        for item_id in list(self._vs_card_cache):
+            if item_id in visible_ids:
+                continue
+            card = self._vs_card_cache.pop(item_id)
+            overlay = self._deploy_overlays.pop(item_id, None)
+            if overlay is not None:
+                overlay.hide()
+                overlay.deleteLater()
+            self._vs_card_pool.release(card)
+
+        spacing = 12
+        x_pad = 6  # 左侧内边距
+        new_cards: list[tuple[str, QFrame]] = []
+        population_remaining = False
+        started = perf_counter()
+        deadline = started + self._VS_SCROLL_CREATION_BUDGET_S
+        reuse_deadline = started + self._VS_INITIAL_REUSE_BUDGET_S
+        reuse_visible = initial_population
+        scroll_y = self._scroll_area.verticalScrollBar().value()
+        visible_first = scroll_y // self._vs_row_h * cols
+        visible_last = ((scroll_y + self._scroll_area.viewport().height() - 1) // self._vs_row_h + 1) * cols - 1
+
+        def index_priority(index):
+            """优先处理实际可见条目，其余条目按距可见区的距离排序。"""
+            visible = visible_first <= index <= visible_last
+            return not visible, index if visible else min(abs(index - visible_first), abs(index - visible_last))
+
+        # 当前窗口中尚未获得预览图的卡片。
+        needs_pixmap: list[tuple[str, QFrame]] = []
+
+        # 创建/定位可视区域内的卡片
+        indices = range(first_idx, last_idx + 1)
+        indices = sorted(indices, key=index_priority)
+        for i in indices:
+            item = self._display_items[i]
+            item_id = item["id"]
+            row = i // cols
+            col = i % cols
+            x = x_pad + col * (self._vs_card_w + spacing)
+            y = spacing // 2 + row * self._vs_row_h
+
+            card = self._vs_card_cache.get(item_id)
+            is_existing = card is not None
+            if card is None:
+                try_reuse = reuse_visible and visible_first <= i <= visible_last
+                binding_deadline = reuse_deadline if try_reuse else deadline
+                if new_cards and (
+                    (initial_population and len(new_cards) >= self._VS_INITIAL_MAX_BINDINGS)
+                    or perf_counter() >= binding_deadline
+                ):
+                    population_remaining = True
+                    continue
+                if try_reuse:
+                    # 创建预算耗尽后仅使用空闲控件，不开始耗时构造。
+                    card_type = CharacterCard if item["type"] == "category" else ModCard
+                    pooled_card = self._vs_card_pool.take(card_type)
+                    if pooled_card is not None:
+                        binding_started = perf_counter()
+                        card = self._vs_create_card(item, defer_pixmap=True, pooled_card=pooled_card)
+                        reuse_visible = (
+                            card._preview_resolved
+                            or perf_counter() - binding_started < self._VS_SCROLL_CREATION_BUDGET_S
+                        )
+                    else:
+                        reuse_visible = False
+                if card is None:
+                    if new_cards and perf_counter() >= deadline:
+                        population_remaining = True
+                        continue
+                    card = self._vs_create_card(item, defer_pixmap=True)
+                self._vs_card_cache[item_id] = card
+                new_cards.append((item_id, card))
+            if (
+                not card._preview_resolved
+                and not card._preview_requested
+                and not (self._card_scale_active and card._cached_pixmap is not None)
+            ):
+                card._preview_requested = True
+                request = self._vs_image_requests.get(item_id)
+                if request is not None and request[2] == self._vs_item_preview_path(item):
+                    self._vs_image_requests[item_id] = (request[0], card, request[2])
+                else:
+                    needs_pixmap.append((item_id, card))
+            # 重排（列数变化触发的 _vs_relayout）时，让**已存在**卡片从旧格位滑到新格位；
+            # 新建卡片 / 普通刷新 / 滚动则直接定位（动画只在 _reflowing 期对老卡片生效）。
+            if is_existing and getattr(self, "_reflowing", False):
+                anim.animate_move(card, QPoint(x, y))
+            else:
+                if card.x() != x or card.y() != y:
+                    card.move(x, y)
+            if not is_existing and self._directory_intro_pending:
+                self._reveal_directory_cards([(item_id, card)], visible_first, visible_last)
+            if card.isHidden():
+                if not is_existing and visible_first <= i <= visible_last:
+                    # 隐藏复用控件尚未收到尺寸事件，只处理变化内容的布局，避免首次捕获重复布局和绘制。
+                    card.layout().activate()
+                    card._preview_container.layout().activate()
+                    if isinstance(card, ModCard):
+                        card._info_widget.layout().activate()
+                        card._tag_row.layout().activate()
+                card.show()
+                # 激活布局后立即投递当前卡片的布局事件，避免下一轮丢弃首张像素图。
+                QApplication.sendPostedEvents(card, QEvent.Type.LayoutRequest)
+            if item_id in self._deploying_frac:
+                self._attach_deploy_overlay(item_id)
+
+        self._vs_pending_pixmap_cards.extend(needs_pixmap)
+
+        def image_priority(entry):
+            """将图片任务映射为显示索引，沿用可见区域优先的加载顺序。"""
+            index = self._display_idx_map.get(entry[0], last_idx + 1)
+            return index_priority(index)
+
+        self._vs_pending_pixmap_cards.sort(key=image_priority)
+        self._vs_population_pending = population_remaining
+        self._vs_schedule_pixmaps()
+
+        if population_remaining:
+            interval = self._VS_INITIAL_BATCH_INTERVAL_MS if initial_population else self._vs_scroll_timer.interval()
+            if not self._vs_population_timer.isActive() or self._vs_population_timer.interval() != interval:
+                self._vs_population_timer.start(interval)
+        else:
+            self._fresh_population = False
+            self._vs_population_timer.stop()
+            if initial_population:
+                self._scroll_edge_fade.refresh_later()
+        self._scroll_edge_fade.refresh()
+
+        if self._directory_intro_pending:
+            if not population_remaining:
+                self._directory_intro_pending = False
+
+    def _reveal_directory_cards(self, cards, first: int, last: int) -> None:
+        """仅为可见页面中位于指定索引范围且与视口相交的卡片安排出现效果。"""
+        if not anim.is_enabled() or not self.isVisible():
+            return
+        viewport = self._scroll_area.viewport().rect().translated(0, self._scroll_area.verticalScrollBar().value())
+        for item_id, card in cards:
+            index = self._display_idx_map.get(item_id, -1)
+            if first <= index <= last and card.geometry().intersects(viewport):
+                self._card_reveal.add(card, item_id)
+
+    def _cancel_directory_intro(self) -> None:
+        """清除目录首次呈现标记，并取消待执行的卡片出现效果。"""
+        self._directory_intro_pending = False
+        self._card_reveal.cancel()
+
+    def _vs_item_preview_path(self, item: dict) -> str:
+        """按项目类型与成人显示策略取得预览路径，Mod 优先使用仍存在的临时主图覆盖路径。"""
+        if item["type"] == "category":
+            return str(item["data"].get("thumbnail") or "")
+        mod = item["data"]
+        if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+            return ""
+        override = self._preview_override_paths.get(mod.mod_id)
+        return str(override if override and fs.exists(override) else mod.primary_preview or "")
