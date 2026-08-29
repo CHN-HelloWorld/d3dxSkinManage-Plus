@@ -3010,3 +3010,182 @@ class OverviewPage(QWidget):
         scroll_bar.setValue(scroll_value)
         self._update_filter_empty(bool(desired), self._search_input.text().strip())
         return True
+
+    def _reconcile_table_rows(self, old_ids: list[str], affected: set[str]) -> None:
+        """重新插入受影响身份，并映射延迟行缓存。"""
+        table = self._table
+        blocker = QSignalBlocker(table)
+        was_syncing = table._syncing_rows
+        table._syncing_rows = True
+        pending_ids = {old_ids[row] for row in table._pending_rows}
+        names = {old_ids[row]: data for row, data in table._name_data.items()}
+        cells = {old_ids[row]: cell for row, cell in table._name_cells.items()}
+        try:
+            for row in range(len(old_ids) - 1, -1, -1):
+                if old_ids[row] in affected:
+                    table.removeRow(row)
+            for row, entry in enumerate(self._display_items):
+                mid = entry["id"]
+                if mid not in affected:
+                    continue
+                table.insertRow(row)
+                identity = QTableWidgetItem(icons.get_icon("actions/mod"), "Mod")
+                identity.setData(Qt.ItemDataRole.UserRole, mid)
+                identity.setData(Qt.ItemDataRole.UserRole + 1, "mod")
+                identity.setData(_EnabledRowDelegate.ROLE_ENABLED, entry["data"].is_enabled)
+                table.setItem(row, 0, identity)
+                table.setRowHeight(row, 52)
+                pending_ids.add(mid)
+            table._pending_rows = {row for mid, row in self._display_idx_map.items() if mid in pending_ids}
+            table._name_data = {
+                self._display_idx_map[mid]: data
+                for mid, data in names.items()
+                if mid not in affected and mid in self._display_idx_map
+            }
+            table._name_cells = {
+                self._display_idx_map[mid]: cell
+                for mid, cell in cells.items()
+                if mid not in affected and mid in self._display_idx_map
+            }
+            table._mod_rows = {
+                entry["id"]: row for row, entry in enumerate(self._display_items) if entry["type"] == "mod"
+            }
+            self._table_category_rows = [
+                row for row, entry in enumerate(self._display_items) if entry["type"] == "category"
+            ]
+        finally:
+            table._syncing_rows = was_syncing
+            blocker.unblock()
+
+    def update_mods_in_place(self, mods: list[Mod]) -> None:
+        """一次发布提交状态，保留卡片和选择。"""
+        if self._sort_key == "status_desc" and self.apply_reconcile_delta(mods, ()):
+            return
+        changed = {mod.mod_id: mod for mod in mods}
+        if not changed:
+            return
+        self._current_mods[:] = [changed.get(mod.mod_id, mod) for mod in self._current_mods]
+        self._subtree_mods[:] = [changed.get(mod.mod_id, mod) for mod in self._subtree_mods]
+        # 及时更新监控比较基线，避免将同一次禁用误判为第二次变化并重建按键控件。
+        baseline = getattr(self, "_delta_by_id", {})
+        for mod_id, mod in changed.items():
+            if mod_id in baseline:
+                baseline[mod_id] = mod
+        for item in self._display_items:
+            if item["type"] == "mod" and item["id"] in changed:
+                item["data"] = changed[item["id"]]
+        for mod_id, mod in changed.items():
+            card = self._vs_card_cache.get(mod_id)
+            if isinstance(card, ModCard):
+                card._mod = mod
+                card._update_status()
+            row = self._display_idx_map.get(mod_id, -1)
+            if 0 <= row < self._table.rowCount():
+                item = self._table.item(row, 0)
+                if item and item.data(Qt.ItemDataRole.UserRole) == mod_id:
+                    item.setData(_EnabledRowDelegate.ROLE_ENABLED, mod.is_enabled)
+                    # 延迟单元格显示时读取更新后的条目。
+                    if row not in self._table._pending_rows:
+                        self._table.refresh_mod_status(row)
+        if self._selected_mod and self._selected_mod.mod_id in changed:
+            self._selected_mod = changed[self._selected_mod.mod_id]
+            self._refresh_panel_mod_status()
+
+    def update_mod_toggle_in_place(self, mod_id: str, updated_mod: Mod, disabled_ids: list[str] | None = None) -> None:
+        """就地更新 Mod 卡片的启用/禁用状态，避免全量重建卡片"""
+        # 更新内部 mods 列表中的对象引用
+        for i, m in enumerate(self._current_mods):
+            if m.mod_id == mod_id:
+                self._current_mods[i] = updated_mod
+                break
+            if disabled_ids and m.mod_id in disabled_ids:
+                # 被冲突禁用的 Mod 也需更新
+                m.disable()
+
+        # 同步 _subtree_mods
+        for i, m in enumerate(self._subtree_mods):
+            if m.mod_id == mod_id:
+                self._subtree_mods[i] = updated_mod
+            elif disabled_ids and m.mod_id in disabled_ids:
+                m.disable()
+
+        # 同步 _display_items
+        for item in self._display_items:
+            if item["type"] == "mod" and item["id"] == mod_id:
+                item["data"] = updated_mod
+            elif disabled_ids and item["type"] == "mod" and item["id"] in disabled_ids:
+                item["data"].disable()
+
+        # 仅更新受影响的卡片视觉状态
+        affected_ids = {mod_id}
+        if disabled_ids:
+            affected_ids.update(disabled_ids)
+
+        for aid in affected_ids:
+            card = self._vs_card_cache.get(aid)
+            if card and isinstance(card, ModCard):
+                if aid == mod_id:
+                    card._mod = updated_mod
+                card._update_status()
+
+            row = self._display_idx_map.get(aid, -1)
+            if row >= 0 and row < self._table.rowCount():
+                item = self._table.item(row, 0)
+                if item and item.data(Qt.ItemDataRole.UserRole + 1) == "mod":
+                    target_mod = updated_mod if aid == mod_id else self._mod_by_id(aid)
+                    if target_mod:
+                        self._set_table_mod_status(row, target_mod)
+
+        # 如果当前面板显示的 Mod 是被切换的 Mod，更新面板
+        if self._selected_mod and self._selected_mod.mod_id == mod_id:
+            self._selected_mod = updated_mod
+            self._refresh_panel_mod_status()
+
+    # 部署反馈（按 mod_id 管理，卡片 / 列表共用同一份进度）
+
+    def begin_deploy_overlay(self, mod_id: str) -> None:
+        """立即显示启用反馈；收到真实进度前使用不定进度，避免长时间停在 0%。
+
+        进度/结束信号来自后台线程 → 主线程槽。卡片可能因滚动被回收，故 overlay 不长期
+        持有卡片引用：状态存 _deploying_frac，_attach_deploy_overlay 每次按 mod_id 现取卡片。
+        """
+        self._deploying_frac[mod_id] = 0.0
+        self._table.set_deploy_progress(mod_id, None)
+        self._attach_deploy_overlay(mod_id)
+        self._refresh_panel_mod_status()
+        self._refresh_deploy_summary()
+
+    def update_deploy_overlay(self, mod_id: str, frac: float) -> None:
+        """后台线程 progress 信号同时更新卡片蒙层与列表行。"""
+        if mod_id not in self._deploying_frac:
+            return
+        self._deploying_frac[mod_id] = max(0.0, min(1.0, frac))
+        progress = self._deploying_frac[mod_id]
+        self._table.set_deploy_progress(mod_id, progress if progress > 0 else None)
+        self._refresh_panel_mod_status()
+        self._refresh_deploy_summary()
+        ov = self._deploy_overlays.get(mod_id)
+        if ov is not None:
+            try:
+                ov.set_progress(self._deploying_frac[mod_id])
+            except RuntimeError:
+                self._deploy_overlays.pop(mod_id, None)  # C++ 侧已析构 → 丢弃引用
+
+    def finish_deploy_overlay(
+        self,
+        mod_id: str,
+        *,
+        success: bool = True,
+        error: str = "",
+    ) -> None:
+        """提交结果后撤下进度；成功短暂亮绿，失败保留说明与重试入口。"""
+        self._deploying_frac.pop(mod_id, None)
+        ov = self._deploy_overlays.pop(mod_id, None)
+        if ov is not None:
+            try:
+                ov.deleteLater()
+            except RuntimeError:
+                pass
+        self._table.finish_deploy(mod_id, success=success, error=error)
+        self._refresh_panel_mod_status()
+        self._refresh_deploy_summary()
