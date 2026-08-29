@@ -2701,3 +2701,312 @@ class OverviewPage(QWidget):
         self._table._row_factory = None
         self._table._syncing_rows = True
         self._table_reveal_gen = getattr(self, "_table_reveal_gen", 0) + 1
+
+    def _end_loading(self) -> None:
+        """结束 Mod 加载状态，并恢复加载前保留的列表行工厂和同步标记。"""
+        self._mods_loading = False
+        if self._loading_table_state is not None:
+            self._table._row_factory, self._table._syncing_rows = self._loading_table_state
+            self._loading_table_state = None
+
+    def loading_failed(self) -> None:
+        """替换查询失败时恢复保留的视图。"""
+        self._cancel_directory_intro()
+        self._remember_presented_position()
+        self._view_request_generation += 1
+        self._pending_view = None
+        self._restore_presented_conditions()
+        self._end_loading()
+        self._vs_window = None
+        if self._view_mode == "grid":
+            for card in self._vs_card_cache.values():
+                if not card._preview_resolved:
+                    label = card._preview_label if isinstance(card, ModCard) else card._thumb
+                    label.start_loading()
+            self._apply_card_scale_fast()
+        else:
+            for row in range(min(24, self._table.rowCount())):
+                if self._table.isRowHidden(row):
+                    self._table.setRowHidden(row, False)
+            self._table._sync_visible_rows()
+        self._set_searching_state(False)
+
+    def _execute_search_refresh(self, force_text: str | None = None) -> None:
+        """只提交仍匹配输入框的搜索，保存位置后请求后台刷新；无外部加载器时刷新当前布局。"""
+        text = self._pending_search_text if force_text is None else force_text.strip()
+        if text != self._search_input.text().strip():
+            return
+        self._request_view_position()
+        if self._request_mods is not None:
+            self.begin_loading()
+            self._request_mods()
+            return
+        self._set_searching_state(False)
+        if self._view_mode == "grid":
+            self._refresh_cards(text)
+        else:
+            self._refresh_table(text)
+
+    def scroll_to_item(self, item_id: str) -> None:
+        """滚动到指定项（Mod 或类别）的位置，使其在视口中可见"""
+        idx = self._display_idx_map.get(item_id, -1)
+        if idx < 0 or self._vs_cols <= 0 or self._vs_row_h <= 0:
+            return
+        row = idx // self._vs_cols
+        target_y = row * self._vs_row_h
+        # 将目标置于视口中部偏上位置
+        viewport_h = self._scroll_area.viewport().height()
+        target_y = max(0, target_y - viewport_h // 3)
+        self._scroll_area.verticalScrollBar().setValue(target_y)
+
+    def apply_reconcile_delta(self, mods: list[Mod], removed_ids) -> bool:
+        """发布小型提交差异，不重建未变化控件。
+
+        仅查询变化的标识，保持延迟表格行引用的列表对象；缓存无法安全接受差异时返回 False。
+        """
+        changed = {mod.mod_id: mod for mod in mods}
+        pending_missing = getattr(self, "_pending_missing_mods", set())
+        recovering = set(changed) & pending_missing
+        for mid in set(changed) | set(removed_ids):
+            if mid in pending_missing:
+                pending_missing.discard(mid)
+                if mid in removed_ids:
+                    continue
+                card = self._vs_card_cache.get(mid)
+                if card is not None:
+                    card.setEnabled(True)
+                row = self._display_idx_map.get(mid, -1)
+                if row >= 0 and self._view_mode == "list":
+                    item = self._table.item(row, 0)
+                    if item is not None:
+                        item.setFlags(item.flags() | Qt.ItemFlag.ItemIsEnabled)
+        affected = set(changed) | set(removed_ids)
+        if not affected:
+            return True
+        parent = self._current_parent_id
+        lists = getattr(self, "_delta_lists", ())
+        if len(lists) != 2 or lists[0] is not self._current_mods or lists[1] is not self._subtree_mods:
+            self._delta_direct_positions = {mod.mod_id: i for i, mod in enumerate(self._current_mods)}
+            self._delta_subtree_positions = {mod.mod_id: i for i, mod in enumerate(self._subtree_mods)}
+            self._delta_by_id = {mod.mod_id: mod for mod in self._subtree_mods}
+            self._delta_lists = (self._current_mods, self._subtree_mods)
+        old_mods = {mid: self._delta_by_id[mid] for mid in affected if mid in self._delta_by_id}
+        # 监控可能回报已显示的修改，继续处理真实状态变化，不重复绘制相同数据。
+        mods = [
+            mod
+            for mod in mods
+            if mod.mod_id in recovering or old_mods.get(mod.mod_id) is mod or old_mods.get(mod.mod_id) != mod
+        ]
+        changed = {mod.mod_id: mod for mod in mods}
+        affected = set(changed) | set(removed_ids)
+        if not affected:
+            return True
+
+        def in_subtree(mod):
+            """沿变化 Mod 的父节点链判断其是否属于当前子树，缓存父映射并防止环形遍历。"""
+            node = mod.node_id or ""
+            if not parent:
+                return True
+            # 仅检查变化 Mod 的祖先链。
+            by_id = getattr(self, "_delta_node_parents", None)
+            if by_id is None:
+                by_id = {node["id"]: node.get("parent_id") or "" for node in self._all_characters}
+                self._delta_node_parents = by_id
+            seen = set()
+            while node and node not in seen:
+                if node == parent:
+                    return True
+                seen.add(node)
+                node = by_id.get(node, "")
+            return False
+
+        for values, positions, belongs in (
+            (self._current_mods, self._delta_direct_positions, lambda mod: (mod.node_id or "") == parent),
+            (self._subtree_mods, self._delta_subtree_positions, in_subtree),
+        ):
+            for mid in affected:
+                mod = changed.get(mid)
+                index = positions.get(mid)
+                if mod is not None and belongs(mod):
+                    if index is None:
+                        positions[mid] = len(values)
+                        values.append(mod)
+                    else:
+                        values[index] = mod
+                elif index is not None:
+                    values.pop(index)
+                    positions.pop(mid)
+                    for offset in range(index, len(values)):
+                        positions[values[offset].mod_id] = offset
+        for mid in affected:
+            self._delta_by_id.pop(mid, None)
+        self._delta_by_id.update({mod.mod_id: mod for mod in mods if mod.mod_id in self._delta_subtree_positions})
+        removed_tags = any(mid not in old_mods or old_mods[mid].info.tags for mid in removed_ids)
+        if removed_tags or any(
+            mod.mod_id not in old_mods
+            or (old_mods[mod.mod_id].node_id, old_mods[mod.mod_id].info.tags) != (mod.node_id, mod.info.tags)
+            for mod in mods
+        ):
+            self.refresh_tags(refresh_view=False)
+        # 只移除和重新插入受影响条目，使用二分定位，避免全库重新排序。
+        desired = list(self._display_items)
+        for index in sorted(
+            (self._display_idx_map[mid] for mid in affected if mid in self._display_idx_map), reverse=True
+        ):
+            desired.pop(index)
+        query = tag_key(self._search_input.text().strip())
+        type_filter = self._type_filter.currentData() or ""
+        rating = self._age_filter.currentData() or ""
+        has_tags = bool(self._tag_filter.selected_ids) and self._tag_filter.button.isEnabled()
+        category_count = sum(item["type"] == "category" for item in desired)
+        for mod in mods:
+            membership = self._delta_subtree_positions if query or has_tags else self._delta_direct_positions
+            if mod.mod_id not in membership or type_filter in ("category", "character"):
+                continue
+            if query and not any(
+                query in tag_key(text or "") for text in (mod.display_name, mod.info.author, *(mod.info.tags or []))
+            ):
+                continue
+            if rating and mod.info.age_rating.value != rating:
+                continue
+            if has_tags and not self._tag_filter.matches(mod.info.tags):
+                continue
+            lo = 0 if self._sort_key == "status_desc" else category_count
+            hi = len(desired) - category_count if self._sort_key == "status_desc" else len(desired)
+            while lo < hi:
+                middle = (lo + hi) // 2
+                other = desired[middle]["data"]
+                _, pair = self._apply_sort([], [other, mod])
+                if pair[0] is other:
+                    lo = middle + 1
+                else:
+                    hi = middle
+            desired.insert(lo, dict(id=mod.mod_id, type="mod", data=mod, name=mod.display_name))
+        old_ids = [item["id"] for item in self._display_items]
+        new_ids = [item["id"] for item in desired]
+        scroll_bar = (
+            self._table.verticalScrollBar() if self._view_mode == "list" else self._scroll_area.verticalScrollBar()
+        )
+        scroll_value = scroll_bar.value()
+        anchor_id = old_ids[self._last_clicked_index] if 0 <= self._last_clicked_index < len(old_ids) else None
+        self._vs_invalidate_prefetch()
+        self._display_items[:] = desired
+        self._display_idx_map = {item["id"]: row for row, item in enumerate(desired)}
+        structural = old_ids != new_ids
+        if structural and self._view_mode == "list":
+            self._reconcile_table_rows(old_ids, affected)
+        for mod in mods:
+            previous = old_mods.get(mod.mod_id)
+            if previous is mod:
+                # 显式修改可能原地更新缓存对象，无法取得旧值时只重新绑定该项。
+                previous = None
+            card = self._vs_card_cache.get(mod.mod_id)
+            previews_changed = (
+                previous is None
+                or previous.preview_images != mod.preview_images
+                or previous.content_hash != mod.content_hash
+                or previous.info.age_rating != mod.info.age_rating
+            )
+            preview_moves = {}
+            if previous and previous.path and previous.path != mod.path:
+                for path in previous.preview_images:
+                    try:
+                        moved_path = str(Path(mod.path) / Path(path).relative_to(previous.path))
+                    except ValueError:
+                        continue
+                    if moved_path in mod.preview_images:
+                        preview_moves[path] = moved_path
+            if previews_changed:
+                override = self._preview_override_paths.pop(mod.mod_id, None)
+                if override in preview_moves:
+                    self._preview_override_paths[mod.mod_id] = preview_moves[override]
+                elif override in mod.preview_images:
+                    self._preview_override_paths[mod.mod_id] = override
+                if self._pending_reorder_mod_id == mod.mod_id:
+                    self._pending_reorder_path = preview_moves.get(
+                        self._pending_reorder_path, self._pending_reorder_path
+                    )
+            if isinstance(card, ModCard):
+                if previews_changed:
+                    self._vs_image_requests.pop(mod.mod_id, None)
+                    cached = card._cached_pixmap
+                    previous_preview = card._preview_override_path or (previous.primary_preview if previous else "")
+                    card.set_mod_deferred(mod)
+                    card._preview_override_path = self._preview_override_paths.get(mod.mod_id)
+                    if preview_moves.get(previous_preview) == card.effective_preview_path():
+                        card.set_preview_pixmap(cached)
+                else:
+                    card._mod = mod
+                    card._set_mod_text(mod)
+                    card._update_status()
+            row = self._display_idx_map.get(mod.mod_id, -1)
+            if self._view_mode == "list" and row >= 0:
+                identity = self._table.item(row, 0)
+                identity.setData(_EnabledRowDelegate.ROLE_ENABLED, mod.is_enabled)
+                if row not in self._table._pending_rows:
+                    if previous is None or (previous.display_name, previous.info) != (mod.display_name, mod.info):
+                        self._set_table_mod_name(row, mod)
+                        self._table.setItem(row, 2, QTableWidgetItem(mod.info.author or ""))
+                        self._table.setItem(row, 3, QTableWidgetItem(_age_rating_text(mod.info.age_rating)))
+                    self._table.refresh_mod_status(row)
+            if self._selected_mod and self._selected_mod.mod_id == mod.mod_id:
+                self._selected_mod = mod
+                self._update_mod_panel_info(mod)
+                self._refresh_panel_mod_status()
+                if previous is None or (previous.path, previous.deployed_path, previous.content_hash) != (
+                    mod.path,
+                    mod.deployed_path,
+                    mod.content_hash,
+                ):
+                    self._build_keys_panel()
+                if previews_changed:
+                    index = self._panel_preview._current_index
+                    cached_path = self._panel_preview._cached_path
+                    if cached_path in preview_moves:
+                        self._panel_preview._cached_path = preview_moves[cached_path]
+                    self._load_mod_panel_preview(
+                        mod,
+                        initial_index=index,
+                        force_reload=previous is None or previous.content_hash != mod.content_hash,
+                    )
+        if self._pending_reorder_mod_id in removed_ids:
+            self._preview_reorder_timer.stop()
+            self._pending_reorder_mod_id = self._pending_reorder_path = ""
+        if structural:
+            for mid in set(old_ids) - set(new_ids):
+                self._vs_image_requests.pop(mid, None)
+                card = self._vs_card_cache.pop(mid, None)
+                if card is not None:
+                    self._dispose_vs_card(card)
+                overlay = self._deploy_overlays.pop(mid, None)
+                if overlay is not None:
+                    overlay.deleteLater()
+            self._vs_pending_pixmap_cards[:] = [
+                entry for entry in self._vs_pending_pixmap_cards if entry[0] in self._display_idx_map
+            ]
+            self._vs_pending_prefetch[:] = [
+                entry for entry in self._vs_pending_prefetch if entry[0] in self._display_idx_map
+            ]
+        self._prune_selection()
+        self._last_clicked_index = self._display_idx_map.get(anchor_id, -1)
+        self._update_card_selection()
+        if self._view_mode == "list":
+            self._sync_table_selection_visual()
+        elif structural and (not old_ids or not new_ids):
+            # 进入或离开空状态布局时没有可共享卡片。
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            if structural:
+                cols = max(1, self._vs_cols)
+                self._vs_total_rows = (len(desired) + cols - 1) // cols
+                height = self._vs_total_rows * self._vs_row_h + 12
+                self._scroll_content.setFixedHeight(height)
+            self._vs_window = None
+            if structural:
+                self._vs_update_visible()
+            elif not self._vs_scroll_timer.isActive():
+                # 已有卡片已更新，待创建卡片和预览请求在各自调度轮次处理。
+                self._vs_scroll_timer.start()
+        scroll_bar.setValue(scroll_value)
+        self._update_filter_empty(bool(desired), self._search_input.text().strip())
+        return True
