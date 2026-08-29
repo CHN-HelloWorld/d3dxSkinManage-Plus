@@ -2450,3 +2450,98 @@ class OverviewPage(QWidget):
                     count_item = self._table.item(row, 4)
                     if count_item is not None:
                         count_item.setText(f"{category.get('enabled_count', 0)} / {category.get('mod_count', 0)}")
+
+    def set_current_mods(
+        self, mods: list[Mod], subtree_mods: list[Mod] | None = None, *, refresh_view: bool = True
+    ) -> None:
+        """设置当前层级下的 Mod 列表"""
+        self._end_loading()
+        self._current_mods = list(mods)
+        self._subtree_mods = list(subtree_mods) if subtree_mods is not None else list(mods)
+        self._delta_direct_positions = {mod.mod_id: i for i, mod in enumerate(self._current_mods)}
+        self._delta_subtree_positions = {mod.mod_id: i for i, mod in enumerate(self._subtree_mods)}
+        self._delta_by_id = {mod.mod_id: mod for mod in self._subtree_mods}
+        self._delta_lists = (self._current_mods, self._subtree_mods)
+        self.refresh_tags(refresh_view=False)
+        if refresh_view:
+            self._refresh_current_level()
+
+    def refresh_tags(self, *, refresh_view: bool = True) -> bool:
+        """刷新标签显示，并报告活动筛选是否变化。"""
+        selected_before = tuple(self._tag_filter.selected_ids)
+        service_factory = getattr(self._mod_manager, "get_tag_service", None)
+        if callable(service_factory):
+            tags = service_factory().list_tags()
+        else:
+            # 未注入管理器的独立页面仍可显示已有元数据。
+            catalog: dict[str, TagDefinition] = {}
+            for mod in self._subtree_mods:
+                for tag in tags_for_names(mod.info.tags, catalog):
+                    catalog.setdefault(tag.normalized_name, tag).usage_count += 1
+            tags = list(catalog.values())
+        self._tag_filter.set_catalog(tags)
+        catalog = {tag.normalized_name: tag for tag in tags}
+        if catalog != self._tag_catalog_by_name:
+            # 保持卡片共享映射的对象身份，定义或颜色变化时仅刷新已有显示。
+            self._tag_catalog_by_name.clear()
+            self._tag_catalog_by_name.update(catalog)
+            for card in self._vs_card_cache.values():
+                if isinstance(card, ModCard):
+                    card.set_tag_catalog(self._tag_catalog_by_name)
+            for row in list(self._table._name_data):
+                if row < len(self._display_items) and self._display_items[row]["type"] == "mod":
+                    self._set_table_mod_name(row, self._display_items[row]["data"])
+        if self._selected_mod and self._panel_mode == "mod":
+            self._panel_tags.set_tags(tags_for_names(self._selected_mod.info.tags, self._tag_catalog_by_name))
+        if refresh_view:
+            self._on_tag_filter_changed()
+        return selected_before != tuple(self._tag_filter.selected_ids)
+
+    def select_tag_filter(self, tag_id: str) -> None:
+        """卡片、表格、溢出列表和预览标签共用入口。"""
+        self._tag_filter.toggle(tag_id)
+
+    def _on_tag_filter_changed(self) -> None:
+        """使用当前搜索文字重新执行标签筛选和视图刷新。"""
+        self._execute_search_refresh(force_text=self._search_input.text())
+
+    def _clear_all_conditions(self) -> None:
+        """阻断中间变化信号后清空文字、类型、分级和标签条件，再统一触发刷新。"""
+        for widget in (self._search_input, self._type_filter, self._age_filter):
+            widget.blockSignals(True)
+        self._search_input.clear()
+        self._pending_search_text = ""
+        self._search_timer.stop()
+        self._type_filter.setCurrentIndex(0)
+        self._age_filter.setCurrentIndex(0)
+        self._tag_filter.clear(emit=False)
+        for widget in (self._search_input, self._type_filter, self._age_filter):
+            widget.blockSignals(False)
+        self._on_filter_changed()
+
+    def _filtered_content(self, filter_text: str) -> tuple[list[dict], list[Mod]]:
+        """两种布局使用相同子树、规范化文字和标签条件。"""
+        query = tag_key(filter_text)
+        type_filter = self._type_filter.currentData() or ""
+        rating_filter = self._age_filter.currentData() or ""
+        has_tags = bool(self._tag_filter.selected_ids) and self._tag_filter.button.isEnabled()
+        has_search = bool(query) or has_tags
+        cats = [] if has_tags else self._get_search_base_categories(type_filter, has_search)
+        if query:
+            cats = [
+                cat for cat in cats if any(query in tag_key(cat.get(field, "") or "") for field in ("name", "name_en"))
+            ]
+        mods = self._get_search_base_mods(type_filter, has_search)
+        if query:
+            mods = [
+                mod
+                for mod in mods
+                if any(
+                    query in tag_key(text or "") for text in (mod.display_name, mod.info.author, *(mod.info.tags or []))
+                )
+            ]
+        if rating_filter:
+            mods = [mod for mod in mods if mod.info.age_rating.value == rating_filter]
+        if has_tags:
+            mods = [mod for mod in mods if self._tag_filter.matches(mod.info.tags)]
+        return self._apply_sort(cats, mods)
