@@ -3447,3 +3447,89 @@ class OverviewPage(QWidget):
         self._last_detail_tab = index
         if getattr(self, "_panel_mode", "none") == "mod":
             self._mod_detail_tab = index
+
+    def _clear_variant_context(self) -> None:
+        """保存详情位置并清除 Mod 与变体绑定，隐藏相关标签并通知宿主上下文已清空。"""
+        self._remember_detail_scroll()
+        self._detail_mod_id = ""
+        self._variant_panel.clear_context()
+        self._panel_variant_label.hide()
+        self._detail_tabs.hide()
+        self.variant_context_changed.emit("")
+
+    def set_variant_state(self, mod_id: str, state: dict, variants, *, reference_counts=None) -> bool:
+        """只刷新所选 Mod 的变体标签页，不更新按键和图片。"""
+        if self._panel_mode != "mod" or self._selected_mod is None or self._selected_mod.mod_id != mod_id:
+            return False
+        changed_mod = self._variant_panel.mod_id != mod_id
+        self._variant_panel.set_state(state, variants, reference_counts=reference_counts)
+        if changed_mod:
+            self._restore_detail_scroll(mod_id, 2)
+            call_later(0, self, lambda: self._restore_detail_scroll(mod_id, 2))
+        self._detail_tabs.setTabText(2, tr("变体 {count}", count=len(variants)))
+        selected = state.get("selected_variant_id")
+        name = (
+            tr("Mod 默认")
+            if selected is None
+            else next((item.name for item in variants if item.variant_id == selected), tr("已缺失的变体"))
+        )
+        self._panel_variant_label.setText(f"· {tr('当前') if state.get('enabled') else tr('下次使用')}：{name}")
+        self._panel_variant_label.setVisible(bool(variants or state.get("variable_count")))
+        return True
+
+    def retheme(self) -> None:
+        """主题切换后重着色本页内联样式控件（地址栏 / 列表表格）。
+
+        卡片会跨刷新复用，当前可见卡片的内联颜色也必须在这里更新。
+        池中的类别卡片则在重新绑定时更新，避免遍历整库。
+        """
+        try:
+            if self._batch_add_dialog is not None:
+                self.prepare_batch_add_dialog()
+            self._apply_breadcrumb_style()
+            self._breadcrumb.retheme()
+            self._apply_overview_table_style()
+            self._apply_panel_text_style()
+            self._tag_filter.retheme()
+            if not self._panel_preview._images:
+                self._panel_preview._style_placeholder()
+            if self._selected_mod and self._panel_mode == "mod":
+                self._panel_tags.set_tags(tags_for_names(self._selected_mod.info.tags, self._tag_catalog_by_name))
+            for card in self._vs_card_cache.values():
+                if isinstance(card, ModCard):
+                    card.set_tag_catalog(self._tag_catalog_by_name)
+                elif isinstance(card, CharacterCard):
+                    card.retheme()
+            # 状态列的图标/前景/底色是按主题算出来的内联值，而表格不随换肤重建
+            # （只有卡片会），故这里逐行重写一遍。
+            for row, entry in enumerate(self._display_items):
+                if entry.get("type") == "mod" and row < self._table.rowCount():
+                    self._set_table_mod_status(row, entry["data"])
+                    self._set_table_mod_name(row, entry["data"])
+            self._apply_detail_style()
+            if self._panel_mode == "mod" and self._selected_mod is not None:
+                self._update_mod_panel_source(self._selected_mod)
+            self._variant_panel.retheme()
+            self._refresh_panel_mod_status()
+            self._refresh_deploy_summary()
+        except Exception:
+            pass
+
+    def _update_breadcrumb(self) -> None:
+        """向面包屑控件同步当前导航路径。"""
+        self._breadcrumb.set_items(t("全部"), self._get_path_to_current())
+
+    def _get_path_to_current(self) -> list[tuple[str, str]]:
+        """获取从根到当前层级的路径 [(id, name), ...]"""
+        path = []
+        current = self._current_parent_id
+        while current:
+            for c in self._all_characters:
+                if c["id"] == current:
+                    path.append((c["id"], c.get("name", "")))
+                    current = c.get("parent_id", "")
+                    break
+            else:
+                break
+        path.reverse()
+        return path
