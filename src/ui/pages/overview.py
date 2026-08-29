@@ -3956,3 +3956,89 @@ class OverviewPage(QWidget):
             return ""
         override = self._preview_override_paths.get(mod.mod_id)
         return str(override if override and fs.exists(override) else mod.primary_preview or "")
+
+    def _vs_restore_preview(self, card: QFrame) -> bool:
+        """从缓存恢复已合成预览，合成未命中时可应用临时图片，并返回是否完成恢复。"""
+        if card._preview_resolved:
+            return True
+        path = card.effective_preview_path() if isinstance(card, ModCard) else card._data.get("thumbnail", "")
+        layout = self._vs_preview_layout(card)
+        image = cached_preview(path, _PixmapLoadWorker.cache_size(layout)) if path else None
+        if image is None:
+            return False
+        rendered = cached_rendered_preview(image, layout)
+        if rendered is None:
+            if self._card_scale_active or card._cached_pixmap is not None:
+                label = card._preview_label if isinstance(card, ModCard) else card._thumb
+                previous = label.pixmap()
+                self._vs_apply_temporary_preview(
+                    card, image, previous.toImage() if previous is not None and not previous.isNull() else None
+                )
+            return False
+        self._vs_apply_preview(card, image, rendered=rendered)
+        return True
+
+    def _vs_apply_temporary_preview(self, card: QFrame, image, rendered=None) -> None:
+        """新尺寸图片准备好之前保留已解码像素。"""
+        layout = self._vs_preview_layout(card)
+        preview = QPixmap.fromImage(rendered if rendered is not None else image)
+        preview = preview.scaled(
+            round(layout.width * layout.dpr),
+            round(layout.height * layout.dpr),
+            Qt.AspectRatioMode.IgnoreAspectRatio if rendered is not None else Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.FastTransformation,
+        )
+        preview.setDevicePixelRatio(layout.dpr)
+        card.set_preview_pixmap(QPixmap.fromImage(image), rendered=preview)
+        card._preview_resolved = False
+        # 缩放复用图像不启动新的淡入，避免批量回收卡片时创建大量动画。
+        label = card._preview_label if isinstance(card, ModCard) else card._thumb
+        label._stop_loading()
+        effect = card.graphicsEffect()
+        if effect is not None and effect is getattr(card, "_scroll_edge_fade_effect", None):
+            if not effect._resize_finishing:
+                effect.invalidate_source()
+
+    @staticmethod
+    def _vs_preview_layout(card: QFrame) -> PreviewLayout:
+        """按卡片种类、实际图片区域和设备像素比生成预览布局，Mod 保留全图而分类使用裁剪。"""
+        is_mod = isinstance(card, ModCard)
+        return PreviewLayout(
+            card._card_width - 8,
+            card._preview_height if is_mod else card._preview_h,
+            "contain" if is_mod else "crop",
+            card.devicePixelRatioF(),
+        )
+
+    def _vs_item_preview_layout(self, item: dict) -> PreviewLayout:
+        """不构造控件即可计算未来卡片的布局尺寸。"""
+        category = item["type"] == "category"
+        if category:
+            preview_height = CharacterCard._preview_height_for(self._vs_card_h)
+        else:
+            ratio = 0.64 if self._vs_card_h >= 200 else max(0.52, 0.64 - (200 - self._vs_card_h) * 0.002)
+            preview_height = int(self._vs_card_h * ratio)
+        return PreviewLayout(
+            self._vs_card_w - 8,
+            preview_height,
+            "crop" if category else "contain",
+            self._scroll_content.devicePixelRatioF(),
+        )
+
+    @staticmethod
+    def _vs_apply_preview(card: QFrame, image: object, *, rendered: object = None) -> None:
+        """在界面线程转换原图和合成预览，二者有效时更新卡片，原图无效时显示占位。"""
+        pixmap = QPixmap.fromImage(image) if image is not None else QPixmap()
+        if pixmap.isNull():
+            card.set_no_preview()
+            return
+        if rendered is not None and not rendered.isNull():
+            card.set_preview_pixmap(pixmap, rendered=QPixmap.fromImage(rendered))
+
+    def _vs_invalidate_prefetch(self, *, schedule: bool = False) -> None:
+        """清空预取范围和等待队列，可在卡片模式空闲时安排一次新的视口更新。"""
+        self._vs_prefetch_key = None
+        self._vs_pending_prefetch.clear()
+        self._vs_waiting_prefetch.clear()
+        if schedule and not self._mods_loading and self._view_mode == "grid" and not self._vs_scroll_timer.isActive():
+            self._vs_scroll_timer.start()
