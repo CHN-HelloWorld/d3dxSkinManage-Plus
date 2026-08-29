@@ -4695,3 +4695,176 @@ class OverviewPage(QWidget):
         if changed_mod:
             call_later(0, self, lambda: self._restore_detail_scroll(mod.mod_id, 0))
         self.variant_context_changed.emit(mod.mod_id)
+
+    def _update_mod_panel_info(self, mod: Mod) -> None:
+        """更新元数据，保留当前图片和异步按键布局。"""
+        self._panel_name_label.setText(mod.display_name)
+
+        # 年龄分级
+        rating_labels = {
+            AgeRating.G: (tr("G - 全年龄"), "#4CAF50"),
+            AgeRating.P: (tr("P - 轻微敏感"), "#E8A838"),
+            AgeRating.R: (tr("R - 限制级"), "#FF7043"),
+            AgeRating.X: (tr("X · 18+ 内容"), "#E53935"),
+        }
+        label_text, label_color = rating_labels.get(mod.info.age_rating, (tr("G - 全年龄"), "#4CAF50"))
+        self._panel_rating_label.setText(mod.info.age_rating.value)
+        self._panel_rating_label.setToolTip(label_text)
+        rating_style = (
+            f"font-size: 10px; font-weight: bold; padding: 1px 5px; border-radius: 3px; "
+            f"color: white; background-color: {label_color};"
+        )
+        if self._panel_rating_label.styleSheet() != rating_style:
+            self._panel_rating_label.setStyleSheet(rating_style)
+        self._panel_rating_label.setVisible(True)
+
+        self._panel_fact_captions[0].setText(tr("作者"))
+        for widget in (
+            *self._panel_fact_captions,
+            self._panel_author_label,
+            self._panel_version_label,
+            self._panel_category_label,
+            self._panel_size_label,
+            self._panel_tags_title,
+            self._panel_file_title,
+            self._panel_source_label,
+        ):
+            widget.show()
+        self._panel_author_label.setText(mod.info.author or "—")
+        self._panel_version_label.setText(mod.info.version or "—")
+        category = self._find_category_by_id(mod.node_id)
+        self._panel_category_label.setText(category.get("name", "—") if category else "—")
+        size = "—"
+        if mod.path:
+            try:
+                resource = Path(mod.path)
+                if resource.is_file():
+                    amount = resource.stat().st_size
+                    size = f"{amount / 1024**2:.1f} MB" if amount >= 1024**2 else f"{amount / 1024:.1f} KB"
+                elif resource.is_dir():
+                    size = tr("文件夹资源")
+            except OSError:
+                pass
+        self._panel_size_label.setText(size)
+
+        if mod.info.description:
+            self._panel_desc_label.setText(mod.info.description)
+            self._panel_desc_label.setVisible(True)
+        else:
+            self._panel_desc_label.setVisible(False)
+        self._panel_desc_title.setVisible(bool(mod.info.description))
+
+        self._panel_tags.set_tags(tags_for_names(mod.info.tags, self._tag_catalog_by_name))
+        self._panel_tags.show()
+
+        self._panel_path_label.setText(mod.path)
+        self._panel_path_label.setVisible(True)
+        self._update_mod_panel_source(mod)
+
+    def _update_mod_panel_source(self, mod: Mod) -> None:
+        """主题切换后刷新富文本链接的显式颜色。"""
+        url = str(mod.info.url or "")
+        if QUrl(url).scheme() in ("http", "https"):
+            source = (
+                f'<a href="{escape(url, quote=True)}" style="color: {theme.color("text.link")}; '
+                f'text-decoration: underline;">{escape(tr("查看来源"))}</a>'
+            )
+        else:
+            source = escape(tr("本地导入"))
+        self._panel_source_label.setText(f"{source} · {escape(str(mod.imported_at)[:10])}")
+
+    def _load_mod_panel_preview(self, mod: Mod, *, initial_index: int = 0, force_reload: bool = False) -> None:
+        """立即复用现有缓存，并在分辨率不足时后台升级为侧栏高清图。"""
+        self._panel_preview_request_id += 1
+        request_id = self._panel_preview_request_id
+        self._panel_preview_worker.clear_queue()
+
+        if not mod.preview_images:
+            self._panel_preview.clear()
+            return
+        if self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X:
+            self._panel_preview.clear()
+            self._panel_preview._image_label.setText(tr("18+ 内容已隐藏"))
+            return
+
+        panel_card = self._vs_card_cache.get(mod.mod_id)
+        if not isinstance(panel_card, ModCard):
+            panel_card = None
+        cached_path = panel_card.effective_preview_path() if panel_card is not None else ""
+        cached_pixmap = panel_card._cached_pixmap if panel_card is not None else None
+        initial_index = min(initial_index, len(mod.preview_images) - 1)
+        image_path = mod.preview_images[initial_index]
+        label_size = self._panel_preview._image_label.size()
+        target_w = min(
+            PreviewWidget._WORK_MAX_EDGE,
+            max(680, label_size.width() * 2),
+        )
+        target_h = min(
+            PreviewWidget._WORK_MAX_EDGE,
+            max(500, label_size.height() * 2),
+        )
+        self._panel_preview.set_images_deferred(
+            mod.preview_images,
+            initial_index=initial_index,
+            cached_path=cached_path or "",
+            cached_pixmap=cached_pixmap,
+        )
+        if not force_reload and not self._panel_preview.cached_pixmap_needs_upgrade(
+            image_path,
+            target_w,
+            target_h,
+        ):
+            return
+        self._panel_preview_worker.enqueue(
+            request_id,
+            mod.mod_id,
+            image_path,
+            target_w,
+            target_h,
+        )
+
+    def _on_panel_preview_loaded(
+        self,
+        request_id: int,
+        mod_id: str,
+        image_path: str,
+        qimage: object,
+    ) -> None:
+        """验证请求编号与当前 Mod 后应用详情预览，并尝试将结果复用于该 Mod 的可见卡片。"""
+        selected = self._selected_mod
+        if (
+            request_id != self._panel_preview_request_id
+            or self._panel_mode != "mod"
+            or selected is None
+            or selected.mod_id != mod_id
+        ):
+            return
+        try:
+            pixmap = QPixmap.fromImage(qimage) if qimage is not None else None
+        except (TypeError, RuntimeError):
+            pixmap = None
+        if not self._panel_preview.apply_deferred_pixmap(image_path, pixmap):
+            return
+        panel_card = self._vs_card_cache.get(mod_id)
+        if isinstance(panel_card, ModCard):
+            self._reuse_panel_preview_for_card(
+                mod_id,
+                image_path,
+                panel_card,
+            )
+
+    def _action_label(self, section: str) -> str:
+        """按键作用名始终显示 INI 中的原始 section 标头。"""
+        return section
+
+    def _clear_layout(self, layout) -> None:
+        """递归移除布局项并延后销毁子控件，供详情内容整体替换使用。"""
+        while layout.count():
+            item = layout.takeAt(0)
+            w = item.widget()
+            if w is not None:
+                w.deleteLater()
+            else:
+                child = item.layout()
+                if child is not None:
+                    self._clear_layout(child)
