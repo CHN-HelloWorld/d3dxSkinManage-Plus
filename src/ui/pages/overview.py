@@ -4868,3 +4868,224 @@ class OverviewPage(QWidget):
                 child = item.layout()
                 if child is not None:
                     self._clear_layout(child)
+
+    def refresh_keys_if_selected(self, mod_id: str) -> bool:
+        """仅当指定 Mod 正在右侧详情栏中显示时，重建其按键面板。
+
+        IniSyncManager 已过滤掉“无按键 ini 从无按键变到无按键”的事件；这里再做选中态
+        守卫，避免后台其他 Mod 的同步引起无意义的界面重建。返回是否实际刷新。
+        """
+        mod = self._selected_mod
+        if mod is None or mod.mod_id != mod_id:
+            return False
+        self._build_keys_panel()
+        return True
+
+    def _build_keys_panel(self) -> None:
+        """后台解析 Mod 的有效 INI，完成后再渲染可编辑面板。
+
+        mod_manager.parse_mod_key_bindings(mod) 支持读取目录及 .7z/.rar/.zip 归档中的 INI。
+        以 binding.rel（本体内相对路径）分组，编辑结果写入 override 层，保留原始本体。
+        """
+        self._key_bindings_request_id += 1
+        mod = self._selected_mod
+        if mod is None or self._keys_panel_mod_id != mod.mod_id:
+            self._clear_layout(self._panel_keys_layout)
+            self._panel_keys_container.hide()
+            self._keys_panel_signature = None
+        self._panel_keys_container.setEnabled(False)
+        if mod is None or self._mod_manager is None:
+            self._key_bindings_worker.clear_queue()
+            return
+        self._key_bindings_worker.enqueue(
+            self._key_bindings_request_id,
+            mod,
+            self._mod_manager,
+        )
+
+    def _on_key_bindings_loaded(
+        self,
+        request_id: int,
+        mod_id: str,
+        bindings: object,
+    ) -> None:
+        """仅为当前请求和当前 Mod 应用按键结果，非列表结果按空配置显示。"""
+        selected = self._selected_mod
+        if (
+            request_id != self._key_bindings_request_id
+            or self._panel_mode != "mod"
+            or selected is None
+            or selected.mod_id != mod_id
+        ):
+            return
+        self._render_keys_panel(bindings if isinstance(bindings, list) else [])
+
+    def _render_keys_panel(self, bindings: list) -> None:
+        """按 INI 来源分组构建按键编辑项，完整替换容器后恢复该 Mod 的标签页滚动位置。"""
+        mod = self._selected_mod
+        changed_mod = self._keys_panel_mod_id != (mod.mod_id if mod else None)
+        self._detail_tabs.setTabText(1, tr("按键 {count}", count=len(bindings)))
+        self._panel_keys_empty.setVisible(not bool(bindings))
+        signature = (mod.mod_id, mod.path, tuple(bindings)) if mod is not None else None
+        if signature == self._keys_panel_signature:
+            self._panel_keys_container.setEnabled(True)
+            self._panel_keys_container.setVisible(bool(bindings))
+            return
+        self._keys_panel_mod_id = mod.mod_id if mod is not None else None
+        self._keys_panel_signature = signature
+        if mod is None or not bindings:
+            self._clear_layout(self._panel_keys_layout)
+            self._panel_keys_container.setVisible(False)
+            self._panel_keys_container.setEnabled(True)
+            return
+
+        # 在可见树之外准备替换内容，全部行和文件操作就绪前保留原布局高度。
+        container = QWidget()
+        container.setMinimumWidth(0)
+        container.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        title = QLabel(t("按键设置"))
+        title.setObjectName("iniKeysTitle")
+        title.setStyleSheet(f"color: {theme.color('warning')}; font-size: 13px; font-weight: bold;")
+        title.hide()  # 标签页已经提供分区标题。
+        layout.addWidget(title)
+
+        # 按来源 ini 的「本体内相对路径 rel」分组（归档本体无绝对路径，用 rel 稳定分组）
+        by_file: dict[str, list] = {}
+        for b in bindings:
+            by_file.setdefault(getattr(b, "rel", "") or b.ini_path, []).append(b)
+
+        for gi, (rel, group) in enumerate(by_file.items()):
+            # 多个 ini 之间用一道细分割线 + 上下留白，清晰分组（仅加空白间隔不够明显）
+            if gi > 0:
+                layout.addSpacing(8)
+                sep = QFrame()
+                sep.setFixedHeight(1)
+                sep.setStyleSheet(f"background-color: {theme.color('stroke.card')}; border: none;")
+                layout.addWidget(sep)
+                layout.addSpacing(8)
+            # 文件头同行显示 INI 标识、文件名及固定宽度的打开按钮，
+            # 极长文件名只在中间弹性区域省略，不能再把按钮挤出预览栏。
+            display_rel = fs.normal_path(rel)
+            file_name = Path(display_rel).name
+            header_widget = QWidget()
+            header_widget.setObjectName("iniFileHeader")
+            header_widget.setMinimumWidth(0)
+            header_layout = QHBoxLayout(header_widget)
+            header_layout.setContentsMargins(0, 0, 0, 0)
+            header_layout.setSpacing(8)
+
+            file_badge = QLabel("INI")
+            file_badge.setObjectName("iniFileBadge")
+            file_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            file_badge.setFixedSize(31, 20)
+            file_badge.setStyleSheet(
+                f"color: {theme.color('accent')};"
+                f" background-color: {theme.rgba('accent', 0.12)};"
+                f" border: 1px solid {theme.rgba('accent', 0.35)};"
+                " border-radius: 4px; font-size: 10px; font-weight: bold;"
+            )
+            header_layout.addWidget(file_badge)
+
+            file_label = _ElidedLabel(file_name)
+            file_label.setObjectName("iniFileName")
+            file_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 12px;")
+            file_label.setToolTip("")
+            header_layout.addWidget(file_label, 1)
+
+            # 文件夹本体返回原文件；归档本体的 ini 已在解析阶段播种到容器 override 层，
+            # 同样有可直接打开的磁盘路径。
+            open_target = self._mod_manager.effective_ini_disk_path(mod, rel)
+            if open_target:
+                open_btn = QPushButton(t("打开文件"))
+                open_btn.setObjectName("iniOpenFileButton")
+                icons.apply_icon(open_btn, "actions/open")
+                open_btn.setIconSize(QSize(14, 14))
+                open_btn.setFixedHeight(30)
+                open_btn.setMinimumWidth(88)
+                open_btn.setSizePolicy(
+                    QSizePolicy.Policy.Fixed,
+                    QSizePolicy.Policy.Fixed,
+                )
+                # 内容、边距和边框均限制在当前行高内。
+                open_btn.setStyleSheet("font-size: 12px; padding: 4px 16px;")
+                open_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+                open_btn.clicked.connect(lambda _=False, p=open_target: self._on_open_ini(p))
+                header_layout.addWidget(open_btn)
+            layout.addWidget(header_widget)
+
+            for binding_index, binding in enumerate(group):
+                if binding_index > 0:
+                    layout.addSpacing(5)
+                layout.addWidget(self._build_binding_columns(binding, show_labels=binding_index == 0))
+
+        old = self._panel_keys_container
+        scroll_bar = self._panel_keys_scroll.verticalScrollBar()
+        scroll_value = self._detail_scroll_positions.get((mod.mod_id, 1), 0) if changed_mod else scroll_bar.value()
+        self._panel_keys_host.layout().replaceWidget(old, container)
+        self._panel_keys_container, self._panel_keys_layout = container, layout
+        old.hide()
+        old.deleteLater()
+        container.show()
+        self._panel_keys_host.layout().activate()
+        scroll_bar.setValue(scroll_value)
+        if changed_mod:
+            call_later(0, self, lambda: self._restore_detail_scroll(mod.mod_id, 1))
+
+    def _build_binding_columns(self, b: KeyBinding, *, show_labels=False) -> QWidget:
+        """按键页中的 INI 分组共用动作、前向键和后向键表格。"""
+        field = QWidget()
+        field.setObjectName("iniBindingRow")
+        field.setMinimumWidth(0)
+        field.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Preferred,
+        )
+        grid = QGridLayout(field)
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(5)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnMinimumWidth(1, 96)
+        grid.setColumnMinimumWidth(2, 96)
+
+        action_label = _ElidedLabel(self._action_label(b.section))
+        action_label.setObjectName("iniBindingActionLabel")
+        action_label.setMinimumWidth(0)
+        action_label.setToolTip("")
+        action_label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 13px;")
+        row = 1 if show_labels else 0
+        if show_labels:
+            for column, (text, name) in enumerate(
+                ((tr("动作"), "iniActionLabel"), (tr("前进 / 开关"), "iniForwardLabel"), (tr("后退"), "iniBackLabel"))
+            ):
+                label = QLabel(text)
+                label.setObjectName(name)
+                label.setStyleSheet(f"color: {theme.color('text.tertiary')}; font-size: 12px;")
+                if column:
+                    label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                grid.addWidget(label, 0, column)
+        grid.addWidget(action_label, row, 0)
+        for column, role, value, line in (
+            (1, "key", b.key_value, b.key_line_no),
+            (2, "back", b.back_value, b.back_line_no),
+        ):
+            if value is None or line is None:
+                empty = QLabel("—")
+                empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                grid.addWidget(empty, row, column)
+                continue
+            control = KeyCaptureField(value)
+            control.setProperty("bindingRole", "forward" if role == "key" else "back")
+            control.setFixedWidth(96)
+            control._btn.setMinimumWidth(0)
+            control._btn.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            control._edit.setFixedWidth(20)
+            control.setStyleSheet("QPushButton { padding: 2px 3px; min-width: 0; min-height: 24px; font-size: 11px; }")
+            control.token_changed.connect(lambda tok, bn=b, key=role: self._on_key_changed(bn, key, tok))
+            grid.addWidget(control, row, column)
+
+        # 原始 type=/$var=/condition 是 3DMigoto 内部实现细节，对用户无展示价值，不再显示。
+        return field
