@@ -1269,3 +1269,66 @@ class _PanelPreviewLoadWorker(QThread):
         self._running = False
         self.clear_queue()
         self._queue.put(None)
+
+    def run(self) -> None:
+        """后台解码目标尺寸的详情图片，携带请求身份返回结果，由接收方校验是否过期。"""
+        while self._running:
+            task = self._queue.get()
+            if task is None:
+                break
+            request_id, mod_id, path, target_w, target_h = task
+            image = None
+            try:
+                target_size = QSize(max(1, target_w), max(1, target_h))
+                image = load_scaled_qimage_file(
+                    path,
+                    target_size,
+                    auto_transform=True,
+                )
+            except Exception:
+                image = None
+            self.image_loaded.emit(request_id, mod_id, path, image)
+
+
+class _KeyBindingsLoadWorker(QThread):
+    """在后台解析有效 INI；主线程只负责创建最终控件。"""
+
+    bindings_loaded = Signal(int, str, object)
+
+    def __init__(self, parent=None):
+        """创建按键配置解析队列并初始化运行状态。"""
+        super().__init__(parent)
+        self._queue: queue.Queue = queue.Queue()
+        self._running = True
+
+    def enqueue(self, request_id: int, mod: Mod, manager) -> None:
+        """清除等待中的旧解析任务，登记最新 Mod、管理器与请求编号。"""
+        self.clear_queue()
+        self._queue.put((request_id, mod, manager))
+
+    def clear_queue(self) -> None:
+        """清空尚未开始的按键解析请求，不中断当前解析。"""
+        while True:
+            try:
+                self._queue.get_nowait()
+            except queue.Empty:
+                break
+
+    def stop(self) -> None:
+        """标记解析线程停止，并以哨兵唤醒等待中的队列读取。"""
+        self._running = False
+        self.clear_queue()
+        self._queue.put(None)
+
+    def run(self) -> None:
+        """后台解析 Mod 按键配置，失败时返回空列表，结果携带请求编号供界面校验。"""
+        while self._running:
+            task = self._queue.get()
+            if task is None:
+                break
+            request_id, mod, manager = task
+            try:
+                bindings = manager.parse_mod_key_bindings(mod)
+            except Exception:
+                bindings = []
+            self.bindings_loaded.emit(request_id, mod.mod_id, bindings)
