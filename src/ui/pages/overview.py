@@ -4487,3 +4487,211 @@ class OverviewPage(QWidget):
         """Mod 卡片双击 → 切换启用/禁用"""
         if mod_id not in self._deploying_frac:
             self.mod_toggle_requested.emit(mod_id)
+
+    def _find_display_index(self, item_id: str) -> int:
+        """查找项目在显示列表中的索引（O(1)）"""
+        return self._display_idx_map.get(item_id, -1)
+
+    def _select_range(self, to_index: int) -> None:
+        """Shift+Click: 选择从上次点击到当前位置的所有项"""
+        if self._last_clicked_index < 0:
+            self._last_clicked_index = 0
+        start = min(self._last_clicked_index, to_index)
+        end = max(self._last_clicked_index, to_index)
+        for i in range(start, end + 1):
+            if i < len(self._display_items):
+                self._selected_ids.add(self._display_items[i]["id"])
+
+    def _update_card_selection(self) -> None:
+        """更新所有可见卡片的选中状态视觉反馈"""
+        for item_id, card in self._vs_card_cache.items():
+            card.set_selected(item_id in self._selected_ids)
+        self._update_status_bar_selection()
+
+    def _update_status_bar_selection(self) -> None:
+        """根据当前选中项更新底部状态栏：显示选中的类别、角色/对象、Mod 数量"""
+        if not self._selected_ids:
+            # 无选中时显示当前目录概览
+            cat_count = sum(1 for item in self._display_items if item["type"] == "category")
+            mod_count = sum(1 for item in self._display_items if item["type"] == "mod")
+            char_obj_count = sum(
+                1
+                for item in self._display_items
+                if item["type"] == "category" and item.get("data", {}).get("node_type") == "character"
+            )
+            pure_cat_count = cat_count - char_obj_count
+            parts = []
+            if pure_cat_count > 0:
+                parts.append(tr("{pure_cat_count} 个类别", pure_cat_count=pure_cat_count))
+            if char_obj_count > 0:
+                parts.append(tr("{char_obj_count} 个角色/对象", char_obj_count=char_obj_count))
+            if mod_count > 0:
+                parts.append(tr("{mod_count} 个 Mod", mod_count=mod_count))
+            has_conditions = bool(
+                self._search_input.text().strip()
+                or self._tag_filter.selected_ids
+                or self._type_filter.currentData()
+                or self._age_filter.currentData()
+            )
+            self._status_label.setText(", ".join(parts) if parts else tr("匹配 0 项") if has_conditions else t("就绪"))
+            return
+        # 统计选中项的类型
+        sel_cat = 0
+        sel_char = 0
+        sel_mod = 0
+        for item in self._display_items:
+            if item["id"] in self._selected_ids:
+                if item["type"] == "mod":
+                    sel_mod += 1
+                elif item["type"] == "category":
+                    if item.get("data", {}).get("node_type") == "character":
+                        sel_char += 1
+                    else:
+                        sel_cat += 1
+        parts = []
+        if sel_cat > 0:
+            parts.append(tr("{sel_cat} 个类别", sel_cat=sel_cat))
+        if sel_char > 0:
+            parts.append(tr("{sel_char} 个角色/对象", sel_char=sel_char))
+        if sel_mod > 0:
+            parts.append(tr("{sel_mod} 个 Mod", sel_mod=sel_mod))
+        total = sel_cat + sel_char + sel_mod
+        self._status_label.setText(tr("已选择 {total} 项（{value}）", total=total, value="，".join(parts)))
+
+    # 统一预览面板
+
+    def _show_category_panel(self, cat: dict) -> None:
+        """显示右侧类别预览面板。"""
+        self._panel_mode = "category"
+        self._clear_variant_context()
+        self._detail_tabs.setCurrentIndex(0)
+        self._detail_tabs.show()
+        self._detail_tabs.tabBar().hide()
+        self._panel_deploy_hint.hide()
+        self._panel_tags.hide()
+        self._preview_panel.setVisible(True)
+        self._ensure_preview_panel_expanded()
+
+        # 恢复预览图区域样式和提示文本
+        self._panel_preview.set_empty_text(tr("拖拽图片到此处\n或点击添加预览图\n或右键粘贴剪切板图片"))
+
+        self._panel_name_label.setText(cat.get("name", tr("未知")))
+
+        count = cat.get("mod_count", 0)
+        enabled = cat.get("enabled_count", 0)
+        self._panel_status_label.setText(tr("Mod: {enabled}/{count} 已启用", enabled=enabled, count=count))
+        self._panel_status_label.setStyleSheet(f"color: {theme.color('text.tertiary')};")
+
+        self._panel_rating_label.setVisible(False)
+        self._panel_keys_container.setVisible(False)
+
+        name_en = cat.get("name_en", "")
+        self._panel_fact_captions[0].setText(tr("英文名"))
+        self._panel_fact_captions[0].setVisible(bool(name_en))
+        for widget in (
+            *self._panel_fact_captions[1:],
+            self._panel_version_label,
+            self._panel_category_label,
+            self._panel_size_label,
+            self._panel_tags_title,
+            self._panel_desc_title,
+            self._panel_file_title,
+            self._panel_source_label,
+        ):
+            widget.hide()
+        if name_en:
+            self._panel_author_label.setText(name_en)
+            self._panel_author_label.setVisible(True)
+        else:
+            self._panel_author_label.setVisible(False)
+
+        self._panel_desc_label.setVisible(False)
+
+        # 类别仅显示一张预览图。
+        thumbnail = cat.get("thumbnail", "")
+        if thumbnail and fs.exists(thumbnail):
+            self._panel_preview.set_images([thumbnail])
+        else:
+            self._panel_preview.clear()
+
+        # 类别预览图管理仅提供添加和删除按钮。
+        self._panel_preview._add_btn.setVisible(True)
+        self._panel_preview._add_btn.setText(tr("添加预览图"))
+        has_thumb = bool(thumbnail and fs.exists(thumbnail))
+        self._panel_preview._delete_btn.setVisible(has_thumb)
+        self._panel_preview._delete_btn.setText(tr("删除预览图"))
+        self._panel_preview._delete_all_btn.setVisible(False)
+        # 隐藏导航按钮（类别只有一张图）
+        self._panel_preview._prev_btn.setVisible(False)
+        self._panel_preview._next_btn.setVisible(False)
+        self._panel_preview._page_label.setVisible(False)
+
+        self._panel_path_label.setVisible(False)
+
+        # 类别模式按钮
+        self._panel_toggle_btn.setVisible(False)
+        self._panel_edit_btn.setEnabled(True)
+        self._panel_edit_btn.setVisible(True)
+        self._panel_open_btn.setEnabled(True)
+        self._panel_open_btn.setVisible(True)
+        self._panel_delete_btn.setEnabled(True)
+        self._panel_delete_btn.setVisible(True)
+
+        # 分类模式按配置显示在线搜索按钮。
+        from src.core.config import Config as _Cfg
+
+        gb_enabled = bool(_Cfg().get("gamebanana.character_to_search_button", True))
+        self._panel_gb_search_btn.setEnabled(gb_enabled)
+        self._panel_gb_search_btn.setVisible(gb_enabled)
+
+        # 启用预览图添加（类别模式）
+        self._panel_preview.setAcceptDrops(True)
+        # 类别仅有一张预览图。
+        self._panel_preview.set_single_image_mode(True)
+
+    def _show_mod_panel(self, mod: Mod) -> None:
+        """显示右侧 Mod 管理面板。"""
+        self._remember_detail_scroll()
+        changed_mod = self._detail_mod_id != mod.mod_id
+        self._detail_mod_id = mod.mod_id
+        self._panel_mode = "mod"
+        self._detail_tabs.show()
+        self._detail_tabs.tabBar().show()
+        with QSignalBlocker(self._detail_tabs):
+            self._detail_tabs.setCurrentIndex(self._mod_detail_tab)
+        self._last_detail_tab = self._mod_detail_tab
+        if changed_mod:
+            self._variant_panel.clear_context()
+            self._panel_variant_label.hide()
+            self._detail_tabs.setTabText(2, tr("变体 0"))
+        self._preview_panel.setVisible(True)
+        self._ensure_preview_panel_expanded()
+
+        # PreviewWidget 按最终有图/加载/空状态恢复样式，避免每次选择先重刷占位底色。
+        self._panel_preview.set_empty_text(tr("拖拽图片到此处\n或点击添加预览图\n或右键粘贴剪切板图片"))
+
+        self._update_mod_panel_info(mod)
+        self._build_keys_panel()
+        self._load_mod_panel_preview(mod)
+
+        # Mod模式下所有按钮可见
+        self._panel_toggle_btn.setVisible(True)
+        self._refresh_panel_mod_status()
+        self._panel_edit_btn.setVisible(True)
+        self._panel_edit_btn.setEnabled(True)
+        self._panel_open_btn.setEnabled(True)
+        self._panel_open_btn.setVisible(True)
+        self._panel_delete_btn.setEnabled(True)
+        self._panel_delete_btn.setVisible(True)
+        self._panel_gb_search_btn.setVisible(False)
+        self._panel_gb_search_btn.setEnabled(False)
+        self._panel_preview.setAcceptDrops(True)
+        self._panel_preview.set_single_image_mode(False)
+        self._panel_preview._add_btn.setText(tr("添加预览图"))
+        self._panel_preview._add_btn.setVisible(True)
+        self._panel_preview._delete_btn.setText(tr("删除"))
+        for index in range(3):
+            self._detail_scrollbar(index).setValue(self._detail_scroll_positions.get((mod.mod_id, index), 0))
+        if changed_mod:
+            call_later(0, self, lambda: self._restore_detail_scroll(mod.mod_id, 0))
+        self.variant_context_changed.emit(mod.mod_id)
