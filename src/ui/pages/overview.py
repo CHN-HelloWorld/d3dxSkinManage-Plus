@@ -3332,3 +3332,55 @@ class OverviewPage(QWidget):
                     }
                 )
                 self._display_idx_map[mod.mod_id] = idx
+
+    def _set_table_mod_status(self, row: int, mod: Mod) -> None:
+        """更新真实启用态；状态胶囊优先呈现该 Mod 尚未结束的部署反馈。"""
+        type_item = self._table.item(row, 0)
+        if type_item is not None:
+            type_item.setData(_EnabledRowDelegate.ROLE_ENABLED, bool(mod.is_enabled))
+        self._table.refresh_mod_status(row)
+
+    def _flush_pending_preview_reorder(self) -> None:
+        """立刻把待写的「主图」落库（去抖定时器到点 / 离开 Mod / 关程序时都会调）。"""
+        self._preview_reorder_timer.stop()
+        mod_id, img_path = self._pending_reorder_mod_id, self._pending_reorder_path
+        self._pending_reorder_mod_id = ""
+        self._pending_reorder_path = ""
+        if mod_id and img_path:
+            self.mod_preview_reorder_requested.emit(mod_id, img_path)
+
+    def _navigate_to(self, parent_id: str) -> None:
+        """导航到指定类别层级"""
+        self._flush_pending_preview_reorder()
+        self._request_view_position(parent_id=parent_id)
+        self.begin_loading()
+        self._directory_intro_pending = anim.is_enabled()
+        self._tag_filter.close_popup()
+        self._tag_filter.clear(emit=False)
+        self._current_parent_id = parent_id
+        # 清空选择和Mod面板
+        self._selected_ids.clear()
+        self._selected_mod = None
+        self._selected_category = None
+        self._last_clicked_index = -1
+        self._hide_panel()
+        # 通知主窗口加载此层级的Mod → set_current_mods → _refresh_current_level
+        self.category_navigated.emit(parent_id)
+
+    def _apply_breadcrumb_style(self) -> None:
+        """地址/面包屑栏底色（随主题）。抽出以便换肤时重涂。"""
+        self._breadcrumb_frame.setStyleSheet(
+            f"QFrame#breadcrumbFrame {{ background-color: {theme.surface_color('bg.card', 'panel')}; "
+            f"border: 1px solid {theme.color('stroke.divider')}; border-radius: 4px; }}"
+        )
+
+    def _apply_overview_table_style(self) -> None:
+        """列表视图表格内联底色（随主题/背景图档位）。抽出以便换肤时重涂。"""
+        if theme.is_background_active():
+            list_alt = "transparent"
+        else:
+            list_alt = theme.surface_color("bg.subtle", "list")
+        self._table.setStyleSheet(
+            f"QTableWidget {{ background-color: {theme.surface_color('bg.card', 'list')};"
+            f" alternate-background-color: {list_alt}; }}"
+        )
