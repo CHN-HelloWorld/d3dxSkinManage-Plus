@@ -4258,3 +4258,158 @@ class OverviewPage(QWidget):
             result.image if result is not None else None,
             rendered=result.rendered if result is not None else None,
         )
+
+    def prepare_visible_card_pool(self, viewport_size: QSize) -> None:
+        """预创建并预热首屏所需的有限 Mod 卡片，放入复用池以减少进入目录时的构造工作。"""
+        width = int(CharacterCard.CARD_WIDTH * self._card_scale / 100)
+        height = int(CharacterCard.CARD_HEIGHT * self._card_scale / 100)
+        cols = max(1, (viewport_size.width() - 48) // (width + 12))
+        rows = max(1, (viewport_size.height() + height + 11) // (height + 12)) + 1
+        desired = min(self._VS_INITIAL_MAX_BINDINGS, cols * rows)
+        existing = self._vs_card_pool.count(ModCard) + sum(
+            isinstance(card, ModCard) for card in self._vs_card_cache.values()
+        )
+        for _ in range(max(0, desired - existing)):
+            card = self._new_mod_card()
+            card.set_mod_deferred(Mod(name="Prepared card"))
+            card.resize_card(width, height)
+            card.ensurePolished()
+            card.layout().activate()
+            self._vs_card_pool.release(card)
+
+    def _new_mod_card(self) -> ModCard:
+        """创建滚动区域所属的空 Mod 卡片，绑定一次点击、标签和菜单信号供后续数据复用。"""
+        card = ModCard(
+            mod=None,
+            parent=self._scroll_content,
+            adult_mode=self._adult_mode,
+            card_width=self._vs_card_w,
+            card_height=self._vs_card_h,
+        )
+        card.clicked.connect(self._on_mod_card_clicked)
+        card.double_clicked.connect(self._on_mod_card_double_clicked)
+        card.tag_clicked.connect(self.select_tag_filter)
+        card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        card.customContextMenuRequested.connect(
+            lambda pos, current=card: self._show_mod_card_context_menu(current, current.mod_id, pos)
+        )
+        return card
+
+    def _vs_create_card(self, item: dict, defer_pixmap: bool = False, *, pooled_card: QFrame | None = None) -> QFrame:
+        """为单个 display_item 创建卡片 Widget
+        defer_pixmap=True 时仅设置文字信息，pixmap由外部定时器批量加载
+        pooled_card 可传入调用方已取得的池卡片，始终返回绑定好的 Widget。
+        """
+        if item["type"] == "category":
+            card = pooled_card if pooled_card is not None else self._vs_card_pool.take(CharacterCard)
+            if card is None:
+                card = CharacterCard(
+                    item["data"],
+                    parent=self._scroll_content,
+                    card_width=self._vs_card_w,
+                    card_height=self._vs_card_h,
+                    defer_pixmap=defer_pixmap,
+                )
+                card.clicked.connect(self._on_card_clicked)
+                card.double_clicked.connect(self._on_card_double_clicked)
+                card.edit_requested.connect(self._on_edit_character)
+                card.delete_requested.connect(self._on_category_card_delete)
+                card.export_requested.connect(self._on_category_card_export)
+                card.context_select_requested.connect(self._select_for_context_menu)
+                card.clipboard_menu_requested.connect(self._add_item_clipboard_actions)
+                card.open_folder_requested.connect(self._open_category_folder)
+                card.online_search_requested.connect(self._online_search_by_cat_id)
+                card.preview_dropped.connect(self.category_preview_dropped)
+            else:
+                card.set_category(item["data"], defer_pixmap=defer_pixmap)
+                card.resize_card(self._vs_card_w, self._vs_card_h)
+        else:
+            mod = item["data"]
+            card = pooled_card if pooled_card is not None else self._vs_card_pool.take(ModCard)
+            if card is None:
+                card = self._new_mod_card()
+            card._adult_mode = self._adult_mode
+            card.set_tag_catalog(self._tag_catalog_by_name)
+            card.set_mod_deferred(mod)
+            card.resize_card(self._vs_card_w, self._vs_card_h)
+            # 沿用预览栏切到的非首张图：视图切换/滚动重建卡片后仍显示同一张，
+            # 延迟与后台加载都走 effective_preview_path，不会覆盖回首图（串图 bug）。
+            override = self._preview_override_paths.get(mod.mod_id)
+            if override:
+                card._preview_override_path = override
+            if not defer_pixmap:
+                card.load_pixmap_deferred()  # 立即加载预览图
+            # defer_pixmap=True 时 pixmap 由 _vs_load_deferred_pixmaps 延迟加载
+            card.set_update_available(mod.mod_id in self._updatable_ids)
+
+        # 回收卡片的子布局可能延迟更新，复用时始终恢复实际控件边界。
+        card.setFixedSize(self._vs_card_w, self._vs_card_h)
+
+        # 控件隐藏期间绑定缓存像素，返回滚动区域时不重复播放加载动画。
+        if defer_pixmap:
+            self._vs_restore_preview(card)
+
+        card.setEnabled(item["type"] == "category" or item["id"] not in getattr(self, "_pending_missing_mods", ()))
+        if item["id"] in self._selected_ids:
+            card.set_selected(True)
+        # 剪切状态
+        cut_ids = set(self._clipboard_cat_ids + self._clipboard_mod_ids)
+        if item["id"] in cut_ids:
+            if isinstance(card, CharacterCard):
+                card.set_cut_state(True)
+            elif isinstance(card, ModCard):
+                card.set_cut_state(True)
+
+        return card
+
+    def _on_scroll_value_changed(self, _value: int) -> None:
+        """滚动条变化时，延迟触发虚拟滚动更新"""
+        if self._mods_loading or self._applying_position:
+            return
+        if _value != self._vs_population_anchor_value:
+            self._cancel_directory_intro()
+        # 首屏渐进填充期间若用户真的滚动了，优先补齐新的目标区域；继续按单卡
+        # 填充旧首屏会让滚动位置出现空洞。刷新/布局引起的同值通知不算用户滚动。
+        if (
+            getattr(self, "_fresh_population", False)
+            and self._vs_population_timer.isActive()
+            and _value != self._vs_population_anchor_value
+        ):
+            self._vs_population_timer.stop()
+            self._fresh_population = False
+        self._vs_schedule_pixmaps()
+        if not self._vs_scroll_timer.isActive():
+            self._vs_scroll_timer.start()
+
+    # 选择与导航
+
+    def _on_card_clicked(self, char_id: str) -> None:
+        """类别卡片单击 → 选择（Ctrl/Shift多选）"""
+        self._cancel_directory_intro()
+        self._scroll_area.setFocus(Qt.FocusReason.MouseFocusReason)
+        self._flush_pending_preview_reorder()
+        modifiers = QApplication.keyboardModifiers()
+        item_index = self._find_display_index(char_id)
+
+        if modifiers & Qt.KeyboardModifier.ControlModifier:
+            # Ctrl+Click: 切换选中
+            if char_id in self._selected_ids:
+                self._selected_ids.discard(char_id)
+            else:
+                self._selected_ids.add(char_id)
+            self._last_clicked_index = item_index
+        elif modifiers & Qt.KeyboardModifier.ShiftModifier:
+            # Shift+Click: 范围选中
+            self._select_range(item_index)
+        else:
+            # 普通单击: 清空其他选择，选中此项
+            self._selected_ids.clear()
+            self._selected_ids.add(char_id)
+            self._last_clicked_index = item_index
+
+        self._update_card_selection()
+        self._show_selection_panel()
+
+    def _on_card_double_clicked(self, char_id: str) -> None:
+        """类别卡片双击 → 进入类别"""
+        self._navigate_to(char_id)
