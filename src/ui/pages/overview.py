@@ -4042,3 +4042,219 @@ class OverviewPage(QWidget):
         self._vs_waiting_prefetch.clear()
         if schedule and not self._mods_loading and self._view_mode == "grid" and not self._vs_scroll_timer.isActive():
             self._vs_scroll_timer.start()
+
+    def _vs_prepare_prefetch(self, first_idx: int, last_idx: int) -> None:
+        """当前控件窗口填充完成后扫描一次相邻数据。"""
+        if self._mods_loading or self._card_scale_active:
+            return
+        if not image_cache_budget.prefetch_allowed:
+            self._vs_invalidate_prefetch()
+            return
+        if self._vs_population_pending or self._vs_window is None:
+            return
+        buffer_rows = (
+            self._VS_INITIAL_BUFFER_ROWS if getattr(self, "_fresh_population", False) else self._VS_SCROLL_BUFFER_ROWS
+        )
+        _, _, visible_first, visible_last = self._vs_visible_rows(buffer_rows)
+        current_window = (
+            visible_first,
+            visible_last,
+            max(1, self._vs_cols),
+            self._vs_card_w,
+            self._vs_card_h,
+            self._scroll_content.devicePixelRatioF(),
+        )
+        if current_window != self._vs_window:
+            # 滚动信号可能早于控件更新调度图片。
+            self._vs_invalidate_prefetch()
+            return
+        rows = max(1, (self._scroll_area.viewport().height() + self._vs_row_h - 1) // self._vs_row_h)
+        _, _, first, last = self._vs_visible_rows(rows)
+        key = (
+            self._vs_window,
+            first,
+            last,
+            self._adult_mode,
+            preview_cache_token(),
+            image_cache_budget.prefetch_generation,
+        )
+        if key == self._vs_prefetch_key:
+            return
+        self._vs_prefetch_key = key
+        indices = [i for i in range(first, last + 1) if i < first_idx or i > last_idx]
+        indices.sort(key=lambda i: max(first_idx - i, i - last_idx, 0))
+        self._vs_pending_prefetch.clear()
+        self._vs_waiting_prefetch.clear()
+        for i in indices:
+            item = self._display_items[i]
+            path = self._vs_item_preview_path(item)
+            if not path:
+                continue
+            request = self._vs_image_requests.get(item["id"])
+            if request and request[2] == path:
+                # 保留仍有价值的旧工作，但不能写入当前布局或缓存代次，等待数量受在途请求限制。
+                self._vs_waiting_prefetch[item["id"]] = (request[0], path, key)
+                continue
+            layout = self._vs_item_preview_layout(item)
+            if cached_preview(path, _PixmapLoadWorker.cache_size(layout), validate=False) is None:
+                self._vs_pending_prefetch.append((item["id"], path))
+
+    def _vs_resume_waiting_prefetch(self, item_id: str, path: str, request_id: int) -> bool:
+        """仅重新检查本次因旧请求而跳过的候选。"""
+        waiting = self._vs_waiting_prefetch.pop(item_id, None)
+        if (
+            waiting is None
+            or waiting != (request_id, path, self._vs_prefetch_key)
+            or self._mods_loading
+            or self._view_mode != "grid"
+            or self._vs_population_pending
+            or item_id in self._vs_card_cache
+        ):
+            return False
+        index = self._display_idx_map.get(item_id)
+        if index is None or not waiting[2][1] <= index <= waiting[2][2]:
+            return False
+        item = self._display_items[index]
+        if self._vs_item_preview_path(item) != path:
+            return False
+        layout = self._vs_item_preview_layout(item)
+        if cached_preview(path, _PixmapLoadWorker.cache_size(layout), validate=False) is not None:
+            return False
+        # 替换结果正常消费，不创建额外等待，失败图片不能在同次扫描中反复重启。
+        self._vs_pending_prefetch.append((item_id, path))
+        return True
+
+    def _vs_schedule_pixmaps(self) -> None:
+        """结合加载状态、内存预取策略及请求上限，合并调度下一批卡片图片任务。"""
+        if self._mods_loading:
+            return
+        if not image_cache_budget.prefetch_allowed:
+            self._vs_invalidate_prefetch()
+        elif self._view_mode == "grid" and self._vs_window is not None and not self._vs_population_pending:
+            self._vs_prepare_prefetch(*self._vs_window[:2])
+        prefetch_count = sum(card is None for _req, card, _path in self._vs_image_requests.values())
+        has_work = self._vs_pending_pixmap_cards or (
+            image_cache_budget.prefetch_allowed
+            and self._vs_pending_prefetch
+            and prefetch_count < self._VS_MAX_PREFETCH_REQUESTS
+        )
+        if (
+            has_work
+            and len(self._vs_image_requests) < self._VS_MAX_IMAGE_REQUESTS
+            and not self._vs_pixmap_timer.isActive()
+        ):
+            self._vs_pixmap_timer.start()
+
+    def _vs_load_deferred_pixmaps(self) -> None:
+        """滚动期间有界提交图片批次，优先可见卡片。"""
+        if self._mods_loading:
+            return
+        if not image_cache_budget.prefetch_allowed:
+            self._vs_invalidate_prefetch()
+        for _ in range(self._VS_PIXMAP_BATCH_SIZE):
+            if len(self._vs_image_requests) >= self._VS_MAX_IMAGE_REQUESTS:
+                break
+            if self._vs_pending_pixmap_cards:
+                item_id, card = self._vs_pending_pixmap_cards.pop(0)
+                if self._vs_card_cache.get(item_id) is not card or card._preview_resolved:
+                    continue
+                if self._card_scale_active and card._cached_pixmap is not None:
+                    card._preview_requested = False
+                    continue
+                if isinstance(card, ModCard):
+                    mod = card._mod
+                    if not mod or (self._adult_mode == "hide" and mod.info.age_rating == AgeRating.X):
+                        continue
+                    path = card.effective_preview_path()
+                else:
+                    path = card._data.get("thumbnail", "")
+                if not path:
+                    card.set_no_preview()
+                    continue
+                if self._vs_restore_preview(card):
+                    continue
+                layout = self._vs_preview_layout(card)
+            else:
+                prefetch_count = sum(c is None for _r, c, _p in self._vs_image_requests.values())
+                if not self._vs_pending_prefetch or prefetch_count >= self._VS_MAX_PREFETCH_REQUESTS:
+                    break
+                item_id, path = self._vs_pending_prefetch.pop(0)
+                card = None
+                index = self._display_idx_map.get(item_id)
+                if index is None:
+                    continue
+                item = self._display_items[index]
+                path = self._vs_item_preview_path(item)
+                if not path:
+                    continue
+                layout = self._vs_item_preview_layout(item)
+                if cached_preview(path, _PixmapLoadWorker.cache_size(layout), validate=False) is not None:
+                    continue
+            request = self._vs_image_requests.get(item_id)
+            if request is not None and request[2] == str(path):
+                if card is not None:
+                    self._vs_image_requests[item_id] = (request[0], card, request[2])
+                elif self._vs_prefetch_key is not None:
+                    self._vs_waiting_prefetch[item_id] = (request[0], str(path), self._vs_prefetch_key)
+                continue
+            self._vs_image_request_id += 1
+            request_id = self._vs_image_request_id
+            self._vs_image_requests[item_id] = (request_id, card, str(path))
+            self._pixmap_worker.enqueue(
+                item_id, str(path), layout.width, layout.height, request_id, mode=layout.mode, dpr=layout.dpr
+            )
+        self._vs_schedule_pixmaps()
+
+    def _on_bg_pixmap_loaded(
+        self,
+        item_id: str,
+        path: str,
+        request_id: int,
+        result: DecodedPreview | None,
+    ) -> None:
+        """后台线程完成图片加载 → 主线程设置 QPixmap（极快，无IO）"""
+        request = self._vs_image_requests.get(item_id)
+        if request is None or request[0] != request_id or request[2] != path:
+            return
+        self._vs_image_requests.pop(item_id, None)
+        self._vs_schedule_pixmaps()
+        if self._vs_resume_waiting_prefetch(item_id, path, request_id):
+            self._vs_schedule_pixmaps()
+        card = self._vs_card_cache.get(item_id)
+        if card is None or card is not request[1]:
+            return
+        if isinstance(card, ModCard):
+            if card._mod is None or card._mod.mod_id != item_id:
+                return
+            current_path = card.effective_preview_path()
+        elif isinstance(card, CharacterCard):
+            current_path = card._data.get("thumbnail", "")
+        else:
+            return
+        card._preview_requested = False
+        if not current_path or not self._preview_paths_equal(str(current_path), path):
+            return
+        layout = self._vs_preview_layout(card)
+        if result is not None and (not result.is_current(path) or result.layout != layout):
+            if (
+                self._card_scale_active
+                and result.is_current(path)
+                and result.image is not None
+                and not result.image.isNull()
+            ):
+                self._vs_apply_temporary_preview(card, result.image, result.rendered)
+                return
+            card._preview_resolved = False
+            card._preview_requested = True
+            self._vs_pending_pixmap_cards.insert(0, (item_id, card))
+            self._vs_schedule_pixmaps()
+            return
+        # 仅匹配的实际卡片消费图片时才提升缓存级别。
+        retain_viewed_preview(path, _PixmapLoadWorker.cache_size(layout), result)
+        # 后台已完成缩放合成；ModCard 负责结束 shimmer 和成人内容模糊。若加载期间切成隐藏模式，
+        # 卡片入口会再次拒绝 X 级图片，避免在途结果绕过策略。
+        self._vs_apply_preview(
+            card,
+            result.image if result is not None else None,
+            rendered=result.rendered if result is not None else None,
+        )
