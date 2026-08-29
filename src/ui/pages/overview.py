@@ -3189,3 +3189,146 @@ class OverviewPage(QWidget):
         self._table.finish_deploy(mod_id, success=success, error=error)
         self._refresh_panel_mod_status()
         self._refresh_deploy_summary()
+
+    def _refresh_deploy_summary(self) -> None:
+        """即使活动行被筛选掉，底部仍能确认后台正在启用 Mod。"""
+        count = len(self._deploying_frac)
+        root_error = self._deploy_status_label.property("deploymentRootError") or ""
+        text = tr("正在启用 {count} 个 Mod", count=count) if count else root_error
+        if count == 1:
+            progress = next(iter(self._deploying_frac.values()))
+            if progress >= 1:
+                text += tr(" · 正在完成")
+            elif progress > 0:
+                text += f" · {int(progress * 100)}%"
+        self._deploy_status_label.setText(text)
+        color = "danger" if root_error and not count else "accent"
+        style = f"color: {theme.color(color)}; font-size: 11px;"
+        if self._deploy_status_label.styleSheet() != style:
+            self._deploy_status_label.setStyleSheet(style)
+        self._deploy_status_label.setVisible(bool(count or root_error))
+
+    def _refresh_panel_mod_status(self) -> None:
+        """选择另一行再返回、刷新或换肤时，详情也能恢复当前部署状态。"""
+        mod = self._selected_mod
+        if not mod or self._panel_mode != "mod":
+            self._panel_deploy_hint.hide()
+            return
+        busy = mod.mod_id in self._deploying_frac
+        error = self._table.deploy_error(mod.mod_id)
+        text = self._table.status_text(mod.mod_id, mod.is_enabled)
+        if not busy and not error:
+            text = ("● " if mod.is_enabled else "○ ") + text
+        token = "accent" if busy else "danger" if error else "success" if mod.is_enabled else "text.tertiary"
+        style = f"color: {theme.color(token)}; font-weight: {'bold' if mod.is_enabled else 'normal'};"
+        self._panel_status_label.setText(text)
+        self._panel_status_label.setToolTip(error)
+        if self._panel_status_label.styleSheet() != style:
+            self._panel_status_label.setStyleSheet(style)
+        self._panel_toggle_btn.setEnabled(not busy)
+        self._panel_toggle_btn.setText(
+            tr("正在启用…") if busy else tr("重试启用") if error else tr("禁用") if mod.is_enabled else tr("启用")
+        )
+        icons.apply_icon(
+            self._panel_toggle_btn,
+            "actions/refresh" if busy or error else "status/disabled" if mod.is_enabled else "status/enabled",
+        )
+        hint = error or (tr("正在处理 Mod 文件，可以继续浏览其他项目。") if busy else "")
+        self._panel_deploy_hint.setText(hint)
+        hint_style = f"color: {theme.color('danger' if error else 'text.tertiary')}; font-size: 12px;"
+        if self._panel_deploy_hint.styleSheet() != hint_style:
+            self._panel_deploy_hint.setStyleSheet(hint_style)
+        self._panel_deploy_hint.setVisible(bool(hint))
+        self._variant_panel.set_busy(busy)
+
+    def _attach_deploy_overlay(self, mod_id: str) -> None:
+        """为可见 Mod 卡片创建或复用部署进度覆盖层。
+
+        覆盖层随卡片销毁，虚拟滚动重新创建卡片时恢复对应进度。
+        """
+        if mod_id not in self._deploying_frac:
+            return
+        card = self._vs_card_cache.get(mod_id)
+        if card is None or not isinstance(card, ModCard):
+            return  # 卡片当前不可见（表格视图/滚出缓冲区）→ 仅保留 frac，滚回时再挂
+        ov = self._deploy_overlays.get(mod_id)
+        try:
+            if ov is None or ov.parentWidget() is not card:
+                # 卡片实例已换（回收后重建）→ 丢旧的、在新卡片上重建
+                if ov is not None:
+                    try:
+                        ov.deleteLater()
+                    except RuntimeError:
+                        pass
+                from src.ui.widgets.deploy_overlay import DeployOverlay
+
+                ov = DeployOverlay(card)
+                self._deploy_overlays[mod_id] = ov
+            ov.set_progress(self._deploying_frac[mod_id])
+            # cover 同时提升并显示初始隐藏的部署覆盖层。
+            ov.cover()
+        except RuntimeError:
+            self._deploy_overlays.pop(mod_id, None)
+
+    def _build_children_map(self) -> None:
+        """根据 parent_id 构建父子映射"""
+        self._children_map = {}
+        for c in self._all_characters:
+            parent = c.get("parent_id") or ""
+            if parent not in self._children_map:
+                self._children_map[parent] = []
+            self._children_map[parent].append(c)
+
+    def _refresh_current_level(self) -> None:
+        """刷新当前导航层级的显示"""
+        self._characters = self._children_map.get(self._current_parent_id, [])
+        self._update_breadcrumb()
+        if not self._mods_loading:
+            self._card_size_slider.setVisible(self._view_mode == "grid")
+            self._card_size_label.setVisible(self._view_mode == "grid")
+        if self._view_mode == "grid":
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            self._refresh_table(self._search_input.text().strip())
+
+    def _build_display_items(self) -> None:
+        """构建混合显示列表（类别在前，Mod在后），并应用排序"""
+        self._display_items = []
+        self._display_idx_map = {}
+        sorted_cats = list(self._characters)
+        sorted_mods = list(self._current_mods)
+        sorted_cats, sorted_mods = self._apply_sort(sorted_cats, sorted_mods)
+
+        items_order: list[tuple[str, object]] = []
+        if self._sort_key == "status_desc":
+            items_order.extend([("mod", mod) for mod in sorted_mods])
+            items_order.extend([("category", cat) for cat in sorted_cats])
+        else:
+            items_order.extend([("category", cat) for cat in sorted_cats])
+            items_order.extend([("mod", mod) for mod in sorted_mods])
+
+        for item_type, payload in items_order:
+            idx = len(self._display_items)
+            if item_type == "category":
+                cat = payload
+                item_id = cat.get("id", "")
+                self._display_items.append(
+                    {
+                        "id": item_id,
+                        "type": "category",
+                        "name": cat.get("name", ""),
+                        "data": cat,
+                    }
+                )
+                self._display_idx_map[item_id] = idx
+            else:
+                mod = payload
+                self._display_items.append(
+                    {
+                        "id": mod.mod_id,
+                        "type": "mod",
+                        "name": mod.display_name,
+                        "data": mod,
+                    }
+                )
+                self._display_idx_map[mod.mod_id] = idx
