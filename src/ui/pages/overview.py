@@ -5089,3 +5089,127 @@ class OverviewPage(QWidget):
 
         # 原始 type=/$var=/condition 是 3DMigoto 内部实现细节，对用户无展示价值，不再显示。
         return field
+
+    def _on_key_changed(self, binding: KeyBinding, field: str, token: str) -> None:
+        """通过管理器保存所选 Mod 的按键覆盖，失败时提示，成功后重新解析并刷新详情状态。"""
+        # 通过容器覆盖层保存按键变更，并为已启用 Mod 同步部署副本。
+        mod = self._selected_mod
+        rel = getattr(binding, "rel", "") or ""
+        line_no = binding.key_line_no if field == "key" else binding.back_line_no
+        if mod is None or line_no is None:
+            return
+        try:
+            ok = self._mod_manager.edit_mod_key(mod.mod_id, rel, line_no, field, token)
+        except IniWriteError as e:
+            logger.warning("按键设置保存失败：%s", e)
+            QMessageBox.warning(
+                self,
+                t("按键设置"),
+                t("按键设置保存失败"),
+            )
+            return
+        if not ok:
+            QMessageBox.warning(
+                self,
+                t("按键设置"),
+                t("按键设置保存失败"),
+            )
+            return
+        # 写成功 → 现场重扫刷新面板（不缓存解析结果）
+        self._build_keys_panel()
+        owner = self.window()
+        if hasattr(owner, "_toast_done"):
+            owner._toast_done(t("已写入 {file}").format(file=Path(fs.normal_path(rel)).name or rel))
+        self._refresh_panel_mod_status()
+
+    def _on_open_ini(self, ini_path: str) -> None:
+        """将 INI 磁盘路径交给系统默认应用打开。"""
+        QDesktopServices.openUrl(QUrl.fromLocalFile(ini_path))
+
+    def _hide_panel(self) -> None:
+        """取消选中时显示预览栏空状态；用户可通过分割线手动收起。"""
+        self._panel_mode = "none"
+        self._clear_variant_context()
+        self._panel_deploy_hint.hide()
+        self._panel_status_label.setToolTip("")
+        self._panel_tags.hide()
+        # 不再隐藏预览面板，仅重置内容为空状态
+        self._panel_name_label.setText(tr("选择项目查看详情"))
+        self._panel_status_label.setText("")
+        self._panel_rating_label.setVisible(False)
+        self._panel_keys_container.setVisible(False)
+        self._panel_author_label.setVisible(False)
+        self._panel_desc_label.setVisible(False)
+        self._panel_path_label.setVisible(False)
+        self._panel_preview.clear()
+        self._panel_toggle_btn.setVisible(False)
+        self._panel_toggle_btn.setEnabled(False)
+        self._panel_edit_btn.setVisible(False)
+        self._panel_edit_btn.setEnabled(False)
+        self._panel_open_btn.setVisible(False)
+        self._panel_open_btn.setEnabled(False)
+        self._panel_delete_btn.setVisible(False)
+        self._panel_delete_btn.setEnabled(False)
+        # GameBanana 搜索按钮也隐藏
+        self._panel_gb_search_btn.setVisible(False)
+        self._panel_gb_search_btn.setEnabled(False)
+        # 未选中 Mod 时禁用预览图添加。
+        self._panel_preview.setAcceptDrops(False)
+        self._panel_preview._add_btn.setVisible(False)
+        # 未选中时不显示拖拽提示
+        self._panel_preview.set_empty_text(tr("选择项目查看预览图"))
+
+    def _show_multi_select_panel(self) -> None:
+        """多选时显示汇总信息，不显示具体预览"""
+        self._panel_mode = "multi"
+        self._clear_variant_context()
+        self._panel_deploy_hint.hide()
+        self._panel_tags.hide()
+        # 统计选中的类别和Mod数量
+        sel_cat = 0
+        sel_mod = 0
+        for item in self._display_items:
+            if item["id"] in self._selected_ids:
+                if item["type"] == "mod":
+                    sel_mod += 1
+                else:
+                    sel_cat += 1
+        parts = []
+        if sel_cat > 0:
+            parts.append(tr("{sel_cat} 个类别", sel_cat=sel_cat))
+        if sel_mod > 0:
+            parts.append(tr("{sel_mod} 个 Mod", sel_mod=sel_mod))
+        self._panel_name_label.setText(tr("已选中 {value}", value=", ".join(parts)))
+        self._panel_status_label.setText("")
+        self._panel_rating_label.setVisible(False)
+        self._panel_keys_container.setVisible(False)
+        self._panel_author_label.setVisible(False)
+        self._panel_desc_label.setVisible(False)
+        self._panel_path_label.setVisible(False)
+        self._panel_preview.clear()
+        self._panel_preview.setAcceptDrops(False)
+        self._panel_preview._add_btn.setVisible(False)
+        self._panel_preview.set_empty_text("")
+        self._panel_toggle_btn.setVisible(False)
+        self._panel_toggle_btn.setEnabled(False)
+        self._panel_edit_btn.setVisible(False)
+        self._panel_edit_btn.setEnabled(False)
+        self._panel_open_btn.setVisible(False)
+        self._panel_open_btn.setEnabled(False)
+        self._panel_delete_btn.setVisible(False)
+        self._panel_delete_btn.setEnabled(False)
+        # GameBanana 搜索按钮多选模式下也隐藏
+        self._panel_gb_search_btn.setVisible(False)
+        self._panel_gb_search_btn.setEnabled(False)
+
+    def _on_panel_toggle(self) -> None:
+        """所选 Mod 没有正在部署时，向宿主请求切换启用状态。"""
+        if self._selected_mod and self._selected_mod.mod_id not in self._deploying_frac:
+            self.mod_toggle_requested.emit(self._selected_mod.mod_id)
+
+    def _on_panel_edit(self) -> None:
+        """根据当前的类别模式或 Mod 模式执行编辑操作。"""
+        if self._panel_mode == "category" and self._selected_category:
+            self._on_edit_character(self._selected_category.get("id", ""))
+        elif self._panel_mode == "mod" and self._selected_mod:
+            self.mod_edit_requested.emit(self._selected_mod.mod_id)
