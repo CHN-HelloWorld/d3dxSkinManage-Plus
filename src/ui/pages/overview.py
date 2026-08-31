@@ -5577,3 +5577,80 @@ class OverviewPage(QWidget):
                 return
 
         super().keyPressEvent(event)
+
+    def _select_all(self) -> None:
+        """Ctrl+A: 选中当前层级所有项目"""
+        if self._view_mode == "list":
+            self._table.selectAll()
+            return
+        self._selected_ids.clear()
+        for item in self._display_items:
+            self._selected_ids.add(item["id"])
+        self._update_card_selection()
+        # 多选时显示汇总面板
+        if len(self._selected_ids) > 1:
+            self._selected_mod = None
+            self._selected_category = None
+            self._show_multi_select_panel()
+
+    # 右键菜单：选中感知的删除 / 导出
+
+    def _select_for_context_menu(self, item_id: str) -> None:
+        """右键目标未选中时先单选；目标已在多选集合内则保持选择，并同步面板及高亮。"""
+        if not item_id or item_id in self._selected_ids:
+            return
+        self._selected_ids.clear()
+        self._selected_ids.add(item_id)
+        self._last_clicked_index = self._find_display_index(item_id)
+        self._show_selection_panel()
+        self._update_card_selection()
+        if self._view_mode == "list":
+            self._sync_table_selection_visual()
+
+    def _sync_table_selection_visual(self) -> None:
+        """按业务 ID 恢复行高亮；批量同步期间不反向覆盖业务选区。"""
+        if not hasattr(self, "_table"):
+            return
+        selection = QItemSelection()
+        model = self._table.model()
+        for i, item in enumerate(self._display_items):
+            if item["id"] in self._selected_ids:
+                selection.select(model.index(i, 0), model.index(i, self._table.columnCount() - 1))
+        with QSignalBlocker(self._table):
+            self._table.selectionModel().select(
+                selection, QItemSelectionModel.SelectionFlag.ClearAndSelect | QItemSelectionModel.SelectionFlag.Rows
+            )
+
+    def _split_selected_ids(self) -> tuple[list, list]:
+        """把当前选中项按类型拆成 (cat_ids, mod_ids)。"""
+        cat_ids: list[str] = []
+        mod_ids: list[str] = []
+        for item in self._display_items:
+            if item["id"] in self._selected_ids:
+                if item["type"] == "category":
+                    cat_ids.append(item["id"])
+                else:
+                    mod_ids.append(item["id"])
+        return cat_ids, mod_ids
+
+    def _export_from_context(self, item_id: str, *, is_mod: bool) -> None:
+        """右键「导出」。多选时导出整个选择，否则只导出右键这一项。
+
+        类别 id 交给 MainWindow 展开成其子树下的全部 Mod 再导出。
+        """
+        if item_id in self._selected_ids and len(self._selected_ids) > 1:
+            cat_ids, mod_ids = self._split_selected_ids()
+        elif is_mod:
+            cat_ids, mod_ids = [], [item_id]
+        else:
+            cat_ids, mod_ids = [item_id], []
+        if not cat_ids and not mod_ids:
+            return
+        self.items_export_requested.emit(cat_ids, mod_ids)
+
+    def _on_category_card_delete(self, cat_id: str) -> None:
+        """删除右键类别；目标属于当前多选集合时执行批量删除。"""
+        if cat_id in self._selected_ids and len(self._selected_ids) > 1:
+            self._delete_selected()
+        else:
+            self.character_delete_requested.emit(cat_id)
