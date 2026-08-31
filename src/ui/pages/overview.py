@@ -5273,3 +5273,108 @@ class OverviewPage(QWidget):
         cat = self._find_category_by_id(cat_id)
         if cat is not None:
             self._online_search_category(cat)
+
+    def _find_category_by_id(self, cat_id: str) -> dict | None:
+        """在全部类别（含各层级）里按 id 找回 dict（含 name_en）。"""
+        for c in self._all_characters:
+            if c.get("id") == cat_id:
+                return c
+        return None
+
+    def _open_category_folder(self, cat_id: str) -> None:
+        """打开类别源目录（右键菜单）。复用与预览栏「打开源目录」一致的解析。"""
+        import os
+        import subprocess
+
+        from src.core.mod_manager import ModManager
+
+        try:
+            path = ModManager()._get_character_library(cat_id, create=False)
+            if path and Path(path).exists():
+                if os.name == "nt":
+                    subprocess.Popen(["explorer", str(path)])
+                else:
+                    subprocess.Popen(["xdg-open", str(path)])
+        except Exception:
+            pass
+
+    def _on_panel_preview_changed(self, index: int) -> None:
+        """预览面板图片切换 → 同步卡片预览图 + 实时把该图写成主图（去抖 200ms）。
+
+        路径**取自预览栏自己的列表**而不是 ``_selected_mod.preview_images[index]``：
+        顺序实时落库后 DB 的排列会变，而预览栏列表保持加载时的顺序，两边索引对不上。
+        """
+        if self._panel_mode != "mod" or not self._selected_mod:
+            return
+        img_path = self._panel_preview.current_image_path()
+        if not img_path:
+            if not (self._selected_mod.preview_images and 0 <= index < len(self._selected_mod.preview_images)):
+                return
+            img_path = self._selected_mod.preview_images[index]
+        # 同步卡片预览图
+        panel_card = self._vs_card_cache.get(self._selected_mod.mod_id)
+        if isinstance(panel_card, ModCard):
+            self._reuse_panel_preview_for_card(
+                self._selected_mod.mod_id,
+                img_path,
+                panel_card,
+                update_preview_path=True,
+            )
+        # 保存当前预览路径，供视图切换后重建卡片时使用。
+        if self._preview_override_paths.get(self._selected_mod.mod_id) != img_path:
+            self._preview_override_paths[self._selected_mod.mod_id] = img_path
+            self._vs_invalidate_prefetch(schedule=True)
+        self._pending_reorder_mod_id = self._selected_mod.mod_id
+        self._pending_reorder_path = img_path
+        self._preview_reorder_timer.start()
+
+    @staticmethod
+    def _preview_paths_equal(left: str, right: str) -> bool:
+        """比较不访问磁盘的规范化图片路径。"""
+        if not left or not right:
+            return False
+        return Path(fs.normal_path(left)).absolute() == Path(fs.normal_path(right)).absolute()
+
+    def _reuse_panel_preview_for_card(
+        self,
+        mod_id: str,
+        image_path: str,
+        expected_card: ModCard | None,
+        *,
+        update_preview_path: bool = False,
+    ) -> bool:
+        """经选择、实例、路径和分级校验后，将右栏缓存复用到当前卡片。"""
+        selected = self._selected_mod
+        if (
+            self._panel_mode != "mod"
+            or selected is None
+            or selected.mod_id != mod_id
+            or expected_card is None
+            or self._vs_card_cache.get(mod_id) is not expected_card
+        ):
+            return False
+
+        card_mod = getattr(expected_card, "_mod", None)
+        if card_mod is None or card_mod.mod_id != mod_id:
+            return False
+        if self._adult_mode == "hide" and card_mod.info.age_rating == AgeRating.X:
+            return False
+
+        cached_path = self._panel_preview._cached_path
+        cached_pixmap = self._panel_preview._cached_pixmap
+        if not self._preview_paths_equal(cached_path, image_path) or cached_pixmap is None or cached_pixmap.isNull():
+            return False
+
+        if update_preview_path:
+            return expected_card.show_preview_by_path(image_path, cached_pixmap)
+        if not self._preview_paths_equal(expected_card.effective_preview_path() or "", image_path):
+            return False
+        return expected_card.set_preview_pixmap(cached_pixmap)
+
+    def _on_panel_preview_dropped(self, image_path: str) -> None:
+        """预览面板拖入图片"""
+        if self._panel_mode == "mod" and self._selected_mod:
+            # 转发给 main_window 处理持久化
+            self.preview_image_dropped.emit(self._selected_mod.mod_id, image_path)
+        elif self._panel_mode == "category" and self._selected_category:
+            self.category_preview_dropped.emit(self._selected_category.get("id", ""), image_path)
