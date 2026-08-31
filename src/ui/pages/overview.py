@@ -5654,3 +5654,129 @@ class OverviewPage(QWidget):
             self._delete_selected()
         else:
             self.character_delete_requested.emit(cat_id)
+
+    def _on_category_card_export(self, cat_id: str) -> None:
+        """将分类卡片的导出操作转交统一的上下文导出入口。"""
+        self._export_from_context(cat_id, is_mod=False)
+
+    def _delete_selected(self) -> None:
+        """Delete: 删除所有选中的类别和Mod"""
+        if not self._selected_ids:
+            return
+
+        cat_ids = []
+        mod_ids = []
+        for item in self._display_items:
+            if item["id"] in self._selected_ids:
+                if item["type"] == "category":
+                    cat_ids.append(item["id"])
+                else:
+                    mod_ids.append(item["id"])
+
+        # 单个 Mod 时使用单独的删除信号（走单条删除逻辑，含已启用提示）
+        if not cat_ids and len(mod_ids) == 1:
+            self.mod_delete_requested.emit(mod_ids[0])
+            # 列表只有实际删除后的重建才移除选择；取消确认仍保留当前行。
+            if self._view_mode != "list":
+                self._selected_ids.clear()
+                self._selected_mod = None
+                self._hide_panel()
+            return
+
+        parts = []
+        if cat_ids:
+            parts.append(tr("{count} 个类别", count=len(cat_ids)))
+        if mod_ids:
+            parts.append(tr("{count} 个 Mod", count=len(mod_ids)))
+        if mod_ids and not cat_ids:
+            from src.core.config import Config
+
+            delete_method = Config().get("mods.delete_method", "permanent")
+            if delete_method == "recycle_bin":
+                msg = tr(
+                    "确定将选中的 {value} 放入系统回收站？\n若路径过长或当前位置不支持回收站，会再次询问是否直接删除。",
+                    value=tr("和").join(parts),
+                )
+            else:
+                msg = tr("确定删除选中的 {value}？\n此操作不可恢复。", value=tr("和").join(parts))
+        else:
+            msg = tr("确定删除选中的 {value}？\n此操作不可恢复。", value=tr("和").join(parts))
+
+        reply = QMessageBox.question(
+            self,
+            tr("确认删除"),
+            msg,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            return
+
+        if cat_ids:
+            self.character_batch_delete_requested.emit(cat_ids)
+        if mod_ids:
+            self.mod_batch_delete_requested.emit(mod_ids)
+
+        if self._view_mode != "list":
+            self._selected_ids.clear()
+            self._selected_mod = None
+            self._hide_panel()
+
+    def _cut_selected(self) -> None:
+        """剪切选中项目并更新视觉反馈。"""
+        if not self._selected_ids:
+            return
+        self._clipboard_cat_ids.clear()
+        self._clipboard_mod_ids.clear()
+        self._clipboard_source_parent = self._current_parent_id
+        for item in self._display_items:
+            if item["id"] in self._selected_ids:
+                if item["type"] == "category":
+                    self._clipboard_cat_ids.append(item["id"])
+                else:
+                    self._clipboard_mod_ids.append(item["id"])
+        # 为剪切的卡片应用虚线和半透明样式。
+        total = len(self._clipboard_cat_ids) + len(self._clipboard_mod_ids)
+        settings = getattr(self, "_shortcut_settings", None)
+        paste = settings.binding("edit.paste") if settings else "Ctrl+V"
+        paste_hint = tr("{paste} 粘贴", paste=paste) if paste else tr("粘贴未绑定")
+        self._status_label.setText(
+            tr("已剪切 {total} 个项目 ({paste_hint}, Esc 取消)", total=total, paste_hint=paste_hint)
+        )
+        self._update_cut_visual()
+
+    def _cancel_cut(self) -> None:
+        """取消剪切。"""
+        self._clipboard_cat_ids.clear()
+        self._clipboard_mod_ids.clear()
+        self._clipboard_source_parent = ""
+        self._status_label.setText(tr("已取消剪切"))
+        self._update_cut_visual()
+
+    def _update_cut_visual(self) -> None:
+        """更新剪切状态的视觉反馈。"""
+        cut_ids = set(self._clipboard_cat_ids + self._clipboard_mod_ids)
+        for item_id, card in self._vs_card_cache.items():
+            is_cut = item_id in cut_ids
+            if isinstance(card, CharacterCard):
+                card.set_cut_state(is_cut)
+            elif isinstance(card, ModCard):
+                card.set_cut_state(is_cut)
+
+    def _paste_items(self) -> None:
+        """Ctrl+V: 将剪切的项目粘贴到当前目录"""
+        if not self._clipboard_cat_ids and not self._clipboard_mod_ids:
+            return
+        # 同级目录不做操作
+        if self._clipboard_source_parent == self._current_parent_id:
+            self._status_label.setText(tr("同级目录下粘贴无效"))
+            return
+        self.items_move_requested.emit(
+            self._clipboard_cat_ids,
+            self._clipboard_mod_ids,
+            self._current_parent_id,
+        )
+        total = len(self._clipboard_cat_ids) + len(self._clipboard_mod_ids)
+        self._status_label.setText(tr("已粘贴 {total} 个项目", total=total))
+        self._clipboard_cat_ids.clear()
+        self._clipboard_mod_ids.clear()
+        self._clipboard_source_parent = ""
