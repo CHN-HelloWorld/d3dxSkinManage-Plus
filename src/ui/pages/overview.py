@@ -5213,3 +5213,63 @@ class OverviewPage(QWidget):
             self._on_edit_character(self._selected_category.get("id", ""))
         elif self._panel_mode == "mod" and self._selected_mod:
             self.mod_edit_requested.emit(self._selected_mod.mod_id)
+
+    def _on_panel_open_folder(self) -> None:
+        """按详情模式定位 Mod 源项或打开分类目录，解析分类路径时不创建缺失目录。"""
+        import os
+        import subprocess
+
+        if self._panel_mode == "mod" and self._selected_mod and self._selected_mod.path:
+            path = Path(self._selected_mod.path)
+            if path.exists():
+                if os.name == "nt":
+                    subprocess.Popen(["explorer", "/select,", str(path)])
+                else:
+                    subprocess.Popen(["xdg-open", str(path)])
+        elif self._panel_mode == "category" and self._selected_category:
+            # 打开类别的文件夹
+            from src.core.mod_manager import ModManager
+
+            mm = ModManager()
+            try:
+                path = mm._get_character_library(self._selected_category.get("id", ""), create=False)
+                if path.exists():
+                    if os.name == "nt":
+                        subprocess.Popen(["explorer", str(path)])
+                    else:
+                        subprocess.Popen(["xdg-open", str(path)])
+            except Exception:
+                pass
+
+    def _on_panel_delete(self) -> None:
+        """根据详情当前绑定的 Mod 或分类，向宿主发布对应的删除请求。"""
+        if self._panel_mode == "mod" and self._selected_mod:
+            self.mod_delete_requested.emit(self._selected_mod.mod_id)
+        elif self._panel_mode == "category" and self._selected_category:
+            self.character_delete_requested.emit(self._selected_category.get("id", ""))
+
+    def _on_panel_gb_search(self) -> None:
+        """在线查找当前类别的 Mod（预览栏按钮）。"""
+        if not self._selected_category:
+            return
+        self._online_search_category(self._selected_category)
+
+    def _online_search_category(self, cat: dict) -> None:
+        """使用类别英文名搜索 GameBanana；未填写时提示补充英文名。"""
+        name_en = (cat.get("name_en") or "").strip()
+        if not name_en:
+            QMessageBox.information(
+                self,
+                tr("提示"),
+                tr("为了提供更好的搜索结果，请先键入此类别的英文名后继续"),
+            )
+            return
+        main = self.window()
+        if hasattr(main, "switch_to_mod_store_with_query"):
+            main.switch_to_mod_store_with_query(name_en)
+
+    def _online_search_by_cat_id(self, cat_id: str) -> None:
+        """右键「在线查找」：按 cat_id 找回含 name_en 的类别 dict 后走统一逻辑。"""
+        cat = self._find_category_by_id(cat_id)
+        if cat is not None:
+            self._online_search_category(cat)
