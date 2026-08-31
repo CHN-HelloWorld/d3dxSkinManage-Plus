@@ -5890,3 +5890,170 @@ class OverviewPage(QWidget):
                 path = path.replace("/", "\\") if "\\" not in path else path
                 paths.append(path)
         return paths
+
+    def _find_card_at_global_pos(self, pos) -> CharacterCard | None:
+        """查找指定位置下的 CharacterCard（用于拖拽预览图检测）"""
+        # pos 是相对于 OverviewPage 的坐标
+        child = self.childAt(pos)
+        while child is not None:
+            if isinstance(child, CharacterCard):
+                return child
+            child = child.parentWidget()
+            if child is self or child is None:
+                break
+        return None
+
+    def _process_raw_urilist_async(self, raw_bytes: bytes, parent_id: str) -> None:
+        """在后台线程中解析 uri-list 原始字节并过滤有效 Mod 路径
+        比主线程逐个创建 QUrl 快得多，大幅减少 UI 卡顿。
+        """
+        import os as _os
+        import stat as _stat
+        import urllib.parse
+
+        from PySide6.QtCore import QThread
+
+        class _RawPathCollector(QThread):
+            """后台线程：从 uri-list 原始字节中提取并过滤 Mod 路径"""
+
+            def __init__(self, raw, extensions):
+                """保存原始 URI 列表及允许的扩展名，建立后台收集结果列表。"""
+                super().__init__()
+                self.raw = raw
+                self.extensions = extensions
+                self.result_paths: list[str] = []
+
+            def run(self):
+                """后台解析文件 URI 并检查路径，保留目录及可导入扩展名的项目，跳过无法访问的输入。"""
+                ext_set = self.extensions
+                # 解析 text/uri-list: 每行一个 file:///path URL
+                try:
+                    text = self.raw.decode("utf-8", errors="replace")
+                except Exception:
+                    text = self.raw.decode("latin-1", errors="replace")
+
+                for line in text.splitlines():
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    # file:///C:/path → C:/path
+                    if line.startswith("file:///"):
+                        path = urllib.parse.unquote(line[8:])  # 去掉 file:///
+                        # Windows 路径修复
+                        path = path.replace("/", "\\") if "\\" not in path else path
+                    elif line.startswith("file://"):
+                        path = urllib.parse.unquote(line[7:])
+                        path = path.replace("/", "\\") if "\\" not in path else path
+                    else:
+                        continue
+
+                    try:
+                        st = _os.stat(path)
+                        if _stat.S_ISDIR(st.st_mode):
+                            self.result_paths.append(path)
+                        else:
+                            dot_idx = path.rfind(".")
+                            if dot_idx >= 0 and path[dot_idx:].lower() in ext_set:
+                                self.result_paths.append(path)
+                    except OSError:
+                        pass
+
+        self._drop_collector = _RawPathCollector(raw_bytes, ARCHIVE_EXTENSIONS)
+
+        def _on_done():
+            """将已收集路径发送到发起时的目录，并释放原始 URI 收集器引用。"""
+            paths = self._drop_collector.result_paths
+            if paths:
+                self.files_dropped_for_import.emit(paths, parent_id)
+            self._drop_collector.deleteLater()
+            self._drop_collector = None
+
+        self._drop_collector.finished.connect(_on_done)
+        self._drop_collector.start()
+
+    def _process_dropped_urls_async(self, url_strings: list[str]) -> None:
+        """使用后台线程处理拖入的路径列表，避免大数据量拖拽时UI卡顿。
+        使用 os.stat 替代 Path.is_dir 以获得更好的系统调用性能。
+        """
+        import os as _os
+        import stat as _stat
+
+        from PySide6.QtCore import QThread
+
+        class _PathCollector(QThread):
+            """后台线程：过滤有效的Mod路径（用 os.stat 代替 pathlib 降低开销）"""
+
+            def __init__(self, urls, extensions):
+                """保存已转换的本地路径及允许的扩展名，初始化有效路径结果列表。"""
+                super().__init__()
+                self.urls = urls
+                self.extensions = extensions
+                self.result_paths: list[str] = []
+
+            def run(self):
+                """后台检查本地路径，保留目录和可导入扩展名的项目，忽略无法访问的输入。"""
+                ext_set = self.extensions  # 减少属性查找
+                for u in self.urls:
+                    try:
+                        st = _os.stat(u)
+                        if _stat.S_ISDIR(st.st_mode):
+                            self.result_paths.append(u)
+                        else:
+                            # 检查扩展名
+                            dot_idx = u.rfind(".")
+                            if dot_idx >= 0 and u[dot_idx:].lower() in ext_set:
+                                self.result_paths.append(u)
+                    except OSError:
+                        pass
+
+        self._drop_collector = _PathCollector(url_strings, ARCHIVE_EXTENSIONS)
+        parent_id = self._current_parent_id
+
+        def _on_done():
+            """将筛选后的本地路径发送到发起时的目录，并释放路径收集器引用。"""
+            paths = self._drop_collector.result_paths
+            if paths:
+                self.files_dropped_for_import.emit(paths, parent_id)
+            self._drop_collector.deleteLater()
+            self._drop_collector = None
+
+        self._drop_collector.finished.connect(_on_done)
+        self._drop_collector.start()
+
+    # 空白处点击取消选中
+
+    def mousePressEvent(self, event) -> None:
+        """点击页面空白处时取消选中，并保留卡片和滚动区的点击处理。"""
+        child = self.childAt(event.pos())
+        # 检查是否点击在卡片上
+        is_on_card = child is not None and self._is_child_of_card(child)
+        # 检查是否点击在scroll区域内（包含滚动区域视口和内容widget）
+        is_on_scroll = child is not None and self._is_child_of_scroll(child)
+        # 右侧预览栏的布局空白会把未接受的鼠标事件冒泡到本页。只要落点仍在
+        # 预览栏矩形内，就属于当前 Mod 的操作上下文，不能按页面空白处理。
+        pos = event.position().toPoint()
+        is_on_preview_panel = self._is_point_in_preview_panel(pos)
+        if not is_on_card and not is_on_scroll and not is_on_preview_panel:
+            self._selected_ids.clear()
+            self._selected_mod = None
+            self._selected_category = None
+            self._last_clicked_index = -1
+            self._hide_panel()
+            self._update_card_selection()
+        super().mousePressEvent(event)
+
+    def _is_point_in_preview_panel(self, pos: QPoint) -> bool:
+        """判断 OverviewPage 坐标中的点是否落在可见预览栏内。"""
+        if not self._preview_panel.isVisible():
+            return False
+        panel_pos = self._preview_panel.mapFrom(self, pos)
+        return self._preview_panel.rect().contains(panel_pos)
+
+    def _is_child_of_card(self, widget) -> bool:
+        """判断widget是否为卡片的子控件"""
+        parent = widget
+        while parent is not None:
+            if isinstance(parent, (CharacterCard, ModCard)):
+                return True
+            parent = parent.parentWidget()
+        return False
