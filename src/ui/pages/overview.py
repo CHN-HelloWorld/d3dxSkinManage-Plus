@@ -5526,3 +5526,54 @@ class OverviewPage(QWidget):
     def update_mods_in_view(self, mods: list[Mod]) -> None:
         """一次发布元数据批次并更新筛选和布局。"""
         self.apply_reconcile_delta(mods, ())
+
+    # 键盘快捷键
+
+    def install_shortcuts(self, dispatcher) -> None:
+        """仅把当前列表及其卡片登记为操作目标，预览区/工具栏不继承列表动作。"""
+        self._shortcut_settings = dispatcher.settings
+        actions = {
+            "edit.select_all": self._select_all,
+            "edit.cut": self._cut_selected,
+            "edit.paste": self._paste_items,
+            "edit.delete": self._delete_selected,
+            "selection.edit": self._edit_selected,
+            "mod.toggle": self._toggle_selected,
+            "selection.export": self._export_selected,
+        }
+        dispatcher.register_context(self, "overview", actions, children=False)
+        dispatcher.register_context(self._scroll_area, "overview", actions)
+        dispatcher.register_context(self._table, "overview", actions)
+        self._preset_selector.install_shortcuts(dispatcher)
+
+    def _edit_selected(self) -> None:
+        """仅在选中一项时打开分类编辑或发布 Mod 编辑请求。"""
+        categories, mods = self._split_selected_ids()
+        if len(categories) + len(mods) != 1:
+            return
+        if categories:
+            self._on_edit_character(categories[0])
+        else:
+            self.mod_edit_requested.emit(mods[0])
+
+    def _toggle_selected(self) -> None:
+        """仅选中单个 Mod 且没有在途部署时发布启用状态切换请求。"""
+        categories, mods = self._split_selected_ids()
+        if not categories and len(mods) == 1 and mods[0] not in self._deploying_frac:
+            self.mod_toggle_requested.emit(mods[0])
+
+    def _export_selected(self) -> None:
+        """将当前选择拆分为分类和 Mod 标识，存在可导出项时通知宿主。"""
+        categories, mods = self._split_selected_ids()
+        if categories or mods:
+            self.items_export_requested.emit(categories, mods)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        """Esc 保持固定取消语义；可配置命令统一由分派器处理。"""
+        if event.key() == Qt.Key.Key_Escape:
+            # Esc 取消剪切。
+            if self._clipboard_cat_ids or self._clipboard_mod_ids:
+                self._cancel_cut()
+                return
+
+        super().keyPressEvent(event)
