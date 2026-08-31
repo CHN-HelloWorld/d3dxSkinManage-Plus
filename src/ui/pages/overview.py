@@ -5378,3 +5378,66 @@ class OverviewPage(QWidget):
             self.preview_image_dropped.emit(self._selected_mod.mod_id, image_path)
         elif self._panel_mode == "category" and self._selected_category:
             self.category_preview_dropped.emit(self._selected_category.get("id", ""), image_path)
+
+    def _on_panel_delete_current(self, index: int) -> None:
+        """使用预览控件的实际图片路径，避免 _selected_mod 过期导致删除无效。"""
+        if self._panel_mode == "mod" and self._selected_mod:
+            # 优先从预览控件获取当前显示的图片路径
+            widget_images = self._panel_preview._images
+            if 0 <= index < len(widget_images):
+                image_path = widget_images[index]
+            elif 0 <= index < len(self._selected_mod.preview_images):
+                image_path = self._selected_mod.preview_images[index]
+            else:
+                return
+            mod_id = self._selected_mod.mod_id
+            reply = QMessageBox.question(
+                self,
+                tr("确认删除预览图"),
+                tr("确定删除当前预览图吗？\n将删除对应的图片文件，此操作不可恢复。"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.mod_preview_delete_requested.emit(mod_id, image_path)
+        elif self._panel_mode == "category" and self._selected_category:
+            # 删除类别预览图。
+            cat_id = self._selected_category.get("id", "")
+            self.category_preview_dropped.emit(cat_id, "")  # 空路径表示删除预览图
+
+    def _on_panel_delete_all(self) -> None:
+        """确认后向宿主请求删除当前 Mod 的全部预览图片。"""
+        if self._panel_mode == "mod" and self._selected_mod:
+            mod_id = self._selected_mod.mod_id
+            reply = QMessageBox.question(
+                self,
+                tr("确认删除所有预览图"),
+                tr("确定删除该 Mod 的所有预览图吗？\n将删除对应的图片文件，此操作不可恢复。"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.mod_preview_delete_all_requested.emit(mod_id)
+
+    def _update_card_preview_by_path(self, mod_id: str, image_path: str) -> None:
+        """将指定Mod卡片预览图更新为特定路径"""
+        card = self._vs_card_cache.get(mod_id)
+        if card and isinstance(card, ModCard):
+            card.show_preview_by_path(image_path)
+
+    def _on_main_splitter_moved(self, pos: int, index: int) -> None:
+        """拖动分割线后重新排列卡片并保存预览栏宽度。"""
+        self._resize_timer.start()
+        sizes = self._main_splitter.sizes()
+        if len(sizes) >= 2 and sizes[1] > 100:  # >100 视作真实宽度（排除拖拽折叠到 ~0 的情形）
+            from src.core.config import Config as _Cfg
+
+            _Cfg.instance().set("ui.overview_preview_width", int(sizes[1]))
+
+    def _on_panel_splitter_moved(self, pos: int, index: int) -> None:
+        """保存预览与文本区域的分栏高度。"""
+        sizes = self._panel_splitter.sizes()
+        if len(sizes) == 2 and sum(sizes) > 0:
+            from src.core.config import Config as _Cfg
+
+            _Cfg.instance().set("ui.overview_preview_split", [int(sizes[0]), int(sizes[1])])
