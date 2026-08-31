@@ -5441,3 +5441,88 @@ class OverviewPage(QWidget):
             from src.core.config import Config as _Cfg
 
             _Cfg.instance().set("ui.overview_preview_split", [int(sizes[0]), int(sizes[1])])
+
+    def _ensure_preview_panel_expanded(self) -> None:
+        """选中内容时展开已折叠的预览栏，并播放淡入动画。
+
+        通过 setSizes 一次恢复目标宽度，卡片布局独立处理位置动画。
+        预览栏已经展开时保留用户调整的宽度。
+        """
+        try:
+            sizes = self._main_splitter.sizes()
+        except RuntimeError:
+            return
+        if len(sizes) < 2 or sizes[1] > 8:
+            return  # 未折叠：预览栏仍有可见宽度
+        total = sizes[0] + sizes[1]
+        if total <= 0:
+            return
+        panel = self._preview_panel
+        target = max(380, min(420, total // 3))
+        panel.setMinimumWidth(380)  # 恢复展开状态的最小宽度。
+        # 先应用分栏尺寸，再重排卡片并显示预览面板。
+        self._main_splitter.setSizes([max(0, total - target), target])
+        if self._view_mode == "grid" and (self._characters or self._current_mods):
+            self._vs_relayout()
+        anim.fade_in(panel)
+
+    def _on_adult_mode_changed(self, _index: int = 0) -> None:
+        """切换成人级 Mod 预览模式，仅更新 X 级卡片，避免全量重绘。"""
+        mode = self._adult_mode_combo.currentData() or "show"
+        self._adult_mode = mode
+        if self._view_mode == "grid" and self._vs_card_cache:
+            self._scroll_content.setUpdatesEnabled(False)
+            for item_id, card in self._vs_card_cache.items():
+                if isinstance(card, ModCard):
+                    # 所有卡片都要记住最新策略。非 X 卡片无需立即重绘，但之后若被
+                    # 编辑为 X，必须使用当前模式，不能保留创建时的 show/hide 状态。
+                    card._adult_mode = mode
+                    idx = self._display_idx_map.get(item_id)
+                    if idx is not None and idx < len(self._display_items):
+                        mod = self._display_items[idx]["data"]
+                        if mod.info.age_rating == AgeRating.X:
+                            card.set_mod(mod)
+            self._scroll_content.setUpdatesEnabled(True)
+            self._scroll_content.update()
+        else:
+            # 列表视图无图片，直接刷新即可
+            self._refresh_current_level()
+        self.adult_mode_changed.emit(mode)
+
+    def set_adult_mode(self, mode: str) -> None:
+        """外部同步成人级预览模式（show|hide|blur）"""
+        if mode not in ("show", "hide", "blur"):
+            mode = "show"
+        self._adult_mode = mode
+        self._adult_mode_combo.blockSignals(True)
+        idx = self._adult_mode_combo.findData(mode)
+        if idx >= 0:
+            self._adult_mode_combo.setCurrentIndex(idx)
+        self._adult_mode_combo.blockSignals(False)
+        if self._view_mode == "grid" and self._vs_card_cache:
+            self._scroll_content.setUpdatesEnabled(False)
+            for item_id, card in self._vs_card_cache.items():
+                if isinstance(card, ModCard):
+                    card._adult_mode = mode
+                    idx2 = self._display_idx_map.get(item_id)
+                    if idx2 is not None and idx2 < len(self._display_items):
+                        mod = self._display_items[idx2]["data"]
+                        if mod.info.age_rating == AgeRating.X:
+                            card.set_mod(mod)
+            self._scroll_content.setUpdatesEnabled(True)
+            self._scroll_content.update()
+        if self._selected_mod:
+            self._show_mod_panel(self._selected_mod)
+
+    def set_mod_manager(self, manager) -> None:
+        """注入 ModManager（供按键面板 parse/edit override）。主窗口构造后调用一次。"""
+        self._mod_manager = manager
+        self.refresh_tags(refresh_view=False)
+
+    def update_mod_in_view(self, mod: Mod) -> None:
+        """外部调用：更新某个Mod在视图中的状态 - 就地更新卡片，避免全量刷新"""
+        self.update_mods_in_view([mod])
+
+    def update_mods_in_view(self, mods: list[Mod]) -> None:
+        """一次发布元数据批次并更新筛选和布局。"""
+        self.apply_reconcile_delta(mods, ())
