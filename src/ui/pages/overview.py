@@ -5780,3 +5780,113 @@ class OverviewPage(QWidget):
         self._clipboard_cat_ids.clear()
         self._clipboard_mod_ids.clear()
         self._clipboard_source_parent = ""
+
+    # 拖拽导入
+
+    def dragEnterEvent(self, event) -> None:
+        """仅检查外部 URL 格式以接受拖放，不在进入事件中读取实际路径列表。"""
+        # 仅检查 hasUrls 即可，不调用 urls 避免大量文件时 IPC 卡顿
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event) -> None:
+        """拖拽移动时高亮光标下的类别/角色卡片（仅对单张图片拖拽场景）"""
+        event.acceptProposedAction()
+        # 尝试检测光标下的 CharacterCard 并添加高亮
+        gpos = event.position().toPoint()
+        card = self._find_card_at_global_pos(gpos)
+        target_card = card if isinstance(card, CharacterCard) else None
+        if target_card != self._drag_hover_card:
+            # 恢复上一个高亮卡片
+            if self._drag_hover_card is not None:
+                self._drag_hover_card._apply_style()
+            self._drag_hover_card = target_card
+            # 高亮新卡片
+            if target_card is not None:
+                target_card.setStyleSheet(
+                    f"#charCard {{ border: 2px dashed {theme.color('accent')}; "
+                    f"background-color: rgba(30, 136, 229, 0.15); }}"
+                )
+
+    def dragLeaveEvent(self, event) -> None:
+        """拖拽离开时恢复高亮卡片样式"""
+        if self._drag_hover_card is not None:
+            self._drag_hover_card._apply_style()
+            self._drag_hover_card = None
+        super().dragLeaveEvent(event)
+
+    def dropEvent(self, event) -> None:
+        """处理拖入分类视图的图片或 Mod 路径。
+
+        单张预览图就地处理，批量路径解析及导入交给后台任务。
+        """
+        # 恢复拖拽悬停高亮
+        if self._drag_hover_card is not None:
+            self._drag_hover_card._apply_style()
+            self._drag_hover_card = None
+        # 立即接受事件，释放拖拽源窗口（Explorer）
+        event.acceptProposedAction()
+        mime = event.mimeData()
+
+        # 快速路径: 直接获取 uri-list 原始字节
+        raw_data = mime.data("text/uri-list")
+        if raw_data and not raw_data.isEmpty():
+            raw_bytes = bytes(raw_data)
+
+            # 类别卡片上的少量拖入数据优先按预览图片处理。
+            if len(raw_bytes) < 2048:
+                paths = self._parse_urilist_quick(raw_bytes)
+                if len(paths) == 1:
+                    p_lower = paths[0].lower()
+                    if any(p_lower.endswith(ext) for ext in (".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif")):
+                        # 查找光标下的卡片
+                        gpos = event.position().toPoint()
+                        card = self._find_card_at_global_pos(gpos)
+                        if card and isinstance(card, CharacterCard):
+                            self.category_preview_dropped.emit(card._data.get("id", ""), paths[0])
+                            return
+
+            # Mod 导入的大量路径由后台线程收集。
+            if not self._current_parent_id:
+                QMessageBox.information(self, tr("提示"), tr("请先进入一个类别后再导入 Mod。"))
+                return
+            parent_id = self._current_parent_id
+            call_later(0, self, lambda: self._process_raw_urilist_async(raw_bytes, parent_id))
+        else:
+            if not self._current_parent_id:
+                QMessageBox.information(self, tr("提示"), tr("请先进入一个类别后再导入 Mod。"))
+                return
+            # 回退: 少量文件时直接用urls
+            url_strings = []
+            for url in mime.urls():
+                if url.isLocalFile():
+                    url_strings.append(url.toLocalFile())
+            if url_strings:
+                parent_id = self._current_parent_id
+                call_later(0, self, lambda: self._process_dropped_urls_async(url_strings))
+
+    @staticmethod
+    def _parse_urilist_quick(raw_bytes: bytes) -> list[str]:
+        """快速解析小型 uri-list，返回本地路径列表"""
+        import urllib.parse as _up
+
+        paths: list[str] = []
+        try:
+            text = raw_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            text = raw_bytes.decode("latin-1", errors="replace")
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            if line.startswith("file:///"):
+                path = _up.unquote(line[8:])
+                path = path.replace("/", "\\") if "\\" not in path else path
+                paths.append(path)
+            elif line.startswith("file://"):
+                path = _up.unquote(line[7:])
+                path = path.replace("/", "\\") if "\\" not in path else path
+                paths.append(path)
+        return paths
