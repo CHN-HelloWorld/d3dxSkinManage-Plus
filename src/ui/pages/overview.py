@@ -6057,3 +6057,145 @@ class OverviewPage(QWidget):
                 return True
             parent = parent.parentWidget()
         return False
+
+    def _is_child_of_scroll(self, widget) -> bool:
+        """判断widget是否在滚动区域内"""
+        parent = widget
+        while parent is not None:
+            if parent is self._scroll_area or parent is self._scroll_content:
+                return True
+            parent = parent.parentWidget()
+        return False
+
+    def eventFilter(self, obj, event) -> bool:
+        """处理滚动区视口的空白点击，并在列表空白处被点击时清理预览。"""
+        if (
+            event.type() == QEvent.Type.DevicePixelRatioChange
+            and obj is self._scroll_area.viewport()
+            and not self._mods_loading
+        ):
+            self._vs_scroll_timer.start()
+        if hasattr(self, "_table") and obj is self._table.horizontalHeader().viewport():
+            if event.type() == QEvent.Type.MouseButtonPress:
+                self._overview_header_dragging = True
+            elif event.type() == QEvent.Type.MouseButtonRelease:
+                self._overview_header_dragging = False
+            return False
+        # 松开鼠标时停止列表视图的自动滚动
+        if event.type() == QEvent.Type.MouseButtonRelease:
+            if hasattr(self, "_table") and obj is self._table.viewport():
+                self._table.setAutoScroll(False)
+                self._table.setAutoScroll(True)
+        if event.type() == QEvent.Type.MouseButtonPress:
+            mouse_event = event
+            if obj is self._scroll_area.viewport():
+                # 将视口坐标映射到 scroll_content
+                pos = self._scroll_content.mapFrom(self._scroll_area.viewport(), event.pos())
+                child = self._scroll_content.childAt(pos)
+                is_on_card = child is not None and self._is_child_of_card(child)
+                if not is_on_card:
+                    if mouse_event.button() == Qt.MouseButton.RightButton:
+                        # 右键空白处弹出菜单
+                        self._show_empty_area_context_menu(self._scroll_area.viewport().mapToGlobal(event.pos()))
+                        return True
+                    self._flush_pending_preview_reorder()
+                    self._selected_ids.clear()
+                    self._selected_mod = None
+                    self._selected_category = None
+                    self._last_clicked_index = -1
+                    self._hide_panel()
+                    self._update_card_selection()
+            elif obj is self._table.viewport():
+                index = self._table.indexAt(event.position().toPoint())
+                if not index.isValid():
+                    if mouse_event.button() == Qt.MouseButton.RightButton:
+                        # 列表视图空白处右键菜单
+                        self._show_empty_area_context_menu(
+                            self._table.viewport().mapToGlobal(event.position().toPoint())
+                        )
+                        return True
+                    self._flush_pending_preview_reorder()
+                    self._table.clearSelection()
+                    self._selected_ids.clear()
+                    self._selected_mod = None
+                    self._selected_category = None
+                    self._last_clicked_index = -1
+                    self._hide_panel()
+                    self._update_status_bar_selection()
+        return super().eventFilter(obj, event)
+
+    def _on_search(self, text: str) -> None:
+        """保存最新搜索条件并重新计时，清空搜索时立即刷新，非空搜索合并延后执行。"""
+        self._search_token += 1
+        self._pending_search_text = text.strip()
+        self._search_timer.stop()
+
+        if not self._pending_search_text:
+            self._set_searching_state(False)
+            self._execute_search_refresh(force_text="")
+            return
+
+        self._set_searching_state(True)
+        self._search_timer.start()
+
+    def _on_filter_changed(self, _index: int = 0) -> None:
+        """处理类型或分级筛选变更。"""
+        # 分级筛选仅在选择 Mod 类型后显示。
+        type_filter = self._type_filter.currentData() or ""
+        self._tag_filter.set_mod_types_enabled(type_filter not in ("category", "character"))
+        self._age_filter.setVisible(type_filter == "mod")
+        if type_filter != "mod":
+            self._age_filter.blockSignals(True)
+            self._age_filter.setCurrentIndex(0)
+            self._age_filter.blockSignals(False)
+        if self._mods_loading:
+            self._execute_search_refresh(force_text=self._search_input.text())
+            return
+        if self._view_mode == "grid":
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            self._refresh_table(self._search_input.text().strip())
+
+    def _on_sort_changed(self, _index: int = 0) -> None:
+        """排序方式变更 — 先持久化预览图切换状态，刷新后恢复选中面板"""
+        self._sort_key = self._sort_combo.currentData() or "alpha_asc"
+
+        # 记住当前选中的Mod和正在显示的预览图 *路径*（而非索引，因为 flush 会重排列表）
+        saved_mod = self._selected_mod
+        saved_preview_path = ""
+        if saved_mod and saved_mod.preview_images:
+            idx = self._panel_preview._current_index
+            if 0 <= idx < len(saved_mod.preview_images):
+                saved_preview_path = saved_mod.preview_images[idx]
+
+        # 持久化当前选中Mod的预览图切换（可能重排 preview_images，使已选图移至 index 0）
+        self._flush_pending_preview_reorder()
+
+        if self._view_mode == "grid":
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            self._refresh_table(self._search_input.text().strip())
+
+        # 恢复选中Mod的面板状态（用路径而非索引定位，避免 flush 重排后错位）
+        if saved_mod:
+            # flush 后 _selected_mod / _current_mods 内的对象已被 main_window 替换，
+            # 重新获取最新引用
+            fresh_mod = self._mod_by_id(saved_mod.mod_id)
+            if fresh_mod is None:
+                fresh_mod = saved_mod
+
+            self._selected_mod = fresh_mod
+            self._show_mod_panel(fresh_mod)
+
+            # 按路径找到当前图在（可能重排过的）列表中的新位置
+            if saved_preview_path and fresh_mod.preview_images:
+                try:
+                    new_idx = fresh_mod.preview_images.index(saved_preview_path)
+                except ValueError:
+                    new_idx = 0
+                if new_idx != 0:
+                    self._panel_preview._current_index = new_idx
+                    self._panel_preview._show_current()
+                    self._panel_preview._update_nav()
+                # 同步卡片预览图
+                self._update_card_preview_by_path(fresh_mod.mod_id, saved_preview_path)
