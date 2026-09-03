@@ -1,0 +1,39 @@
+{
+  "qt6": {
+    "distributions": [
+      "PySide6",
+      "PySide6_Essentials",
+      "PySide6_Addons",
+      "shiboken6"
+    ],
+    "source_version": "6.11.1",
+    "source": "https://github.com/pyside/pyside-setup/tree/v6.11.1/LICENSES",
+    "files": [
+      "qt6/GPL-2.0-only.txt",
+      "qt6/GPL-3.0-only.txt",
+      "qt6/LGPL-3.0-only.txt",
+      "qt6/Qt-GPL-exception-1.0.txt"
+    ],
+    "sha256": {
+      "qt6/GPL-2.0-only.txt": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643",
+      "qt6/GPL-3.0-only.txt": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+      "qt6/LGPL-3.0-only.txt": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768",
+      "qt6/Qt-GPL-exception-1.0.txt": "40678d338ce53cd93f8b22b281a2ecbcaa3ee65ce60b25ffb0c462b0530846b2"
+    }
+  },
+  "unrar": {
+    "distributions": [
+      "unrar2-cffi"
+    ],
+    "source_version": "0.5.0",
+    "source": "https://files.pythonhosted.org/packages/12/e2/da7af34f34dd4c9baa92253266a153c3b2b479a07fde56cd620c732617fe/unrar2_cffi-0.5.0.tar.gz",
+    "archive_sha256": "5d2fc0e8629792a1df0cdfa518411039493caae1a235b506940170d069e5d725",
+    "archive_member": "unrar2_cffi-0.5.0/unrarsrc/license.txt",
+    "files": [
+      "unrar/license.txt"
+    ],
+    "sha256": {
+      "unrar/license.txt": "6ecc1687808b7d66b24f874755abfed7464d9751ed0001cd4e8e5d9bf397ff8a"
+    }
+  }
+}
