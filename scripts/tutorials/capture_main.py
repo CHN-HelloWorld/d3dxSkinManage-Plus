@@ -32,3 +32,8 @@ def wait_until(app, condition, *, timeout: float = 30) -> None:
             raise TimeoutError("截图等待后台任务超时。")
         pump(app, 30)
     pump(app, 120)
+
+
+def offline_request(*args, **kwargs):
+    """禁止演示进程发出真实 HTTP 请求。"""
+    raise RuntimeError("教程演示进程不访问网络。")
