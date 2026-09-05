@@ -37,3 +37,8 @@ def wait_until(app, condition, *, timeout: float = 30) -> None:
 def offline_request(*args, **kwargs):
     """禁止演示进程发出真实 HTTP 请求。"""
     raise RuntimeError("教程演示进程不访问网络。")
+
+
+async def offline_async_request(*args, **kwargs):
+    """禁止演示进程发出真实异步 HTTP 请求。"""
+    raise RuntimeError("教程演示进程不访问网络。")
