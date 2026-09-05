@@ -390,3 +390,7 @@ def main() -> None:
         language=args.language,
         scale=args.scale,
     )
+
+
+if __name__ == "__main__":
+    main()
