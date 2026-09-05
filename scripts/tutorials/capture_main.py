@@ -22,3 +22,13 @@ def pump(app, milliseconds: int = 400) -> None:
     while time.monotonic() < deadline:
         app.processEvents()
         time.sleep(0.005)
+
+
+def wait_until(app, condition, *, timeout: float = 30) -> None:
+    """等待明确的后台完成条件，超时即中止截图。"""
+    deadline = time.monotonic() + timeout
+    while not condition():
+        if time.monotonic() >= deadline:
+            raise TimeoutError("截图等待后台任务超时。")
+        pump(app, 30)
+    pump(app, 120)
