@@ -1,0 +1,95 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "title": "Add a game · Complete the form",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "Click Add game to open the new-game form on the right."
+      },
+      {
+        "box": [
+          1036,
+          399,
+          392,
+          78
+        ],
+        "label": "Enter the game name and English name. The names shown here are examples."
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "Set Mod folder to the deployment folder that your loader actually reads."
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "Check the paths, then click Confirm to save the game configuration."
+      }
+    ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "title": "Activate a game · Check the current environment",
+    "marks": [
+      {
+        "box": [
+          182,
+          64,
+          178,
+          215
+        ],
+        "label": "Double-click a game card to activate it. Double-click the active game again to deactivate it."
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "Current environment and the Current badge identify the active game."
+      },
+      {
+        "box": [
+          1036,
+          484,
+          392,
+          78
+        ],
+        "label": "Check the loader folder and Mod deployment folder before enabling a Mod."
+      }
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "title": "Category Overview · Find categories and common actions",
+    "marks": [
+      {
+        "box": [
+          704,
+          142,
+          160,
+          200
+        ],
+        "label": "Double-click a category card, such as 外观 (Appearance), to enter it before importing Mods."
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "The breadcrumb shows your current location. Click All to return to the category root."
+      },
+      {
+        "box": [
+          182,
+          94,
+          808,
+          35
+        ],
+        "label": "Search by name, author or tag, and narrow the results with tag and type filters."
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "Use the preset selector to manage the current game's complete Mod loadout.",
+        "target_en": "Default (Default)"
+      }
+    ]
+  }
+]
