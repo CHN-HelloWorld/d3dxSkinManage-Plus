@@ -91,5 +91,93 @@
         "target_en": "Default (Default)"
       }
     ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "title": "Inspect a Mod · Information, state and actions",
+    "marks": [
+      {
+        "box": [
+          1046,
+          453,
+          366,
+          49
+        ],
+        "label": "Check the Mod name, enabled state and selected variant at the top of its details."
+      },
+      {
+        "box": [
+          1046,
+          505,
+          366,
+          29
+        ],
+        "label": "Switch between Information, Keys and Variants to inspect each part of the Mod."
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Edit to change the name, author, tags and description."
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "An enabled Mod shows Disable. Disabling it keeps the original in your library."
+      }
+    ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "title": "Import Mods · Choose sources and confirm",
+    "marks": [
+      {
+        "box": [
+          12,
+          43,
+          197,
+          34
+        ],
+        "label": "Use Add Files or Add Folder to select one or more sources."
+      },
+      {
+        "box": [
+          436,
+          87,
+          230,
+          109
+        ],
+        "label": "Review each item's age rating and preview. The destination is the category you opened before importing."
+      },
+      {
+        "target": "确认导入",
+        "label": "Click Confirm Import, then follow progress in the task center at the lower right."
+      }
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "title": "Mod keys · Record or edit a binding",
+    "marks": [
+      {
+        "box": [
+          1168,
+          505,
+          119,
+          29
+        ],
+        "label": "Select a Mod and open Keys. These bindings belong to the Mod's INI files."
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "Click the current key to record a new binding, or use the edit icon to type one."
+      },
+      {
+        "target": "打开文件",
+        "label": "Open the INI file when you need to inspect the surrounding configuration."
+      }
+    ]
   }
 ]
