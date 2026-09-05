@@ -374,3 +374,19 @@ def capture(theme_name: str, selected: set[str], *, language: str = "zh-CN", sca
             win.deleteLater()
             pump(app, 200)
     print(f"共生成 {len(records)} 张截图：{output}")
+
+
+def main() -> None:
+    """解析主题和场景过滤参数并运行截图。"""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--theme", choices=("dark", "light"), default="dark")
+    parser.add_argument("--only", default="", help="逗号分隔的场景编号，例如 03,07,13")
+    parser.add_argument("--language", choices=("zh-CN", "en-US"), default="zh-CN")
+    parser.add_argument("--scale", type=int, choices=(1, 2, 3), default=2, help="真实 Qt 渲染倍率，默认 2")
+    args = parser.parse_args()
+    capture(
+        args.theme,
+        {part.strip().zfill(2) for part in args.only.split(",") if part.strip()},
+        language=args.language,
+        scale=args.scale,
+    )
