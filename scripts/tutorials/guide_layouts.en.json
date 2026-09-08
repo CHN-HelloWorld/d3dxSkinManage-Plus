@@ -254,5 +254,78 @@
         "label": "Click Save changes, or press Ctrl+Enter, to save your edits."
       }
     ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "title": "Category presets · Import or export a category tree",
+    "marks": [
+      {
+        "box": [
+          24,
+          180,
+          347,
+          140
+        ],
+        "label": "Import a .d3dxcp file, then review the destination game and differences in the category tree."
+      },
+      {
+        "box": [
+          386,
+          180,
+          349,
+          140
+        ],
+        "label": "Export the category structure and optional category images. Mod archives are not included."
+      }
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "title": "General settings · Deletion and task concurrency",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "Open Settings → General, then select a settings group on the left."
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "Choose permanent deletion or the Recycle Bin, and check the operation's scope before proceeding."
+      },
+      {
+        "target": "自动推荐",
+        "label": "Start with Auto recommend if you are unsure, then adjust concurrency to suit your disk."
+      }
+    ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "title": "Personalization · Theme, language and fonts",
+    "marks": [
+      {
+        "box": [
+          416,
+          167,
+          419,
+          97
+        ],
+        "label": "Choose a light, dark or system theme in the appearance card."
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "Choose your interface language from this list.",
+        "target_en": "English"
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "Open the language-pack folder to customize translations, then refresh the list."
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "Select an interface font and check that text and symbols display correctly."
+      }
+    ]
   }
 ]
