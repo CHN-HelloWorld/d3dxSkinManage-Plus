@@ -179,5 +179,80 @@
         "label": "Open the INI file when you need to inspect the surrounding configuration."
       }
     ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "title": "Variants · Save different looks for one Mod",
+    "marks": [
+      {
+        "box": [
+          1290,
+          505,
+          120,
+          29
+        ],
+        "label": "Select a Mod and open Variants."
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "Save the current supported appearance state as a new named variant."
+      },
+      {
+        "box": [
+          1046,
+          668,
+          366,
+          102
+        ],
+        "label": "Choose a saved look. The variant currently in use has a status marker."
+      }
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "title": "Combination presets · Save and switch loadouts",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "Create a new combination preset here."
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "Click Apply beside a preset to switch to its complete loadout."
+      },
+      {
+        "box": [
+          13,
+          369,
+          147,
+          30
+        ],
+        "label": "Select a preset before renaming or copying it."
+      }
+    ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "title": "Edit a Mod · Update information and tags",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "Clear this option to change only the display name. Selecting it also renames the disk item."
+      },
+      {
+        "box": [
+          498,
+          184,
+          238,
+          109
+        ],
+        "label": "Add or adjust tags, and check the scope when changing a shared tag."
+      },
+      {
+        "target": "保存修改",
+        "label": "Click Save changes, or press Ctrl+Enter, to save your edits."
+      }
+    ]
   }
 ]
