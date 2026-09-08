@@ -482,5 +482,73 @@
         "target_en": "Permissions and source · 7 permissions"
       }
     ]
+  },
+  {
+    "file": "19-关于.webp",
+    "title": "About · Project information and short film",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "Click About at the lower left to open the project information."
+      },
+      {
+        "box": [
+          832,
+          524,
+          154,
+          42
+        ],
+        "label": "Click Watch film to play the project film inside the page."
+      }
+    ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "title": "Delete a game · Review what will be removed",
+    "marks": [
+      {
+        "box": [
+          25,
+          134,
+          650,
+          113
+        ],
+        "label": "Check the resource counts, deployment count and size to confirm the selected game."
+      },
+      {
+        "box": [
+          25,
+          267,
+          650,
+          213
+        ],
+        "label": "Review each item to be removed, and back up or export anything you want to keep."
+      },
+      {
+        "target": "永久删除",
+        "label": "Permanent deletion bypasses the Recycle Bin. Click Cancel if the scope is unclear."
+      }
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "title": "Gallery · Find a Mod by its preview",
+    "marks": [
+      {
+        "box": [
+          191,
+          91,
+          281,
+          345
+        ],
+        "label": "Click a preview card to locate the Mod in Category Overview. Double-click to toggle its enabled state."
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "Choose how rated previews are displayed. This setting does not delete or disable Mods."
+      }
+    ]
   }
 ]
