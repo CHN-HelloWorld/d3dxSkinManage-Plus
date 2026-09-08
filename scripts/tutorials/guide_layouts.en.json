@@ -400,5 +400,87 @@
         "label": "Use Mod updates on the left to configure update checks for local Mods."
       }
     ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "title": "Application updates · Check for a new version",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "Check for application updates to view new releases and release notes."
+      },
+      {
+        "box": [
+          408,
+          411,
+          410,
+          55
+        ],
+        "label": "Review the backup option. It backs up application files and does not replace a backup of your Mod data."
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "Choose a download source for your network. Version checks still require a valid release feed."
+      }
+    ]
+  },
+  {
+    "file": "17-工具箱.webp",
+    "title": "Tools · Category presets and maintenance",
+    "marks": [
+      {
+        "target": "导入分类预设",
+        "badge": "above",
+        "label": "Import a category tree after reviewing new entries and conflicts."
+      },
+      {
+        "target": "导出分类预设",
+        "badge": "above",
+        "label": "Export the current game's complete category tree as a .d3dxcp file."
+      },
+      {
+        "target": "重建索引",
+        "class": "QPushButton",
+        "label": "Rebuild the index only if a normal refresh does not resolve the library issue."
+      },
+      {
+        "target": "查看日志",
+        "class": "QPushButton",
+        "label": "Open the log viewer here when troubleshooting or reporting a problem."
+      }
+    ]
+  },
+  {
+    "file": "18-插件.webp",
+    "title": "Plugins · Install, enable and manage",
+    "marks": [
+      {
+        "target": "安装插件",
+        "label": "Install a plugin archive here. After copying a plugin folder manually, click Rescan."
+      },
+      {
+        "box": [
+          190,
+          197,
+          282,
+          60
+        ],
+        "label": "Select a plugin in the list to see its details on the right."
+      },
+      {
+        "box": [
+          1315,
+          88,
+          88,
+          34
+        ],
+        "label": "Check the source and permissions before enabling it. First-time activation asks you to confirm trust."
+      },
+      {
+        "target": "权限与来源 · 7 项权限",
+        "label": "Expand Permissions and source to review capabilities. Reload and uninstall are below the description.",
+        "target_en": "Permissions and source · 7 permissions"
+      }
+    ]
   }
 ]
