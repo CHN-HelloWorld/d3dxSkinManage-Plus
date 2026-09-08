@@ -327,5 +327,78 @@
         "label": "Select an interface font and check that text and symbols display correctly."
       }
     ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "title": "Shortcuts · Change the manager's key bindings",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "Open Settings → Shortcuts → Key bindings."
+      },
+      {
+        "box": [
+          1036,
+          205,
+          151,
+          26
+        ],
+        "label": "Click a binding to record a new shortcut. Follow the prompt if it conflicts with another action."
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "Restore resets only this shortcut. Reset at the bottom restores all application preferences after confirmation; game configurations and imported Mods are retained."
+      }
+    ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "title": "Import settings · Archive formats and conversion",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "Choose the library archive format used when importing folders."
+      },
+      {
+        "box": [
+          408,
+          240,
+          410,
+          47
+        ],
+        "label": "Review Always use the import format. Enabling it may require extraction and recompression."
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "Use Export on the left for export formats, category folders and metadata options."
+      }
+    ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "title": "Online proxy · Configure both switches",
+    "marks": [
+      {
+        "box": [
+          408,
+          164,
+          410,
+          47
+        ],
+        "label": "Enable the proxy in the online Mod proxy group."
+      },
+      {
+        "target": "前往代理配置",
+        "label": "Open the general proxy settings, enter the actual proxy address and enable its main switch."
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "Use Mod updates on the left to configure update checks for local Mods."
+      }
+    ]
   }
 ]
