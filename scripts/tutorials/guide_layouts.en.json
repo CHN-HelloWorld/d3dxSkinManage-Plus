@@ -631,5 +631,69 @@
         "label": "Use the sorting menu to order entries by newest, recently updated or popularity."
       }
     ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "title": "Export a category tree · Name, images and location",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "Enter a preset name for sharing and check the selected game.",
+        "target_en": "示例游戏-category-preset"
+      },
+      {
+        "target": "包含目录图片",
+        "label": "Include category images if needed. Review the complete export scope in the tree on the right."
+      },
+      {
+        "target": "选择…",
+        "label": "Choose an output location and check the resulting filename below."
+      },
+      {
+        "target": "开始导出",
+        "label": "Click Start export after completing all required fields."
+      }
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "title": "Search settings · Jump to an option",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "Type a keyword such as cache in the settings search box.",
+        "target_en": "cache"
+      },
+      {
+        "box": [
+          203,
+          111,
+          1199,
+          275
+        ],
+        "label": "Click a result to open its group. Clear the search to return to normal browsing."
+      }
+    ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "title": "Images and cache · Memory versus disk",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "Open Settings → General → Images and cache."
+      },
+      {
+        "target": "清理图片内存",
+        "label": "Clear cached image memory. Images currently displayed stay available; other images reload when needed."
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "Clear regenerable disk caches here; this is not the action for deleting original Mods."
+      }
+    ]
   }
 ]
