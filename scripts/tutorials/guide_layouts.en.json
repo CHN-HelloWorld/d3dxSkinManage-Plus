@@ -550,5 +550,86 @@
         "label": "Choose how rated previews are displayed. This setting does not delete or disable Mods."
       }
     ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "title": "Add categories in bulk · One entry per row",
+    "marks": [
+      {
+        "box": [
+          147,
+          154,
+          233,
+          45
+        ],
+        "label": "Enter a category name and optional English name for each row."
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "Choose Category or Character/Object. The node type determines whether Mods can coexist."
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "Add another row here."
+      },
+      {
+        "target": "全部添加",
+        "label": "Check every row, then click Add all to create the entries at the current level."
+      }
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "title": "Logs · Select the session before investigating",
+    "marks": [
+      {
+        "box": [
+          72,
+          11,
+          150,
+          34
+        ],
+        "label": "Choose the application session in which the problem occurred."
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "Keep All to include context before and after an error. A level filter shows only that level."
+      },
+      {
+        "target": "打开日志目录",
+        "label": "Open the log folder for complete files, or copy the current contents with Copy."
+      }
+    ]
+  },
+  {
+    "file": "24-在线Mod.webp",
+    "title": "Browse online Mods · Find an entry, then its files",
+    "marks": [
+      {
+        "box": [
+          174,
+          5,
+          862,
+          32
+        ],
+        "label": "Search by keyword. Use the breadcrumb below to choose an online category."
+      },
+      {
+        "box": [
+          176,
+          91,
+          211,
+          268
+        ],
+        "label": "Click a Mod card to read its description and available downloads."
+      },
+      {
+        "target": "默认",
+        "class": "LeadingIconComboBox",
+        "label": "Use the sorting menu to order entries by newest, recently updated or popularity."
+      }
+    ]
   }
 ]
