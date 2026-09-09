@@ -768,5 +768,74 @@
         "label": "On an empty page, click + New Category. With existing content, right-click a blank area and choose New Category."
       }
     ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "title": "Create a category ② · Fill in and confirm",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "Enter a category name, such as 外观 (Appearance). Add an English name and image if needed.",
+        "target_en": "外观"
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "Choose a node type. Categories allow multiple enabled Mods; Character/Object nodes enforce mutually exclusive appearances."
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Confirm to create the category, then double-click its new card to enter it."
+      }
+    ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "title": "Inside a category · Import your first Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "The breadcrumb should show a specific category. This example uses the empty 待整理 (Inbox) category."
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "Click Import Mod, drop an archive or folder into the content area, or press Ctrl+I."
+      }
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "title": "Enable a Mod · Select it, then enable",
+    "marks": [
+      {
+        "box": [
+          360,
+          142,
+          160,
+          200
+        ],
+        "label": "Click the Mod you want to enable to show its details on the right."
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "Click Enable and wait for deployment. You can also double-click the card, or select it and press Space."
+      },
+      {
+        "box": [
+          1046,
+          453,
+          366,
+          49
+        ],
+        "label": "When deployment finishes, the state becomes Enabled and the action changes to Disable."
+      }
+    ]
   }
 ]
