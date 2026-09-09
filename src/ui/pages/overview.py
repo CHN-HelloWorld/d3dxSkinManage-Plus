@@ -6376,3 +6376,71 @@ class OverviewPage(QWidget):
         for card in self._vs_card_cache.values():
             self._vs_restore_preview(card)
         self._vs_update_visible()
+
+    # 预设
+
+    def set_presets(self, presets: list, current_preset_id: str = "", rename_id: str | None = None) -> None:
+        """填充预设选择器。rename_id 给出时，立即进入该预设的重命名模式"""
+        self._preset_selector.set_presets(presets, current_preset_id, rename_id=rename_id)
+
+    def _on_add_character(self) -> None:
+        """以同级和全局角色名称约束新建类别，确认后附加当前父目录并通知宿主添加。"""
+        # 收集同级已有名称。
+        existing = [c.get("name", "") for c in self._characters]
+        # 收集当前游戏中全部角色或对象名称。
+        all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
+        dialog = CharacterDialog(existing_names=existing, all_character_names=all_char_names, parent=self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result:
+                result["parent_id"] = self._current_parent_id
+                self.character_add_requested.emit(result)
+
+    def _on_edit_character(self, char_id: str) -> None:
+        """查找当前目录中的目标类别，带入重名约束编辑，确认后向宿主提交字段变化。"""
+        char_data = None
+        for c in self._characters:
+            if c.get("id") == char_id:
+                char_data = c
+                break
+        if not char_data:
+            return
+        # 收集同级已有名称。
+        existing = [c.get("name", "") for c in self._characters]
+        # 收集当前游戏中全部角色或对象名称。
+        all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
+        dialog = CharacterDialog(
+            char_data=char_data, existing_names=existing, all_character_names=all_char_names, parent=self
+        )
+        if dialog.exec():
+            result = dialog.get_result()
+            if result:
+                self.character_edit_requested.emit(char_id, result)
+
+    def prepare_batch_add_dialog(self) -> BatchAddCharacterDialog:
+        """接受输入前准备静态表单，主题变化时更新局部颜色。"""
+        dialog = self._batch_add_dialog
+        if dialog is not None and not dialog.isVisible() and dialog._built_theme != theme.current_theme():
+            dialog.deleteLater()
+            dialog = None
+        if dialog is None:
+            # 窗口归顶层所有，避免亚克力准备使整张页面变成原生控件。
+            dialog = BatchAddCharacterDialog(parent=self.window())
+            dialog.layout().activate()
+            self._batch_add_dialog = dialog
+        return dialog
+
+    def _on_batch_add(self) -> None:
+        """批量添加类别 - 弹出批量版对话框"""
+        dialog = self.prepare_batch_add_dialog()
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog.prepare_for_open()
+        if dialog.exec():
+            results = dialog.get_results()
+            if results:
+                for r in results:
+                    r["parent_id"] = self._current_parent_id
+                self.character_batch_add_requested.emit(results)
