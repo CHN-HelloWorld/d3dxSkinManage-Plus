@@ -1,0 +1,841 @@
+[
+  {
+    "file": "01-添加游戏.webp",
+    "title": "Add a game · Complete the form",
+    "marks": [
+      {
+        "target": "添加游戏",
+        "class": "QPushButton",
+        "label": "Click Add game to open the new-game form on the right."
+      },
+      {
+        "box": [
+          1036,
+          399,
+          392,
+          78
+        ],
+        "label": "Enter the game name and English name. The names shown here are examples."
+      },
+      {
+        "target": "D:/ModLoader/Mods",
+        "label": "Set Mod folder to the deployment folder that your loader actually reads."
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "label": "Check the paths, then click Confirm to save the game configuration."
+      }
+    ]
+  },
+  {
+    "file": "02-游戏配置.webp",
+    "title": "Activate a game · Check the current environment",
+    "marks": [
+      {
+        "box": [
+          182,
+          64,
+          178,
+          215
+        ],
+        "label": "Double-click a game card to activate it. Double-click the active game again to deactivate it."
+      },
+      {
+        "target": "当前环境",
+        "class": "QPushButton",
+        "label": "Current environment and the Current badge identify the active game."
+      },
+      {
+        "box": [
+          1036,
+          484,
+          392,
+          78
+        ],
+        "label": "Check the loader folder and Mod deployment folder before enabling a Mod."
+      }
+    ]
+  },
+  {
+    "file": "03-类别总览.webp",
+    "title": "Category Overview · Find categories and common actions",
+    "marks": [
+      {
+        "box": [
+          704,
+          142,
+          160,
+          200
+        ],
+        "label": "Double-click a category card, such as 外观 (Appearance), to enter it before importing Mods."
+      },
+      {
+        "target": "全部",
+        "class": "QPushButton",
+        "label": "The breadcrumb shows your current location. Click All to return to the category root."
+      },
+      {
+        "box": [
+          182,
+          94,
+          808,
+          35
+        ],
+        "label": "Search by name, author or tag, and narrow the results with tag and type filters."
+      },
+      {
+        "target": "默认（默认）",
+        "class": "QToolButton",
+        "label": "Use the preset selector to manage the current game's complete Mod loadout.",
+        "target_en": "Default (Default)"
+      }
+    ]
+  },
+  {
+    "file": "04-Mod信息.webp",
+    "title": "Inspect a Mod · Information, state and actions",
+    "marks": [
+      {
+        "box": [
+          1046,
+          453,
+          366,
+          49
+        ],
+        "label": "Check the Mod name, enabled state and selected variant at the top of its details."
+      },
+      {
+        "box": [
+          1046,
+          505,
+          366,
+          29
+        ],
+        "label": "Switch between Information, Keys and Variants to inspect each part of the Mod."
+      },
+      {
+        "target": "编辑",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Edit to change the name, author, tags and description."
+      },
+      {
+        "target": "禁用",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "An enabled Mod shows Disable. Disabling it keeps the original in your library."
+      }
+    ]
+  },
+  {
+    "file": "05-导入Mod.webp",
+    "title": "Import Mods · Choose sources and confirm",
+    "marks": [
+      {
+        "box": [
+          12,
+          43,
+          197,
+          34
+        ],
+        "label": "Use Add Files or Add Folder to select one or more sources."
+      },
+      {
+        "box": [
+          436,
+          87,
+          230,
+          109
+        ],
+        "label": "Review each item's age rating and preview. The destination is the category you opened before importing."
+      },
+      {
+        "target": "确认导入",
+        "label": "Click Confirm Import, then follow progress in the task center at the lower right."
+      }
+    ]
+  },
+  {
+    "file": "06-按键设置.webp",
+    "title": "Mod keys · Record or edit a binding",
+    "marks": [
+      {
+        "box": [
+          1168,
+          505,
+          119,
+          29
+        ],
+        "label": "Select a Mod and open Keys. These bindings belong to the Mod's INI files."
+      },
+      {
+        "target": "K",
+        "class": "QPushButton",
+        "label": "Click the current key to record a new binding, or use the edit icon to type one."
+      },
+      {
+        "target": "打开文件",
+        "label": "Open the INI file when you need to inspect the surrounding configuration."
+      }
+    ]
+  },
+  {
+    "file": "07-变体管理.webp",
+    "title": "Variants · Save different looks for one Mod",
+    "marks": [
+      {
+        "box": [
+          1290,
+          505,
+          120,
+          29
+        ],
+        "label": "Select a Mod and open Variants."
+      },
+      {
+        "target": "保存当前状态为新变体",
+        "label": "Save the current supported appearance state as a new named variant."
+      },
+      {
+        "box": [
+          1046,
+          668,
+          366,
+          102
+        ],
+        "label": "Choose a saved look. The variant currently in use has a status marker."
+      }
+    ]
+  },
+  {
+    "file": "08-组合预设.webp",
+    "title": "Combination presets · Save and switch loadouts",
+    "marks": [
+      {
+        "target": "新建预设",
+        "label": "Create a new combination preset here."
+      },
+      {
+        "target": "应用",
+        "occurrence": 0,
+        "label": "Click Apply beside a preset to switch to its complete loadout."
+      },
+      {
+        "box": [
+          13,
+          369,
+          147,
+          30
+        ],
+        "label": "Select a preset before renaming or copying it."
+      }
+    ]
+  },
+  {
+    "file": "09-编辑Mod.webp",
+    "title": "Edit a Mod · Update information and tags",
+    "marks": [
+      {
+        "target": "同时重命名 Mod 文件或文件夹",
+        "label": "Clear this option to change only the display name. Selecting it also renames the disk item."
+      },
+      {
+        "box": [
+          498,
+          184,
+          238,
+          109
+        ],
+        "label": "Add or adjust tags, and check the scope when changing a shared tag."
+      },
+      {
+        "target": "保存修改",
+        "label": "Click Save changes, or press Ctrl+Enter, to save your edits."
+      }
+    ]
+  },
+  {
+    "file": "10-分类预设.webp",
+    "title": "Category presets · Import or export a category tree",
+    "marks": [
+      {
+        "box": [
+          24,
+          180,
+          347,
+          140
+        ],
+        "label": "Import a .d3dxcp file, then review the destination game and differences in the category tree."
+      },
+      {
+        "box": [
+          386,
+          180,
+          349,
+          140
+        ],
+        "label": "Export the category structure and optional category images. Mod archives are not included."
+      }
+    ]
+  },
+  {
+    "file": "11-设置常规.webp",
+    "title": "General settings · Deletion and task concurrency",
+    "marks": [
+      {
+        "target": "常规",
+        "class": "QPushButton",
+        "label": "Open Settings → General, then select a settings group on the left."
+      },
+      {
+        "target": "直接删除（不可恢复）",
+        "label": "Choose permanent deletion or the Recycle Bin, and check the operation's scope before proceeding."
+      },
+      {
+        "target": "自动推荐",
+        "label": "Start with Auto recommend if you are unsure, then adjust concurrency to suit your disk."
+      }
+    ]
+  },
+  {
+    "file": "12-设置个性化.webp",
+    "title": "Personalization · Theme, language and fonts",
+    "marks": [
+      {
+        "box": [
+          416,
+          167,
+          419,
+          97
+        ],
+        "label": "Choose a light, dark or system theme in the appearance card."
+      },
+      {
+        "target": "简体中文",
+        "class": "QComboBox",
+        "label": "Choose your interface language from this list.",
+        "target_en": "English"
+      },
+      {
+        "target": "打开语言包文件夹",
+        "label": "Open the language-pack folder to customize translations, then refresh the list."
+      },
+      {
+        "target": "系统默认",
+        "class": "QComboBox",
+        "label": "Select an interface font and check that text and symbols display correctly."
+      }
+    ]
+  },
+  {
+    "file": "13-快捷键.webp",
+    "title": "Shortcuts · Change the manager's key bindings",
+    "marks": [
+      {
+        "target": "快捷键",
+        "class": "QPushButton",
+        "label": "Open Settings → Shortcuts → Key bindings."
+      },
+      {
+        "box": [
+          1036,
+          205,
+          151,
+          26
+        ],
+        "label": "Click a binding to record a new shortcut. Follow the prompt if it conflicts with another action."
+      },
+      {
+        "target": "还原",
+        "occurrence": 0,
+        "label": "Restore resets only this shortcut. Reset at the bottom restores all application preferences after confirmation; game configurations and imported Mods are retained."
+      }
+    ]
+  },
+  {
+    "file": "14-导入与导出.webp",
+    "title": "Import settings · Archive formats and conversion",
+    "marks": [
+      {
+        "target": "ZIP 压缩包 (通用)",
+        "label": "Choose the library archive format used when importing folders."
+      },
+      {
+        "box": [
+          408,
+          240,
+          410,
+          47
+        ],
+        "label": "Review Always use the import format. Enabling it may require extraction and recompression."
+      },
+      {
+        "target": "导出",
+        "class": "_SectionButton",
+        "label": "Use Export on the left for export formats, category folders and metadata options."
+      }
+    ]
+  },
+  {
+    "file": "15-在线设置.webp",
+    "title": "Online proxy · Configure both switches",
+    "marks": [
+      {
+        "box": [
+          408,
+          164,
+          410,
+          47
+        ],
+        "label": "Enable the proxy in the online Mod proxy group."
+      },
+      {
+        "target": "前往代理配置",
+        "label": "Open the general proxy settings, enter the actual proxy address and enable its main switch."
+      },
+      {
+        "target": "Mod 更新",
+        "class": "_SectionButton",
+        "label": "Use Mod updates on the left to configure update checks for local Mods."
+      }
+    ]
+  },
+  {
+    "file": "16-程序更新.webp",
+    "title": "Application updates · Check for a new version",
+    "marks": [
+      {
+        "target": "检查程序更新",
+        "label": "Check for application updates to view new releases and release notes."
+      },
+      {
+        "box": [
+          408,
+          411,
+          410,
+          55
+        ],
+        "label": "Review the backup option. It backs up application files and does not replace a backup of your Mod data."
+      },
+      {
+        "target": "自动（镜像优先，失败回退）",
+        "label": "Choose a download source for your network. Version checks still require a valid release feed."
+      }
+    ]
+  },
+  {
+    "file": "17-工具箱.webp",
+    "title": "Tools · Category presets and maintenance",
+    "marks": [
+      {
+        "target": "导入分类预设",
+        "badge": "above",
+        "label": "Import a category tree after reviewing new entries and conflicts."
+      },
+      {
+        "target": "导出分类预设",
+        "badge": "above",
+        "label": "Export the current game's complete category tree as a .d3dxcp file."
+      },
+      {
+        "target": "重建索引",
+        "class": "QPushButton",
+        "label": "Rebuild the index only if a normal refresh does not resolve the library issue."
+      },
+      {
+        "target": "查看日志",
+        "class": "QPushButton",
+        "label": "Open the log viewer here when troubleshooting or reporting a problem."
+      }
+    ]
+  },
+  {
+    "file": "18-插件.webp",
+    "title": "Plugins · Install, enable and manage",
+    "marks": [
+      {
+        "target": "安装插件",
+        "label": "Install a plugin archive here. After copying a plugin folder manually, click Rescan."
+      },
+      {
+        "box": [
+          190,
+          197,
+          282,
+          60
+        ],
+        "label": "Select a plugin in the list to see its details on the right."
+      },
+      {
+        "box": [
+          1315,
+          88,
+          88,
+          34
+        ],
+        "label": "Check the source and permissions before enabling it. First-time activation asks you to confirm trust."
+      },
+      {
+        "target": "权限与来源 · 7 项权限",
+        "label": "Expand Permissions and source to review capabilities. Reload and uninstall are below the description.",
+        "target_en": "Permissions and source · 7 permissions"
+      }
+    ]
+  },
+  {
+    "file": "19-关于.webp",
+    "title": "About · Project information and short film",
+    "marks": [
+      {
+        "target": "关于",
+        "class": "QPushButton",
+        "label": "Click About at the lower left to open the project information."
+      },
+      {
+        "box": [
+          832,
+          524,
+          154,
+          42
+        ],
+        "label": "Click Watch film to play the project film inside the page."
+      }
+    ]
+  },
+  {
+    "file": "20-删除游戏.webp",
+    "title": "Delete a game · Review what will be removed",
+    "marks": [
+      {
+        "box": [
+          25,
+          134,
+          650,
+          113
+        ],
+        "label": "Check the resource counts, deployment count and size to confirm the selected game."
+      },
+      {
+        "box": [
+          25,
+          267,
+          650,
+          213
+        ],
+        "label": "Review each item to be removed, and back up or export anything you want to keep."
+      },
+      {
+        "target": "永久删除",
+        "label": "Permanent deletion bypasses the Recycle Bin. Click Cancel if the scope is unclear."
+      }
+    ]
+  },
+  {
+    "file": "21-画廊.webp",
+    "title": "Gallery · Find a Mod by its preview",
+    "marks": [
+      {
+        "box": [
+          191,
+          91,
+          281,
+          345
+        ],
+        "label": "Click a preview card to locate the Mod in Category Overview. Double-click to toggle its enabled state."
+      },
+      {
+        "target": "显示 NSFW",
+        "class": "LeadingIconComboBox",
+        "label": "Choose how rated previews are displayed. This setting does not delete or disable Mods."
+      }
+    ]
+  },
+  {
+    "file": "22-批量添加.webp",
+    "title": "Add categories in bulk · One entry per row",
+    "marks": [
+      {
+        "box": [
+          147,
+          154,
+          233,
+          45
+        ],
+        "label": "Enter a category name and optional English name for each row."
+      },
+      {
+        "target": "类别",
+        "class": "QComboBox",
+        "label": "Choose Category or Character/Object. The node type determines whether Mods can coexist."
+      },
+      {
+        "target": "＋ 添加类别",
+        "label": "Add another row here."
+      },
+      {
+        "target": "全部添加",
+        "label": "Check every row, then click Add all to create the entries at the current level."
+      }
+    ]
+  },
+  {
+    "file": "23-日志.webp",
+    "title": "Logs · Select the session before investigating",
+    "marks": [
+      {
+        "box": [
+          72,
+          11,
+          150,
+          34
+        ],
+        "label": "Choose the application session in which the problem occurred."
+      },
+      {
+        "target": "全部",
+        "class": "QComboBox",
+        "label": "Keep All to include context before and after an error. A level filter shows only that level."
+      },
+      {
+        "target": "打开日志目录",
+        "label": "Open the log folder for complete files, or copy the current contents with Copy."
+      }
+    ]
+  },
+  {
+    "file": "24-在线Mod.webp",
+    "title": "Browse online Mods · Find an entry, then its files",
+    "marks": [
+      {
+        "box": [
+          174,
+          5,
+          862,
+          32
+        ],
+        "label": "Search by keyword. Use the breadcrumb below to choose an online category."
+      },
+      {
+        "box": [
+          176,
+          91,
+          211,
+          268
+        ],
+        "label": "Click a Mod card to read its description and available downloads."
+      },
+      {
+        "target": "默认",
+        "class": "LeadingIconComboBox",
+        "label": "Use the sorting menu to order entries by newest, recently updated or popularity."
+      }
+    ]
+  },
+  {
+    "file": "25-分类导出.webp",
+    "title": "Export a category tree · Name, images and location",
+    "marks": [
+      {
+        "target": "示例游戏-分类预设",
+        "class": "QLineEdit",
+        "label": "Enter a preset name for sharing and check the selected game.",
+        "target_en": "示例游戏-category-preset"
+      },
+      {
+        "target": "包含目录图片",
+        "label": "Include category images if needed. Review the complete export scope in the tree on the right."
+      },
+      {
+        "target": "选择…",
+        "label": "Choose an output location and check the resulting filename below."
+      },
+      {
+        "target": "开始导出",
+        "label": "Click Start export after completing all required fields."
+      }
+    ]
+  },
+  {
+    "file": "26-设置搜索.webp",
+    "title": "Search settings · Jump to an option",
+    "marks": [
+      {
+        "target": "缓存",
+        "class": "QLineEdit",
+        "label": "Type a keyword such as cache in the settings search box.",
+        "target_en": "cache"
+      },
+      {
+        "box": [
+          203,
+          111,
+          1199,
+          275
+        ],
+        "label": "Click a result to open its group. Clear the search to return to normal browsing."
+      }
+    ]
+  },
+  {
+    "file": "27-图片与缓存.webp",
+    "title": "Images and cache · Memory versus disk",
+    "marks": [
+      {
+        "target": "图片与缓存",
+        "class": "_SectionButton",
+        "label": "Open Settings → General → Images and cache."
+      },
+      {
+        "target": "清理图片内存",
+        "label": "Clear cached image memory. Images currently displayed stay available; other images reload when needed."
+      },
+      {
+        "target": "清理磁盘缓存",
+        "label": "Clear regenerable disk caches here; this is not the action for deleting original Mods."
+      }
+    ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "title": "Window background · Choose a source",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "Open Settings → Personalization → Window background."
+      },
+      {
+        "box": [
+          753,
+          167,
+          222,
+          34
+        ],
+        "label": "Choose Close (off), Image, Video or WE scene, then supply the media or application path for that type."
+      }
+    ]
+  },
+  {
+    "file": "29-在线详情.webp",
+    "title": "Online details · Read the description and choose a file",
+    "marks": [
+      {
+        "box": [
+          968,
+          80,
+          151,
+          31
+        ],
+        "label": "Read the author's information in Overview and Description first."
+      },
+      {
+        "box": [
+          968,
+          649,
+          398,
+          97
+        ],
+        "label": "Check filenames and sizes. Different files may be versions or optional extras."
+      },
+      {
+        "box": [
+          1385,
+          658,
+          40,
+          35
+        ],
+        "label": "Click the download button beside the file you want, then choose its installation destination."
+      }
+    ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "title": "Create a category ① · Open the creation dialog",
+    "marks": [
+      {
+        "box": [
+          9,
+          55,
+          140,
+          39
+        ],
+        "label": "Activate a game, then open Category Overview on the left."
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "On an empty page, click + New Category. With existing content, right-click a blank area and choose New Category."
+      }
+    ]
+  },
+  {
+    "file": "31-新建类别.webp",
+    "title": "Create a category ② · Fill in and confirm",
+    "marks": [
+      {
+        "target": "外观",
+        "class": "QLineEdit",
+        "label": "Enter a category name, such as 外观 (Appearance). Add an English name and image if needed.",
+        "target_en": "外观"
+      },
+      {
+        "target": "类别（可同时启用多个Mod）",
+        "class": "QComboBox",
+        "label": "Choose a node type. Categories allow multiple enabled Mods; Character/Object nodes enforce mutually exclusive appearances."
+      },
+      {
+        "target": "确认",
+        "class": "QPushButton",
+        "badge": "above",
+        "label": "Click Confirm to create the category, then double-click its new card to enter it."
+      }
+    ]
+  },
+  {
+    "file": "32-导入入口.webp",
+    "title": "Inside a category · Import your first Mod",
+    "marks": [
+      {
+        "target": "待整理",
+        "class": "QPushButton",
+        "label": "The breadcrumb should show a specific category. This example uses the empty 待整理 (Inbox) category."
+      },
+      {
+        "target": "导入 Mod",
+        "class": "QPushButton",
+        "badge": "below",
+        "label": "Click Import Mod, drop an archive or folder into the content area, or press Ctrl+I."
+      }
+    ]
+  },
+  {
+    "file": "33-启用Mod.webp",
+    "title": "Enable a Mod · Select it, then enable",
+    "marks": [
+      {
+        "box": [
+          360,
+          142,
+          160,
+          200
+        ],
+        "label": "Click the Mod you want to enable to show its details on the right."
+      },
+      {
+        "target": "启用",
+        "class": "QPushButton",
+        "label": "Click Enable and wait for deployment. You can also double-click the card, or select it and press Space."
+      },
+      {
+        "box": [
+          1046,
+          453,
+          366,
+          49
+        ],
+        "label": "When deployment finishes, the state becomes Enabled and the action changes to Disable."
+      }
+    ]
+  }
+]
