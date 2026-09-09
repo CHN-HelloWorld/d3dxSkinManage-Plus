@@ -6199,3 +6199,180 @@ class OverviewPage(QWidget):
                     self._panel_preview._update_nav()
                 # 同步卡片预览图
                 self._update_card_preview_by_path(fresh_mod.mod_id, saved_preview_path)
+
+    def _apply_sort(self, cats: list, mods: list) -> tuple:
+        """根据当前排序方式对类别和Mod列表排序，返回排序后的 (cats, mods)"""
+        if self._sort_key == "alpha_asc":
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+            mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name))
+        elif self._sort_key == "alpha_desc":
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
+            mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name), reverse=True)
+        elif self._sort_key == "time_asc":
+            cats = sorted(cats, key=lambda c: c.get("sort_order", 0))
+            mods = sorted(mods, key=lambda m: m.imported_at or "")
+        elif self._sort_key == "time_desc":
+            cats = sorted(cats, key=lambda c: c.get("sort_order", 0), reverse=True)
+            mods = sorted(mods, key=lambda m: m.imported_at or "", reverse=True)
+        elif self._sort_key == "author_asc":
+            mods_with_author = [m for m in mods if (m.info.author or "").strip()]
+            mods_without_author = [m for m in mods if not (m.info.author or "").strip()]
+            mods_with_author = sorted(
+                mods_with_author,
+                key=lambda m: (
+                    self._sort_text_key((m.info.author or "").strip()),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            mods = mods_with_author + mods_without_author
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "author_desc":
+            mods_with_author = [m for m in mods if (m.info.author or "").strip()]
+            mods_without_author = [m for m in mods if not (m.info.author or "").strip()]
+            mods_with_author = sorted(
+                mods_with_author,
+                key=lambda m: (
+                    self._sort_text_key((m.info.author or "").strip()),
+                    self._sort_text_key(m.display_name),
+                ),
+                reverse=True,
+            )
+            mods = mods_with_author + mods_without_author
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
+        elif self._sort_key == "status_desc":
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    0 if m.is_enabled else 1,
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "age_asc":
+            rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    rating_rank.get(m.info.age_rating.value, 999),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "age_desc":
+            rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    -rating_rank.get(m.info.age_rating.value, -1),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        return cats, mods
+
+    def _on_card_scale_changed(self, value: int) -> None:
+        """即时调整卡片容器与布局，非拖动输入通过定时器延后完成图片缩放。"""
+        self._card_scale = value
+        if self._view_mode == "grid" and not self._mods_loading:
+            self._begin_card_scale()
+            # 即时轻量更新（仅容器尺寸+布局，不缩放图片）
+            self._apply_card_scale_fast()
+            # 键盘和滚轮调整不会发出滑块释放信号。
+            if not self._card_size_slider.isSliderDown():
+                self._scale_timer.start()
+
+    def _begin_card_scale(self) -> None:
+        """进入卡片缩放手势状态，停止出现效果和预取，并通知边缘效果进入尺寸调整模式。"""
+        self._scale_timer.stop()
+        if self._card_scale_active or self._view_mode != "grid" or self._mods_loading:
+            return
+        self._card_scale_active = True
+        self._cancel_directory_intro()
+        self._vs_invalidate_prefetch()
+        self._scroll_edge_fade.set_resizing(True)
+
+    def _end_card_scale(self) -> None:
+        """结束缩放并按需保存比例，统一卡片尺寸、作废不匹配的预览，再安排视口更新。"""
+        self._scale_timer.stop()
+        if not self._card_scale_active:
+            return
+        self._card_scale_active = False
+        self._scroll_edge_fade.set_resizing(False, deferred=True)
+        from src.core.config import Config as _Cfg
+
+        if _Cfg.instance().get("ui.overview_card_scale") != self._card_scale:
+            _Cfg.instance().set("ui.overview_card_scale", int(self._card_scale))
+        for card in self._vs_card_cache.values():
+            changed = card._card_width != self._vs_card_w or card._card_height != self._vs_card_h
+            if isinstance(card, CharacterCard):
+                card.resize_card(self._vs_card_w, self._vs_card_h, defer_preview=True)
+            else:
+                card.resize_card_fast(self._vs_card_w, self._vs_card_h)
+            if changed and card._cached_pixmap is not None:
+                card._preview_resolved = False
+        self._vs_window = None
+        # 隐藏或切换范围也可能结束手势，加载和关闭会停止调度，普通显示可恢复。
+        self._vs_scroll_timer.start()
+
+    def _apply_card_scale_fast(self) -> None:
+        """即时轻量卡片缩放 — 更新虚拟滚动布局参数并重定位可见卡片"""
+        if self._mods_loading or self._view_mode != "grid" or not self._display_items:
+            return
+        scaled_w = int(CharacterCard.CARD_WIDTH * self._card_scale / 100)
+        scaled_h = int(CharacterCard.CARD_HEIGHT * self._card_scale / 100)
+        avail_w = (
+            self._main_splitter.widget(0).width() if self._main_splitter.widget(0).width() > 100 else self.width() - 48
+        )
+        cols = max(1, (avail_w - 48) // (scaled_w + 12))
+
+        # 更新虚拟滚动布局参数
+        self._vs_card_w = scaled_w
+        self._vs_card_h = scaled_h
+        self._vs_row_h = scaled_h + 12
+        self._vs_cols = cols
+        self._vs_total_rows = (len(self._display_items) + cols - 1) // cols
+        total_h = self._vs_total_rows * self._vs_row_h + 12
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+        self._last_cards_per_row = cols
+
+        # 调整已缓存卡片的尺寸并重新定位
+        spacing = 12
+        x_pad = 6
+        self._scroll_content.setUpdatesEnabled(False)
+        for item_id, card in self._vs_card_cache.items():
+            changed = card._card_width != scaled_w or card._card_height != scaled_h
+            if self._card_scale_active:
+                # 手势期间缩放已有表面，仅更新外部边界，结束时统一更新字体、标签和子控件尺寸。
+                card.setFixedSize(scaled_w, scaled_h)
+            elif isinstance(card, CharacterCard):
+                card.resize_card(scaled_w, scaled_h, defer_preview=True)
+            elif isinstance(card, ModCard):
+                card.resize_card_fast(scaled_w, scaled_h)
+            if not self._card_scale_active and changed and card._cached_pixmap is not None:
+                card._preview_resolved = False
+            idx = self._display_idx_map.get(item_id, -1)
+            if idx >= 0:
+                row = idx // cols
+                col = idx % cols
+                card.move(x_pad + col * (scaled_w + spacing), spacing // 2 + row * self._vs_row_h)
+        self._scroll_content.setUpdatesEnabled(True)
+        self._scroll_content.update()
+
+        # 缩放后可能需要创建/回收卡片
+        self._vs_update_visible()
+
+    def _apply_card_scale_pixmaps(self) -> None:
+        """最终模糊和裁剪仍在有界后台预览队列执行。"""
+        if self._card_size_slider.isSliderDown():
+            return
+        self._end_card_scale()
+        from src.core.config import Config as _Cfg
+
+        if _Cfg.instance().get("ui.overview_card_scale") != self._card_scale:
+            _Cfg.instance().set("ui.overview_card_scale", int(self._card_scale))
+        if self._mods_loading or self._view_mode != "grid" or not self._vs_card_cache:
+            return
+        for card in self._vs_card_cache.values():
+            self._vs_restore_preview(card)
+        self._vs_update_visible()
