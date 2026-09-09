@@ -695,5 +695,78 @@
         "label": "Clear regenerable disk caches here; this is not the action for deleting original Mods."
       }
     ]
+  },
+  {
+    "file": "28-整窗背景.webp",
+    "title": "Window background · Choose a source",
+    "marks": [
+      {
+        "target": "整窗背景",
+        "class": "_SectionButton",
+        "label": "Open Settings → Personalization → Window background."
+      },
+      {
+        "box": [
+          753,
+          167,
+          222,
+          34
+        ],
+        "label": "Choose Close (off), Image, Video or WE scene, then supply the media or application path for that type."
+      }
+    ]
+  },
+  {
+    "file": "29-在线详情.webp",
+    "title": "Online details · Read the description and choose a file",
+    "marks": [
+      {
+        "box": [
+          968,
+          80,
+          151,
+          31
+        ],
+        "label": "Read the author's information in Overview and Description first."
+      },
+      {
+        "box": [
+          968,
+          649,
+          398,
+          97
+        ],
+        "label": "Check filenames and sizes. Different files may be versions or optional extras."
+      },
+      {
+        "box": [
+          1385,
+          658,
+          40,
+          35
+        ],
+        "label": "Click the download button beside the file you want, then choose its installation destination."
+      }
+    ]
+  },
+  {
+    "file": "30-新建类别入口.webp",
+    "title": "Create a category ① · Open the creation dialog",
+    "marks": [
+      {
+        "box": [
+          9,
+          55,
+          140,
+          39
+        ],
+        "label": "Activate a game, then open Category Overview on the left."
+      },
+      {
+        "target": "+ 新建类别",
+        "class": "QPushButton",
+        "label": "On an empty page, click + New Category. With existing content, right-click a blank area and choose New Category."
+      }
+    ]
   }
 ]
