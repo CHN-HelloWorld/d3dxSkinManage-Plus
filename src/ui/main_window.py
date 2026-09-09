@@ -6599,3 +6599,392 @@ class MainWindow(QMainWindow):
         if dialog is not None:
             dialog.setRange(0, 0)
             dialog.setLabelText(label)
+
+    @_invalidates_library_probe
+    def _finish_preset_apply_success(self, plan, completed) -> None:
+        """提交预设数据库状态，失败时回滚文件操作；提交成功后执行不可取消的同步阶段。"""
+        preparation = self._preset_preparation
+        dialog = self._preset_apply_progress
+        if dialog is not None:
+            dialog.show_phase("finalize", tr("正在提交预设状态…"))
+            dialog.setCancelButton(None)
+        try:
+            affected = self._mod_manager.preset_manager.commit_preset_apply(plan, completed, preparation=preparation)
+        except Exception as exc:
+            self._rollback_preset_apply(plan, completed, exc)
+            return
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        if dialog is not None:
+            dialog.setLabelText(tr("预设已提交，正在完成同步…"))
+        worker = DeploymentPhaseWorker(lambda: preparation.after_commit(plan), self)
+        worker._must_finish = True
+        self._set_preset_worker(worker, lambda w: self._finish_preset_publication(w, plan, affected))
+
+    def _finish_preset_publication(self, worker, plan, affected) -> None:
+        """发布已提交预设的引用和界面状态，清理切换资源后调用仍有效的后续操作。"""
+        follow_up = getattr(self, "_preset_apply_completed", None) if not self._preset_apply_cancelled else None
+        try:
+            # 数据库已经提交，后续界面或同步错误不能触发回滚。
+            if worker.error is not None:
+                logger.warning("预设已提交，后续同步失败：%s", worker.error)
+            preparation = self._preset_preparation
+            preparation.publish_ini_refs(self._mod_manager, plan)
+            self._mod_manager.preset_manager.finish_prepared_apply(plan, affected, preparation)
+            if self._preset_apply_progress is not None:
+                self._preset_apply_progress.setRange(0, 1000)
+                self._preset_apply_progress.setValue(1000)
+            target = self._mod_manager.preset_manager.get_preset(plan.to_preset_id)
+            self._toast_done(tr("已切换到「{name}」", name=target.display_name) if target else tr("预设已切换"))
+        finally:
+            self._clear_preset_apply_ui()
+        if follow_up is not None:
+            follow_up()
+
+    def _rollback_preset_apply(self, plan, completed, error) -> None:
+        """启动必须完成的后台回滚阶段，并在结束后统一报告原始错误和恢复结果。"""
+        from src.core.preset_apply_service import PresetApplyError
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        if self._preset_apply_progress is not None:
+            self._preset_apply_progress.show_rollback()
+        worker = DeploymentPhaseWorker(lambda: self._preset_preparation.rollback(plan, completed), self)
+        worker._must_finish = True
+
+        def finished(w):
+            """合并原始失败原因与回滚异常，再交给预设失败流程保存恢复状态。"""
+            errors = (str(w.error),) if w.error else w.result
+            wrapped = PresetApplyError(str(error), completed=completed, rollback_errors=errors)
+            self._finish_preset_apply_failure(plan, wrapped)
+
+        self._set_preset_worker(worker, finished)
+
+    @_invalidates_library_probe
+    def _finish_preset_apply_failure(self, plan, error) -> None:
+        """记录切换失败与恢复状态，释放界面资源，并按取消和回滚结果决定是否提示。"""
+        details = str(error)
+        rollback_errors = getattr(error, "rollback_errors", ())
+        try:
+            if plan is not None:
+                preparation = getattr(self, "_preset_preparation", None)
+                self._mod_manager.preset_manager.fail_preset_apply(plan, error, preparation=preparation)
+                if preparation is not None:
+                    preparation.publish_ini_refs(self._mod_manager, plan, notify_variants=False)
+        except Exception as failure:
+            logger.exception("预设失败状态保存异常")
+            details += tr("\n\n保存恢复状态失败：{failure}", failure=failure)
+        finally:
+            self._clear_preset_apply_ui()
+        if rollback_errors:
+            details += tr("\n\n回滚未完成：\n") + "\n".join(rollback_errors)
+        if not getattr(self, "_preset_apply_cancelled", False) or rollback_errors:
+            from src.core.operation_preflight import OperationPreflightError
+
+            cause = error
+            while cause is not None and not isinstance(cause, OperationPreflightError):
+                cause = cause.__cause__
+            if isinstance(cause, OperationPreflightError):
+                self._mod_manager.report_operation_failure(cause)
+            else:
+                QMessageBox.critical(self, tr("预设切换失败"), details)
+
+    @_invalidates_library_probe
+    def _clear_preset_apply_ui(self) -> None:
+        """工作线程停止后释放预设操作保护及进度窗口，恢复选择控件和延后任务。"""
+        worker = self._preset_apply_worker
+        if worker is not None and worker.isRunning():
+            return
+        self._mod_manager.release_library_operation("preset-apply")
+        if self._preset_apply_progress is not None:
+            try:
+                self._preset_apply_progress.canceled.disconnect(self._cancel_preset_apply)
+            except TypeError:
+                pass
+            self._preset_apply_progress.hide()
+            self._preset_apply_progress.deleteLater()
+        self._preset_apply_progress = None
+        self._preset_apply_worker = None
+        self._preset_apply_preparing = False
+        self._preset_apply_token = None
+        self._preset_apply_game_id = ""
+        self._preset_apply_plan = None
+        self._preset_preparation = None
+        self._preset_apply_completed = None
+        if worker is not None:
+            worker.deleteLater()
+        selector = getattr(self._overview_page, "_preset_selector", None)
+        if selector is not None:
+            selector.setEnabled(True)
+        self._game_page.setEnabled(True)
+        resume = getattr(self, "_resume_deferred_library_environment", None)
+        if resume is not None:
+            resume()
+
+    def _stop_preset_apply(self, timeout_ms=5000) -> bool:
+        """关闭事件无法投递排队信号时，仍处理已完成的工作步骤。"""
+        self._cancel_preset_apply()
+        deadline = time.monotonic() + timeout_ms / 1000
+        while self._preset_apply_worker is not None:
+            worker = self._preset_apply_worker
+            request = getattr(worker, "pending_patch", None)
+            if request is not None:
+                self._persist_preset_patch(worker, request)
+            remaining = max(0, int((deadline - time.monotonic()) * 1000))
+            if not worker.wait(min(50, remaining)):
+                if time.monotonic() >= deadline:
+                    return False
+                continue
+            self._consume_preset_worker(worker)
+        self._clear_preset_apply_ui()
+        return True
+
+    @_invalidates_library_probe
+    def _on_preset_applied(self, _affected_ids: list) -> None:
+        """发布已提交差异，文件监控另行对账。"""
+        self._refresh_preset_combo()
+        mods = [mod for mid in _affected_ids if (mod := self._mod_manager.get_mod(mid)) is not None]
+        self._overview_page.update_mods_in_place(mods)
+        chars = self._mod_manager.get_characters_for_ui(self._game_service.current_game_id)
+        self._overview_page.set_characters(chars, refresh=False)
+        if self._stack.currentIndex() == self.PAGE_GALLERY and hasattr(self._gallery_page, "refresh_from_index"):
+            self._gallery_page.refresh_from_index()
+
+    @_invalidates_library_probe
+    def _on_preset_rename(self, preset_id: str, new_name: str) -> None:
+        """内联重命名提交"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        pm = self._mod_manager.preset_manager
+        if not new_name.strip():
+            QMessageBox.warning(self, tr("提示"), tr("名称不能为空"))
+            return
+        if not pm.update_preset_meta(preset_id, name=new_name):
+            QMessageBox.warning(self, tr("提示"), tr("此预设已不存在，请刷新后重试"))
+        # preset_list_changed 信号会触发刷新
+
+    @_invalidates_library_probe
+    def _on_preset_create(self) -> None:
+        """新建预设 → 默认名 + 立即进入重命名模式
+
+        新预设是**空预设**（character_mods={}），不继承任何状态。
+        - 切换到新预设：全部 Mod 被关闭
+        - 在新预设下启用 Mod：自动写入新预设
+        - 若想复制现有状态：选中预设后 Ctrl+C / Ctrl+V
+        """
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        gid = self._game_service.current_game_id
+        pm = self._mod_manager.preset_manager
+        base_name = pm.generate_unique_name(gid, tr("新建预设"))
+        try:
+            new_p = pm.create_preset(gid, base_name)
+        except ValueError as e:
+            QMessageBox.warning(self, tr("提示"), str(e))
+            return
+        # preset_list_changed 已经触发常规刷新；这里再调一次带 rename_id 的刷新让选择器进入编辑模式
+        self._refresh_preset_combo(rename_id=new_p.id)
+
+    @_invalidates_library_probe
+    def _on_preset_delete_batch(self, preset_ids: list) -> None:
+        """确认显式选择后异步切换并删除。"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        if not preset_ids:
+            return
+        gid = self._game_service.current_game_id
+        if self._preset_apply_worker is not None:
+            return
+        pm = self._mod_manager.preset_manager
+        deletable = [
+            preset
+            for pid in dict.fromkeys(preset_ids)
+            if (preset := pm.get_preset(pid)) is not None and preset.game_id == gid and not preset.is_default
+        ]
+        if not deletable:
+            QMessageBox.warning(self, tr("提示"), tr("默认预设不可删除"))
+            return
+        from src.ui.dialogs.preset_progress import confirm_preset_delete
+
+        cur_id = pm.get_current(gid).id
+        if not confirm_preset_delete(self, deletable, cur_id):
+            return
+        if (
+            gid != self._game_service.current_game_id
+            or _plugin_operation_busy(self)
+            or _deployment_operation_busy(self)
+        ):
+            return
+        ids = [preset.id for preset in deletable]
+        if cur_id in ids:
+            default = pm.ensure_default(gid)
+            self._on_preset_apply(default.id, after_success=lambda: self._start_preset_delete(ids, gid))
+        else:
+            self._start_preset_delete(ids, gid)
+
+    def _start_preset_delete(self, preset_ids, game_id):
+        """为当前游戏建立预设删除进度，锁定游戏与预设选择，再延后启动准备阶段。"""
+        if game_id != self._game_service.current_game_id:
+            return
+        from src.ui.dialogs.preset_progress import PresetProgressDialog
+
+        pm = self._mod_manager.preset_manager
+        names = [preset.name for pid in preset_ids if (preset := pm.get_preset(pid)) is not None]
+        dialog = PresetProgressDialog(
+            names[0] if len(names) == 1 else tr("{count} 个预设", count=len(names)), self, deleting=True
+        )
+        self._preset_delete_progress = dialog
+        self._preset_delete_game_id = game_id
+        self._preset_delete_candidate = None
+        self._preset_delete_worker = None
+        self._preset_delete_preparing = True
+        self._preset_delete_cancelled = False
+        self._overview_page._preset_selector.setEnabled(False)
+        self._game_page.setEnabled(False)
+        dialog.canceled.connect(self._cancel_preset_delete)
+        dialog.show()
+        call_later(0, self, lambda: self._begin_preset_delete(preset_ids, game_id))
+
+    def _begin_preset_delete(self, preset_ids, game_id):
+        """准备预设删除候选并保护相关库路径，在后台写入待提交的预设变更。"""
+        if self._preset_delete_cancelled:
+            self._finish_preset_delete()
+            return
+        from src.core.preset_delete import write_prepared_preset_delete
+        from src.ui.preset_deploy_worker import DeploymentPhaseWorker
+
+        try:
+            candidate = self._mod_manager.preset_manager.prepare_delete_presets(preset_ids, game_id)
+            self._preset_delete_candidate = candidate
+            self._mod_manager.protect_library_operation(
+                "preset-delete",
+                paths=(candidate.target, self._mod_manager._storage.get_deploy_dir()),
+                mod_ids=tuple(record.mod_id for record in candidate.cleanup_records),
+                exclusive=True,
+            )
+            worker = DeploymentPhaseWorker(lambda: write_prepared_preset_delete(candidate), self)
+            self._preset_delete_worker = worker
+            self._preset_delete_preparing = False
+            self._preset_delete_progress.show_phase("deploy", tr("正在保存预设变更…"))
+            worker.finished.connect(self._preset_delete_written)
+            worker.start(QThread.Priority.LowPriority)
+        except Exception as error:
+            self._finish_preset_delete(error)
+
+    def _preset_delete_written(self):
+        """接收当前删除任务的写入结果，提交预设变更后启动不可取消的无用缓存清理。"""
+        worker = self.sender()
+        if worker is not self._preset_delete_worker:
+            return
+        candidate = self._preset_delete_candidate
+        if self._preset_delete_cancelled or worker.error is not None:
+            self._finish_preset_delete(None if self._preset_delete_cancelled else worker.error)
+            return
+        try:
+            self._mod_manager.preset_manager.commit_delete_presets(candidate)
+            self._preset_delete_progress.setCancelButton(None)
+            if not candidate.cleanup_records:
+                self._finish_preset_delete()
+                return
+            from src.ui.preset_deploy_worker import PresetCleanupWorker
+
+            cleanup = PresetCleanupWorker(
+                candidate.cleanup_records, self._mod_manager._storage.get_deploy_dir(), self._mod_manager._storage, self
+            )
+            cleanup._must_finish = True
+            self._preset_delete_worker = cleanup
+            worker.deleteLater()
+            self._preset_delete_progress.show_phase("finalize", tr("正在清理不再使用的缓存…"))
+            cleanup.progress.connect(self._on_preset_delete_progress)
+            cleanup.finished.connect(self._preset_delete_cleanup_finished)
+            cleanup.start(QThread.Priority.LowPriority)
+        except Exception as error:
+            self._finish_preset_delete(error)
+
+    def _on_preset_delete_progress(self, done, total, name):
+        """将预设缓存清理的完成数量和当前项目同步到删除进度窗口。"""
+        dialog = self._preset_delete_progress
+        if dialog is not None:
+            dialog.setRange(0, total)
+            dialog.setValue(done)
+            dialog.progress_label.setText(tr("{done} / {total} 项", done=done, total=total))
+            dialog.setLabelText(tr("清理缓存 · {name}", name=name))
+
+    def _preset_delete_cleanup_finished(self):
+        """发布当前任务已移除的预设部署记录，保留清理失败项并完成删除结算。"""
+        worker = self.sender()
+        if worker is not self._preset_delete_worker:
+            return
+        try:
+            if worker.error is not None:
+                raise worker.error
+            removed, errors = worker.result
+            self._mod_manager.preset_manager.publish_deleted_preset_deployments(removed, self._preset_delete_game_id)
+            if errors:
+                logger.warning("部分预设缓存未清理，将保留到下次清理: %s", errors)
+            self._finish_preset_delete()
+        except Exception as error:
+            self._finish_preset_delete(error)
+
+    def _cancel_preset_delete(self):
+        """仅在预设删除尚未提交时登记取消，并通知候选写入与工作线程停止。"""
+        candidate = getattr(self, "_preset_delete_candidate", None)
+        if candidate is not None and candidate.committed:
+            return
+        self._preset_delete_cancelled = True
+        if candidate is not None:
+            candidate.cancelled.set()
+        worker = getattr(self, "_preset_delete_worker", None)
+        if worker is not None:
+            worker.requestInterruption()
+
+    def _finish_preset_delete(self, error=None):
+        """丢弃未提交候选、释放操作保护和进度窗口，按提交状态提示结果并继续关闭或延后任务。"""
+        from src.core.preset_delete import discard_prepared_preset_delete
+
+        candidate = getattr(self, "_preset_delete_candidate", None)
+        worker = getattr(self, "_preset_delete_worker", None)
+        if candidate is not None and not candidate.committed:
+            discard_prepared_preset_delete(candidate)
+        self._preset_delete_worker = None
+        self._preset_delete_preparing = False
+        if worker is not None:
+            worker.deleteLater()
+        self._mod_manager.release_library_operation("preset-delete")
+        dialog = self._preset_delete_progress
+        self._preset_delete_progress = None
+        dialog.hide()
+        dialog.deleteLater()
+        self._overview_page._preset_selector.setEnabled(True)
+        self._game_page.setEnabled(True)
+        if error is not None:
+            QMessageBox.critical(
+                self,
+                tr("预设删除失败") if not candidate or not candidate.committed else tr("缓存清理未完成"),
+                str(error),
+            )
+        elif candidate is not None and candidate.committed:
+            self._toast_done(tr("已删除 {count} 个预设", count=len(candidate.removed_presets)))
+        self._preset_delete_candidate = None
+        if getattr(self, "_preset_delete_close_pending", False):
+            self._preset_delete_close_pending = False
+            call_later(0, self, self.close)
+        else:
+            self._resume_deferred_library_environment()
+
+    @_invalidates_library_probe
+    def _on_preset_duplicate_batch(self, preset_ids: list) -> None:
+        """Ctrl+V 粘贴：为每个 id 复制一份，命名带 copy 后缀避免冲突"""
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+        gid = self._game_service.current_game_id
+        pm = self._mod_manager.preset_manager
+        for src_id in preset_ids:
+            src = pm.get_preset(src_id)
+            if not src:
+                continue
+            new_name = pm.generate_unique_name(gid, src.display_name + tr(" 副本"))
+            try:
+                # copied_from 让运行时变体偏好把源预设下各 Mod 的变体状态一并复制过去
+                pm.create_preset(gid, new_name, snapshot=src.character_mods, copied_from=src.id)
+            except ValueError as e:
+                logger.warning("复制预设失败 %s: %s", src_id, e)
