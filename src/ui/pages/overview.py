@@ -6573,3 +6573,161 @@ class OverviewPage(QWidget):
         if self._directory_intro_pending or not restore:
             self._reveal_table_rows(len(self._display_items))
         self._directory_intro_pending = False
+
+    def _rebuild_table(self, filter_text: str) -> None:
+        """立即建立行身份与选择映射，其余单元格按需填充，再同步有效选择、空状态和列宽。"""
+        filtered_cats, filtered_mods = self._filtered_content(filter_text)
+
+        # 重建 display_items
+        category_items = [{"id": cat.get("id", ""), "type": "category", "data": cat} for cat in filtered_cats]
+        mod_items = [{"id": mod.mod_id, "type": "mod", "data": mod} for mod in filtered_mods]
+        self._display_items = (
+            mod_items + category_items if self._sort_key == "status_desc" else category_items + mod_items
+        )
+        self._display_idx_map = {item["id"]: i for i, item in enumerate(self._display_items)}
+
+        total_rows = len(self._display_items)
+        selection_blocker = QSignalBlocker(self._table)
+        self._table.clearContents()
+        self._table.setRowCount(total_rows)
+        self._table.verticalHeader().setDefaultSectionSize(52)
+        # 仅分类行覆盖默认尺寸，不为重置高度重建全部行或改变滚动范围。
+        for row in getattr(self, "_table_category_rows", ()):
+            if row < total_rows:
+                self._table.setRowHeight(row, 52)
+        self._table_category_rows = []
+        for row in range(min(total_rows, 24)):
+            if self._table.isRowHidden(row):
+                self._table.setRowHidden(row, False)
+        entries = self._display_items
+        category_template = QTableWidgetItem(icons.get_icon("meta/category"), tr("类别"))
+        category_template.setData(Qt.ItemDataRole.UserRole + 1, "category")
+        mod_templates = {}
+        for enabled in (False, True):
+            template = QTableWidgetItem(icons.get_icon("actions/mod"), "Mod")
+            template.setData(Qt.ItemDataRole.UserRole + 1, "mod")
+            template.setData(ModListTable.ROLE_ENABLED, enabled)
+            mod_templates[enabled] = template
+        # 所有身份立即可供选择和快捷键使用，其余单元格按需填充。
+        for i, item in enumerate(entries):
+            is_mod = item["type"] == "mod"
+            template = mod_templates[bool(item["data"].is_enabled)] if is_mod else category_template
+            type_item = QTableWidgetItem(template)
+            type_item.setData(Qt.ItemDataRole.UserRole, item["id"])
+            if is_mod:
+                self._table._mod_rows[item["id"]] = i
+            self._table.setItem(i, 0, type_item)
+            if not is_mod:
+                self._table.setRowHeight(i, 32)
+                self._table_category_rows.append(i)
+
+        def populate_row(i: int) -> None:
+            """按分类或 Mod 类型填充指定行的名称、作者、分级、标签和状态信息。"""
+            item = entries[i]
+            if item["type"] == "category":
+                cat = item["data"]
+                self._table.setItem(i, 1, QTableWidgetItem(cat.get("name", tr("未知"))))
+                name_en = cat.get("name_en", "")
+                name_item = QTableWidgetItem(name_en)
+                name_item.setToolTip(name_en)
+                self._table.setItem(i, 2, name_item)
+                count = cat.get("mod_count", 0)
+                enabled = cat.get("enabled_count", 0)
+                self._table.setItem(i, 3, QTableWidgetItem("-"))
+                self._table.setItem(i, 4, QTableWidgetItem(f"{enabled} / {count}"))
+            else:
+                mod = item["data"]
+                self._set_table_mod_name(i, mod)
+                author = mod.info.author or ""
+                author_item = QTableWidgetItem(author)
+                author_item.setToolTip(author)
+                self._table.setItem(i, 2, author_item)
+                self._table.setItem(i, 3, QTableWidgetItem(_age_rating_text(mod.info.age_rating)))
+                self._set_table_mod_status(i, mod)
+
+        self._table.set_row_factory(populate_row)
+
+        self._prune_selection()
+        previous_selection = self._selected_ids.copy()
+        self._selected_ids.intersection_update(item["id"] for item in self._display_items)
+        self._sync_table_selection_visual()
+        selection_blocker.unblock()
+        # 尺寸/后台刷新不应重做选择时的预览展开；只有实际选区改变才更新面板。
+        if self._selected_ids != previous_selection:
+            self._on_table_selection_changed()
+        else:
+            self._update_card_selection()
+        self._update_filter_empty(bool(self._display_items), filter_text)
+        self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+
+        # 更新状态栏
+        self._update_status_bar_selection()
+
+    def _reveal_table_rows(self, total_rows: int) -> None:
+        """按当前视口逐行揭示，保持行高、选择和恢复的滚动位置不变。"""
+        if total_rows > 0:
+            self._table.reveal_visible_rows()
+
+    def _apply_overview_column_widths(self, force_ratio: bool = False, preferred_col: int = 1) -> None:
+        """按比例或手动宽度补足视口，自动模式下按优先顺序收缩至各列下限，并防止递归调整。"""
+        if self._overview_header_dragging:
+            return
+        if self._overview_syncing_widths:
+            return
+        self._overview_syncing_widths = True
+        try:
+            viewport_w = max(520, self._table.viewport().width())
+            if force_ratio:
+                used = 0
+                for idx in range(4):
+                    w = max(self._overview_col_min_widths[idx], int(viewport_w * self._overview_col_ratios[idx]))
+                    self._table.setColumnWidth(idx, w)
+                    used += w
+                self._table.setColumnWidth(4, max(self._overview_col_min_widths[4], viewport_w - used))
+
+            widths = [self._table.columnWidth(i) for i in range(5)]
+            total_w = sum(widths)
+            if total_w < viewport_w:
+                target_col = preferred_col if 0 <= preferred_col < 5 else 1
+                self._table.setColumnWidth(target_col, widths[target_col] + (viewport_w - total_w))
+                return
+
+            if not force_ratio:
+                # 用户已手动调整列宽，不强制收缩，让水平滚动条自然出现
+                return
+
+            overflow = total_w - viewport_w
+            shrink_order = [1, 2, 4, 3, 0]
+            if 0 <= preferred_col < 5 and preferred_col in shrink_order:
+                shrink_order = [idx for idx in shrink_order if idx != preferred_col] + [preferred_col]
+
+            for idx in shrink_order:
+                if overflow <= 0:
+                    break
+                cur = self._table.columnWidth(idx)
+                min_w = self._overview_col_min_widths[idx]
+                can_shrink = max(0, cur - min_w)
+                if can_shrink <= 0:
+                    continue
+                cut = min(overflow, can_shrink)
+                self._table.setColumnWidth(idx, cur - cut)
+                overflow -= cut
+        finally:
+            self._overview_syncing_widths = False
+
+    def _on_overview_header_section_resized(self, logical_index: int, old_size: int, new_size: int) -> None:
+        """非内部同步且列宽实际变化时记录手动调整状态，使后续布局保留用户列宽。"""
+        if self._overview_syncing_widths:
+            return
+        if old_size == new_size:
+            return
+        self._overview_user_resized = True
+
+    def _on_table_selection_changed(self) -> None:
+        """鼠标、方向键和全选共用 Qt 选区，剪切/删除目标始终与行高亮一致。"""
+        selected = self._table.selectionModel().selectedRows()
+        self._selected_ids = {index.data(Qt.ItemDataRole.UserRole) for index in selected}
+        self._update_card_selection()
+        if len(selected) == 1:
+            self._last_clicked_index = selected[0].row()
+        self._show_selection_panel()
