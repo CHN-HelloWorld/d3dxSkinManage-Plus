@@ -6444,3 +6444,132 @@ class OverviewPage(QWidget):
                 for r in results:
                     r["parent_id"] = self._current_parent_id
                 self.character_batch_add_requested.emit(results)
+
+    def _on_batch_disable(self) -> None:
+        """批量禁用当前目录及所有子目录下已启用的Mod"""
+        if self._enabled_mod_ids_loader is not None:
+            try:
+                mod_ids = list(self._enabled_mod_ids_loader(self._current_parent_id))
+            except Exception:
+                logger.exception("Failed to read enabled Mods for the current directory")
+                QMessageBox.warning(self, tr("读取失败"), tr("无法读取当前目录的启用状态，请刷新后重试。"))
+                return
+        else:
+            mod_ids = [mod.mod_id for mod in self._subtree_mods if mod.is_enabled]
+        if not mod_ids:
+            QMessageBox.information(self, tr("提示"), tr("当前目录下没有已启用的Mod。"))
+            return
+
+        reply = QMessageBox.question(
+            self,
+            tr("确认批量禁用"),
+            tr("确定禁用当前目录及子目录下的 {count} 个已启用Mod？", count=len(mod_ids)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.batch_disable_requested.emit(mod_ids)
+
+    def resizeEvent(self, event):
+        """非加载状态下调整列表列宽，卡片模式则合并安排延后的布局刷新。"""
+        super().resizeEvent(event)
+        if self._mods_loading:
+            return
+        if self._view_mode == "list" and not self._overview_header_dragging:
+            self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+        if (self._characters or self._current_mods) and self._view_mode == "grid":
+            self._resize_timer.start()
+
+    def _deferred_refresh(self) -> None:
+        """窗口/分割线大小变化时的延迟刷新 — 利用虚拟滚动重排"""
+        if self._mods_loading:
+            return
+        if self._view_mode == "grid":
+            if self._display_items:
+                # 已有数据时只重算列数并重定位
+                self._vs_relayout()
+            else:
+                self._refresh_cards(self._search_input.text().strip())
+        else:
+            # 状态控件可能改变分隔布局，已有记录仍有效，不重建表格。
+            self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+
+    def _vs_relayout(self) -> None:
+        """窗口/分割线变化后重排活动卡片，回收新窗口外的旧绑定。"""
+        if self._mods_loading:
+            return
+        scaled_w = self._vs_card_w
+        avail_w = (
+            self._main_splitter.widget(0).width() if self._main_splitter.widget(0).width() > 100 else self.width() - 48
+        )
+        new_cols = max(1, (avail_w - 48) // (scaled_w + 12))
+        if new_cols == self._vs_cols:
+            self._vs_update_visible()  # 高度增长也需要补齐新增可见行。
+            return
+        self._vs_cols = new_cols
+        self._last_cards_per_row = new_cols
+        self._vs_total_rows = (len(self._display_items) + new_cols - 1) // new_cols
+        total_h = self._vs_total_rows * self._vs_row_h + 12
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+
+        # 保留当前绑定的重排动画；移出新窗口的卡片先隐藏再供新行复用。
+        self._reflowing = True
+        try:
+            self._vs_update_visible()
+        finally:
+            self._reflowing = False
+
+    def _set_view(self, mode: str) -> None:
+        """保存切换目标和离开位置并持久化布局模式，加载中保留现有控件，空闲时切换对应视图。"""
+        self._end_card_scale()
+        self._cancel_directory_intro()
+        if mode not in ("grid", "list"):
+            mode = "grid"
+        self._request_view_position(mode=mode)
+        self._view_mode = mode
+        self._directory_intro_pending = anim.is_enabled()
+        # 记忆视图模式，下次启动恢复（与卡片缩放滑块的持久化对称）。
+        try:
+            from src.core.config import Config as _Cfg
+
+            _Cfg.instance().set("ui.overview_view_mode", mode)
+        except Exception:
+            pass
+        idx = self._view_combo.findData(mode)
+        if idx >= 0 and self._view_combo.currentIndex() != idx:
+            self._view_combo.blockSignals(True)
+            self._view_combo.setCurrentIndex(idx)
+            self._view_combo.blockSignals(False)
+        if self._mods_loading:
+            return  # 使用当前显示的控件，另一布局可能尚未更新。
+        # 卡片大小滑动条仅卡片视图可见
+        self._card_size_slider.setVisible(mode == "grid")
+        self._card_size_label.setVisible(mode == "grid")
+        if mode == "grid":
+            self._scroll_area.setVisible(True)
+            self._table.setVisible(False)
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            self._scroll_area.setVisible(False)
+            self._refresh_table(self._search_input.text().strip())
+
+    def _refresh_table(self, filter_text: str = "") -> None:
+        """刷新列表视图 - 混合显示类别和 Mod"""
+        if self._mods_loading:
+            return
+        view, position = self._prepare_view_position(filter_text)
+        restore = self._pending_view is not None or position != 0
+        self._table_reveal_gen = getattr(self, "_table_reveal_gen", 0) + 1
+        previous_syncing = self._table._syncing_rows
+        self._table._syncing_rows = True
+        self._applying_position = True
+        try:
+            self._rebuild_table(filter_text)
+            self._commit_view_position(view, position if self._display_items else 0)
+        finally:
+            self._applying_position = False
+            self._table._syncing_rows = previous_syncing
+        self._table._sync_visible_rows()
+        if self._directory_intro_pending or not restore:
+            self._reveal_table_rows(len(self._display_items))
+        self._directory_intro_pending = False
