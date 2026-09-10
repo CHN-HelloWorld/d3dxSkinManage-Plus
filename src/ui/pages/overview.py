@@ -6731,3 +6731,168 @@ class OverviewPage(QWidget):
         if len(selected) == 1:
             self._last_clicked_index = selected[0].row()
         self._show_selection_panel()
+
+    def _on_table_double_clicked(self, row: int, col: int) -> None:
+        """列表双击 → 类别=进入，Mod=切换"""
+        item = self._table.item(row, 0)
+        if not item:
+            return
+        item_id = item.data(Qt.ItemDataRole.UserRole)
+        item_type = item.data(Qt.ItemDataRole.UserRole + 1) or "category"
+        if item_type == "category":
+            self._navigate_to(item_id)
+        elif item_id not in self._deploying_frac:
+            self.mod_toggle_requested.emit(item_id)
+
+    def _show_table_context_menu(self, pos) -> None:
+        """按命中行与多选范围构建分类或 Mod 菜单，分发导航、剪贴板、启用、编辑、导出和删除请求。"""
+        item = self._table.itemAt(pos)
+        if not item:
+            self._show_empty_area_context_menu(self._table.viewport().mapToGlobal(pos))
+            return
+        row = item.row()
+        type_item = self._table.item(row, 0)
+        if not type_item:
+            return
+        item_id = type_item.data(Qt.ItemDataRole.UserRole)
+        item_type = type_item.data(Qt.ItemDataRole.UserRole + 1) or "category"
+
+        # 右键未选中行时先选中它（同步行高亮）
+        self._select_for_context_menu(item_id)
+        multi = len(self._selected_ids) > 1 and item_id in self._selected_ids
+        del_label = tr("删除选中的 {count} 项", count=len(self._selected_ids)) if multi else t("删除")
+
+        menu = QMenu(self)
+        if item_type == "category":
+            self._add_item_clipboard_actions(menu)
+            menu.addSeparator()
+            enter_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("进入"))
+            menu.addSeparator()
+            open_dir_act = menu.addAction(icons.get_icon("actions/folder"), tr("打开源目录"))
+            online_act = menu.addAction(icons.get_icon("actions/search", "success"), tr("在线查找"))
+            menu.addSeparator()
+            edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+            export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+            delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
+            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            if action == enter_act:
+                self._navigate_to(item_id)
+            elif action == open_dir_act:
+                self._open_category_folder(item_id)
+            elif action == online_act:
+                self._online_search_by_cat_id(item_id)
+            elif action == edit_act:
+                self._on_edit_character(item_id)
+            elif action == export_act:
+                self._export_from_context(item_id, is_mod=False)
+            elif action == delete_act:
+                if multi:
+                    self._delete_selected()
+                else:
+                    self.character_delete_requested.emit(item_id)
+        else:
+            # 获取Mod对象以确定启用/禁用状态
+            self._add_item_clipboard_actions(menu)
+            menu.addSeparator()
+            mod = self._mod_by_id(item_id)
+            toggle_label = tr("禁用") if (mod and mod.is_enabled) else tr("启用")
+            toggle_act = menu.addAction(
+                icons.get_icon("status/disabled" if (mod and mod.is_enabled) else "status/enabled"), toggle_label
+            )
+            if item_id in self._deploying_frac:
+                toggle_act.setText(tr("正在启用…"))
+                toggle_act.setEnabled(False)
+            edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+            open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+            export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+            menu.addSeparator()
+            delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
+            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            if action == toggle_act:
+                self.mod_toggle_requested.emit(item_id)
+            elif action == edit_act:
+                self.mod_edit_requested.emit(item_id)
+            elif action == open_folder_act:
+                self._open_mod_folder(item_id)
+            elif action == export_act:
+                self._export_from_context(item_id, is_mod=True)
+            elif action == delete_act:
+                if multi:
+                    self._delete_selected()
+                else:
+                    self.mod_delete_requested.emit(item_id)
+
+    def _add_item_clipboard_actions(self, menu: QMenu, *, include_cut: bool = True) -> None:
+        """各项目菜单共用键盘剪贴板操作。"""
+        if include_cut:
+            cut = menu.addAction(icons.get_icon("actions/cut"), tr("剪切"))
+            cut.setEnabled(bool(self._selected_ids))
+            cut.triggered.connect(self._cut_selected)
+        paste = menu.addAction(icons.get_icon("actions/paste"), tr("粘贴"))
+        paste.setEnabled(
+            bool(self._clipboard_cat_ids or self._clipboard_mod_ids)
+            and self._clipboard_source_parent != self._current_parent_id
+        )
+        paste.setToolTip(tr("将剪切的项目移动到当前目录"))
+        paste.triggered.connect(self._paste_items)
+
+    def _show_empty_area_context_menu(self, global_pos) -> None:
+        """空白处右键菜单：返回上一级、导入Mod、新建类别、切换视图"""
+        menu = QMenu(self)
+        at_sub = bool(self._current_parent_id)  # 仅在子层级（非根目录）这两项才可用
+        # 顶层目录下「返回上一级 / 导入 Mod」不可用：除 setEnabled 外，图标也染成 disabled 灰，
+        # 否则只有文字变灰、SVG 图标仍是亮色，视觉上看不出禁用。
+        back_act = menu.addAction(
+            icons.get_icon("actions/up", "text.primary" if at_sub else "text.disabled"), tr("返回上一级")
+        )
+        back_act.setEnabled(at_sub)
+        menu.addSeparator()
+        self._add_item_clipboard_actions(menu, include_cut=False)
+        menu.addSeparator()
+        import_act = menu.addAction(
+            icons.get_icon("actions/import", "text.primary" if at_sub else "text.disabled"), tr("导入 Mod")
+        )
+        import_act.setEnabled(at_sub)
+        add_cat_act = menu.addAction(icons.get_icon("actions/new-folder"), tr("新建类别"))
+        menu.addSeparator()
+        if self._view_mode == "grid":
+            switch_view_act = menu.addAction(icons.get_icon("actions/list-view"), tr("进入列表视图"))
+        else:
+            switch_view_act = menu.addAction(icons.get_icon("actions/card-view"), tr("进入卡片视图"))
+        action = menu.exec(global_pos)
+        if action == back_act:
+            self._navigate_back()
+        elif action == import_act:
+            self.mod_import_requested.emit()
+        elif action == add_cat_act:
+            self._on_add_character()
+        elif action == switch_view_act:
+            if self._view_mode == "grid":
+                self._set_view("list")
+            else:
+                self._set_view("grid")
+
+    def hideEvent(self, event) -> None:
+        """页面隐藏时结束卡片缩放状态并取消目录出现效果。"""
+        self._end_card_scale()
+        self._cancel_directory_intro()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        """确保后台详情/图片线程先退出，再允许页面析构。"""
+        self._end_card_scale()
+        self._invalidate_view_position(clear=True)
+        self._cancel_directory_intro()
+        self._vs_population_timer.stop()
+        self._vs_scroll_timer.stop()
+        self._vs_pixmap_timer.stop()
+        for attr in (
+            "_pixmap_worker",
+            "_panel_preview_worker",
+            "_key_bindings_worker",
+        ):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                worker.stop()
+                worker.wait(1000)
+        super().closeEvent(event)
