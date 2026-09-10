@@ -6896,3 +6896,133 @@ class OverviewPage(QWidget):
                 worker.stop()
                 worker.wait(1000)
         super().closeEvent(event)
+
+    def _navigate_back(self) -> None:
+        """返回上一级目录"""
+        if not self._current_parent_id:
+            return
+        # 找到当前目录的parent_id
+        parent_id = ""
+        for c in self._all_characters:
+            if c["id"] == self._current_parent_id:
+                parent_id = c.get("parent_id") or ""
+                break
+        self._navigate_to(parent_id)
+
+    def _open_mod_folder(self, mod_id: str) -> None:
+        """通过mod_id打开源文件夹"""
+        import os
+        import subprocess
+
+        mod = self._mod_by_id(mod_id)
+        if mod is None:
+            return
+        path = Path(mod.path)
+        if fs.exists(path):
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+
+    def _add_previews_to_mod(self, mod_id: str, paths: list[str]) -> int:
+        """给某个 Mod 追加预览图（走既有 preview_image_dropped 写入磁盘链，最后一张成为主图）。"""
+        added = 0
+        for path in paths:
+            if path and fs.exists(path):
+                self.preview_image_dropped.emit(mod_id, path)
+                added += 1
+        if added:
+            # 新图已被落库提成主图，会话内的「显示第 N 张」记忆必须作废，
+            # 否则视图重建后卡片又切回旧图（串图 bug 的另一面）。
+            self._preview_override_paths.pop(mod_id, None)
+        return added
+
+    def _paste_preview_onto_mod(self, mod_id: str) -> bool:
+        """把剪贴板里的图片贴成该 Mod 的预览图（快捷上图 / 菜单项共用）。"""
+        path = clipboard_image_path()
+        if not path:
+            return False
+        return self._add_previews_to_mod(mod_id, [path]) > 0
+
+    def _browse_previews_for_mod(self, mod_id: str) -> None:
+        """文件对话框选图，追加为该 Mod 的预览图。"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            tr("选择预览图"),
+            "",
+            tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*)"),
+        )
+        if files:
+            self._add_previews_to_mod(mod_id, list(files))
+
+    def _show_mod_card_context_menu(self, card, mod_id: str, pos) -> None:
+        """显示 Mod 卡片的操作菜单。
+
+        右键未选中卡片时先选中，已多选时保留选择以支持批量操作。
+        Ctrl 或 Shift 加右键直接粘贴预览，普通右键显示菜单。
+        上下文菜单信号同步分发，可读取当时的键盘修饰状态。
+        """
+        self._select_for_context_menu(mod_id)
+        quick = QApplication.keyboardModifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        )
+        if quick:
+            self._paste_preview_onto_mod(mod_id)
+            return
+        mod = self._mod_by_id(mod_id)
+        menu = QMenu(self)
+        toggle_label = tr("禁用") if (mod and mod.is_enabled) else tr("启用")
+        toggle_act = menu.addAction(
+            icons.get_icon("status/disabled" if (mod and mod.is_enabled) else "status/enabled"), toggle_label
+        )
+        if mod_id in self._deploying_frac:
+            toggle_act.setText(tr("正在启用…"))
+            toggle_act.setEnabled(False)
+        edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+        open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+        export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+        menu.addSeparator()
+        self._add_item_clipboard_actions(menu)
+        menu.addSeparator()
+        paste_act = menu.addAction(icons.get_icon("actions/image"), tr("粘贴预览图"))
+        paste_act.setEnabled(clipboard_has_image())
+        browse_act = menu.addAction(icons.get_icon("actions/add"), tr("添加预览图"))
+        menu.addSeparator()
+        multi = len(self._selected_ids) > 1 and mod_id in self._selected_ids
+        delete_act = menu.addAction(
+            icons.get_icon("actions/remove"),
+            tr("删除选中的 {count} 项", count=len(self._selected_ids)) if multi else t("删除"),
+        )
+
+        # menus：把插件 mod-context 贡献点追加到菜单末尾
+        from src.ui import plugin_menu
+
+        plugin_actions = plugin_menu.menu_actions("mod-context", mod_id)
+        plugin_act_map = {}
+        if plugin_actions:
+            menu.addSeparator()
+            for _title, _cb in plugin_actions:
+                _a = menu.addAction(_title)
+                plugin_act_map[_a] = _cb
+
+        action = menu.exec(card.mapToGlobal(pos))
+        if action in plugin_act_map:
+            plugin_act_map[action]()
+            return
+        if action == toggle_act:
+            self.mod_toggle_requested.emit(mod_id)
+        elif action == edit_act:
+            self.mod_edit_requested.emit(mod_id)
+        elif action == paste_act:
+            self._paste_preview_onto_mod(mod_id)
+        elif action == browse_act:
+            self._browse_previews_for_mod(mod_id)
+        elif action == open_folder_act:
+            self._open_mod_folder(mod_id)
+        elif action == export_act:
+            self._export_from_context(mod_id, is_mod=True)
+        elif action == delete_act:
+            if multi:
+                self._delete_selected()
+            else:
+                self.mod_delete_requested.emit(mod_id)
