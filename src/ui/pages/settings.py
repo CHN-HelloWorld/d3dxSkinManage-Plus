@@ -1066,3 +1066,90 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         self._proxy_test_label.setStyleSheet(f"color: {color};")
         self._proxy_test_btn.setEnabled(True)
         self._proxy_test_btn.setText(tr("测试连接"))
+
+    # 缓存占用统计 / 清理
+
+    def _refresh_cache_usage(self) -> None:
+        """后台统计缓存总占用，回主线程写进 CacheCapSlider 顶部标注。"""
+        if not hasattr(self, "_img_cache_cap"):
+            return
+        prev = getattr(self, "_cache_size_thread", None)
+        if prev is not None:
+            try:
+                if prev.isRunning():
+                    return  # 上次统计还没完，避免叠起
+            except RuntimeError:
+                self._cache_size_thread = None
+                self._cache_size_worker = None
+        thread = QThread(self)
+        worker = _CacheSizeWorker()
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_cache_size_ready)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        thread.finished.connect(self._clear_cache_size_refs)
+        self._cache_size_thread = thread
+        self._cache_size_worker = worker
+        thread.start()
+
+    def _clear_cache_size_refs(self) -> None:
+        """清空缓存统计线程与工作对象引用，允许后续重新调度统计。"""
+        self._cache_size_thread = None
+        self._cache_size_worker = None
+
+    def _on_cache_size_ready(self, mb: float) -> None:
+        """缓存统计完成后，将当前磁盘占用交给仍存在的容量控件显示。"""
+        if hasattr(self, "_img_cache_cap"):
+            self._img_cache_cap.set_current_usage_mb(mb)
+
+    def _on_clean_all_cache(self) -> None:
+        """清理可再生的磁盘缓存，通知宿主清除接口内存缓存，并更新占用显示。
+
+        保留 data/downloads 中的安装包。QSS 图标缓存可能位于系统临时目录，
+        不属于应用 cache 目录的清理范围。
+        """
+        import shutil
+
+        from src.utils.paths import get_cache_dir, get_gb_image_cache_dir
+
+        ret = QMessageBox.question(
+            self,
+            t("提示"),
+            tr(
+                "将清空所有可再生缓存（商店缩略图、GameBanana 接口响应等）。\n已下载的 Mod "
+                "压缩包属于用户数据，不会被清理。\n\n确定继续？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret != QMessageBox.StandardButton.Yes:
+            return
+        cache_root = get_cache_dir()
+        try:
+            if cache_root.exists():
+                shutil.rmtree(cache_root, ignore_errors=True)
+            cache_root.mkdir(parents=True, exist_ok=True)
+            get_gb_image_cache_dir().mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            logger.warning("清理缓存失败: %s", e)
+        # 磁盘清完再清内存那一份，否则本次运行内仍会命中旧副本
+        self.api_cache_clear_requested.emit()
+        self._cache_clean_label.setText(tr("已清理"))
+        self._cache_clean_label.setStyleSheet(f"color: {theme.color('success')};")
+        if hasattr(self, "_img_cache_cap"):
+            self._img_cache_cap.set_current_usage_mb(0)
+
+    # 下载数据统计 / 清理
+
+    def showEvent(self, event):
+        """每次进设置页都重算下载占用（可能刚装完 Mod、或刚在别处删过文件）。"""
+        super().showEvent(event)
+        call_later(0, self, self._refresh_font_layout)
+        self.refresh_download_usage()
+
+    def refresh_download_usage(self) -> None:
+        """请求宿主重新统计下载占用；结果经 :meth:`set_download_usage` 回填。"""
+        if hasattr(self, "_dl_usage_label"):
+            self.download_usage_requested.emit()
