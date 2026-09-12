@@ -943,3 +943,126 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
                 ("app-update", tr("程序更新"), tr("管理 d3dxSkinManage Plus 自身的版本更新。"), [version_card, g2]),
             ],
         )
+
+    def _on_proxy_active_toggled(self, active: bool):
+        """同步代理总开关的显示和生效状态。
+
+        关闭时若商店仍启用代理，先请求确认；确认后同步关闭，取消时恢复总开关。
+        """
+        if not active and self._proxy_enable_check.isChecked():
+            ret = QMessageBox.question(
+                self,
+                tr("在线 Mod 正在使用代理"),
+                tr("「在线 Mod」当前已启用代理。关闭代理总开关会一并停用「在线 Mod」的代理。\n\n确定仍要关闭吗？"),
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if ret != QMessageBox.StandardButton.Yes:
+                # 取消：弹回开启
+                self._proxy_active_check.blockSignals(True)
+                self._proxy_active_check.setChecked(True)
+                self._proxy_active_check.blockSignals(False)
+                return
+            # 确认：级联关闭 Mod 商店「启用代理」
+            self._proxy_enable_check.blockSignals(True)
+            self._proxy_enable_check.setChecked(False)
+            self._proxy_enable_check.blockSignals(False)
+
+        self._proxy_cfg_sub.setVisible(active)
+        self._save_proxy_settings()
+        self.settings_changed.emit()
+
+    def _on_proxy_enable_toggled(self, enabled: bool):
+        """Mod 商店「启用代理」开关：是否让 Mod 商店使用常规页所配代理。
+
+        开启时若代理总开关未开 → 提示去常规页打开总开关，并把本开关弹回关闭。
+        """
+        if enabled and not self._proxy_active_check.isChecked():
+            QMessageBox.information(
+                self,
+                tr("请先打开代理总开关"),
+                tr(
+                    "代理总开关尚未开启。\n\n请到「常规 → "
+                    "网络代理」打开「代理总开关」并配置代理后，再启用「在线 Mod」代理。"
+                ),
+            )
+            self._proxy_enable_check.blockSignals(True)
+            self._proxy_enable_check.setChecked(False)
+            self._proxy_enable_check.blockSignals(False)
+            return
+        self._save_proxy_settings()
+        self.settings_changed.emit()
+
+    def _on_proxy_system_toggled(self, use_system: bool):
+        """系统代理开关（常规页）：仅切换手动配置区可见性。"""
+        self._proxy_manual_widget.setVisible(not use_system)
+
+    def _on_test_proxy(self):
+        """在后台线程使用界面当前的代理设置测试 GameBanana 连通性。
+
+        设置无需先保存；结果通过 Qt 信号返回，网络等待不阻塞界面事件循环。
+        """
+        from src.utils.proxy import get_system_proxy
+
+        # 解析当前 UI 上的代理（不依赖已保存的 config）。测试的是「常规」页所配代理本身，
+        # 与 Mod 商店「启用代理」无关——故只按系统/手动两种类型解析。
+        if self._proxy_system_check.isChecked():
+            proxy = get_system_proxy()
+            if not proxy:
+                self._proxy_test_label.setText(tr("未检测到系统代理"))
+                self._proxy_test_label.setStyleSheet(f"color: {theme.color('danger')};")
+                return
+        else:
+            ptype = self._proxy_type_combo.currentData() or "http"
+            host = self._proxy_host_input.text().strip()
+            port = self._proxy_port_input.text().strip()
+            if not host or not port:
+                self._proxy_test_label.setText(tr("请填写地址和端口"))
+                self._proxy_test_label.setStyleSheet(f"color: {theme.color('danger')};")
+                return
+            proxy = f"{ptype}://{host}:{port}"
+
+        # 已有代理测试尚未结束时忽略重复请求。
+        # Qt 线程对象可能已删除而 Python 引用仍在，访问前需处理失效引用。
+        prev_thread = getattr(self, "_proxy_test_thread", None)
+        if prev_thread is not None:
+            try:
+                if prev_thread.isRunning():
+                    return
+            except RuntimeError:
+                # Qt 线程对象已销毁，清除其 Python 引用后允许重新发起测试。
+                self._proxy_test_thread = None
+                self._proxy_test_worker = None
+
+        self._proxy_test_btn.setEnabled(False)
+        self._proxy_test_btn.setText(tr("测试中…"))
+        self._proxy_test_label.setText("")
+
+        # 后台线程测量代理延迟，结果通过 worker.finished(ok, msg) 信号
+        # 回主线程，由 _on_proxy_test_finished 写 UI。
+        thread = QThread(self)
+        worker = _ProxyTestWorker(proxy)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+        worker.finished.connect(self._on_proxy_test_finished)
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        # 线程结束后清除保存的引用，避免再次访问已由 Qt 删除的对象。
+        thread.finished.connect(self._clear_proxy_test_refs)
+        self._proxy_test_thread = thread
+        self._proxy_test_worker = worker
+        thread.start()
+
+    def _clear_proxy_test_refs(self) -> None:
+        """thread.finished 后清掉 self 上对 thread/worker 的引用，防止下次访问悬挂对象。"""
+        self._proxy_test_thread = None
+        self._proxy_test_worker = None
+
+    def _on_proxy_test_finished(self, ok: bool, msg: str) -> None:
+        """后台测试完成回主线程——写状态条 + 恢复按钮可点。"""
+        color = theme.color("success") if ok else theme.color("danger")
+        self._proxy_test_label.setText(msg)
+        self._proxy_test_label.setStyleSheet(f"color: {color};")
+        self._proxy_test_btn.setEnabled(True)
+        self._proxy_test_btn.setText(tr("测试连接"))
