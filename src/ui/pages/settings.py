@@ -1579,3 +1579,55 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         # 拖动在松开时保存；方向键、滚轮和轨道点击不会触发 sliderReleased。
         if not self._bg_scrim_slider.isSliderDown():
             self._save_bg_scrim(value)
+
+    def _save_bg_scrim(self, value: int) -> None:
+        """按当前解析后的明暗主题分别保存背景遮罩强度。"""
+        # 遮罩强度按当前主题分别记一档。
+        th = theme.resolve_auto(self._config.get("general.theme", "dark"))
+        key = "scrim_dark" if th == "dark" else "scrim_light"
+        self._config.set(f"appearance.background.{key}", value)
+
+    def _on_bg_params_changed(self):
+        """保存主题遮罩及全局模糊、适配方式，并请求刷新背景层。"""
+        self._save_bg_scrim(self._bg_scrim_slider.value())
+        # 模糊 / 填充全局。
+        self._config.set("appearance.background.blur", self._bg_blur_slider.value())
+        self._config.set("appearance.background.fit", self._bg_fit_combo.currentData())
+        # 拖动已实时应用暗度和模糊，释放时仅保存配置并更新适配方式，不重复刷新全窗主题。
+        self.bg_overlay_refresh.emit()
+
+    def _load_font_setting(self) -> None:
+        """回填已保存字体，找不到时显示列表首项，并阻断回填期间的控件信号。"""
+        index = self._font_combo.findData(self._config.get("appearance.font_family", ""))
+        with QSignalBlocker(self._font_combo):
+            self._font_combo.setCurrentIndex(max(0, index))
+            self._font_combo.setEditText(self._font_combo.itemText(self._font_combo.currentIndex()))
+
+    def _on_font_edit_finished(self) -> None:
+        """延后提交字体输入，等待 Qt 完成本轮补全选择后再规范化文本。"""
+        # 回车接受补全时，editingFinished 早于 completer.activated；同步复原搜索词
+        # 会把尚待接受的候选项也换回旧值。等 Qt 完成本次选取后再归一化文本。
+        call_later(0, self, self._commit_font_edit)
+
+    def _commit_font_edit(self) -> None:
+        """只接受列表中完整匹配的字体名称，无效搜索恢复已保存选择。"""
+        # 搜索框只接受列表中的完整字体名；未完成/无匹配的搜索不改变已保存的选择。
+        index = self._font_combo.findText(self._font_combo.currentText(), Qt.MatchFlag.MatchFixedString)
+        if index < 0:
+            self._load_font_setting()
+            return
+        with QSignalBlocker(self._font_combo):
+            self._font_combo.setCurrentIndex(index)
+            self._font_combo.setEditText(self._font_combo.itemText(index))
+        self._on_font_changed(index)
+
+    def _on_font_changed(self, index: int) -> None:
+        """原子保存新字体后通知宿主应用，失败时恢复原选择并显示错误。"""
+        family = self._font_combo.itemData(index)
+        if family is None or family == self._config.get("appearance.font_family", ""):
+            return
+        if not self._config.set_atomic("appearance.font_family", family):
+            self._load_font_setting()
+            QMessageBox.warning(self, t("错误"), t("字体设置保存失败，已保持原来的字体。请检查配置目录是否可写。"))
+            return
+        self.font_changed.emit(family)
