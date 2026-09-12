@@ -289,3 +289,170 @@ class ShortcutStore:
         return GROUPS + tuple(
             ("plugin:" + owner, self._plugins[owner][0], "navigation/plugins") for owner in sorted(self._plugins)
         )
+
+    def register_plugin(self, owner: str, title: str, commands) -> None:
+        """验证插件命令身份、上下文和默认绑定，并为冲突默认键保存禁用覆盖。
+
+        需要保存的覆盖写入成功后才替换插件登记，失败时保留原命令集合并报告错误。"""
+        definitions = tuple(commands)
+        occupied = set(COMMAND_BY_ID)
+        for other, (_, registered) in self._plugins.items():
+            if other != owner:
+                occupied.update(command.id for command in registered)
+        for command in definitions:
+            if not command.id or command.id in occupied:
+                raise ValueError(tr("快捷键命令 ID 已被占用：{command_id}", command_id=command.id))
+            if command.group != "plugin:" + owner or command.contexts not in (
+                frozenset({"window"}),
+                frozenset({"overview"}),
+                frozenset({"preset"}),
+            ):
+                raise ValueError(tr("插件快捷键必须使用本插件分组和受支持的焦点上下文"))
+            error = validate_binding(command.default, command)
+            if error:
+                raise ValueError(error)
+            occupied.add(command.id)
+
+        overrides = self.config.get("shortcuts.overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        else:
+            overrides = dict(overrides)
+        previous_ids = {command.id for command in self._plugins.get(owner, ("", ()))[1]}
+        incumbent_by_id = {command.id: command for command in self.commands if command.id not in previous_ids}
+        active = [
+            (incumbent_by_id[command_id], binding)
+            for command_id, binding in self.bindings.items()
+            if command_id in incumbent_by_id and binding is not None
+        ]
+        changed = False
+        for command in definitions:
+            if command.id in overrides:
+                value = overrides[command.id]
+                if value is not None:
+                    value = command.default if validate_binding(value, command) else normalize_binding(value)
+            else:
+                value = command.default
+                if any(value == binding and overlapping(command, incumbent) for incumbent, binding in active):
+                    # 先持久化新命令的默认冲突处理，再发布命令；用户绑定始终保留优先级。
+                    overrides[command.id] = None
+                    value = None
+                    changed = True
+            if value is not None:
+                active.append((command, value))
+
+        if changed and not self.config.set_atomic("shortcuts.overrides", overrides):
+            self.last_error = tr("快捷键保存失败，已保持原有绑定。请检查设置文件是否只读或被占用后重试。")
+            raise RuntimeError(self.last_error)
+        self._plugins[owner] = (title, definitions)
+        self.last_error = ""
+
+    def unregister_plugin(self, owner: str) -> None:
+        """移除指定插件的运行时命令登记，保留用户配置供后续重新加载。"""
+        self._plugins.pop(owner, None)
+
+    @property
+    def bindings(self) -> dict[str, str | None]:
+        """按有效用户覆盖优先生成全部绑定，规范无效配置并禁用上下文交叠的重复按键。"""
+        overrides = self.config.get("shortcuts.overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        result: dict[str, str | None] = {}
+        # 已有用户绑定优先于新增默认绑定。
+        commands = self.commands
+        by_id = self.command_by_id
+        ordered = sorted(
+            commands,
+            key=lambda command: (
+                not (
+                    command.id in overrides
+                    and overrides[command.id] is not None
+                    and not validate_binding(overrides[command.id], command)
+                )
+            ),
+        )
+        for command in ordered:
+            value = overrides.get(command.id, command.default)
+            if value is not None:
+                value = command.default if validate_binding(value, command) else normalize_binding(value)
+                # 手工编辑配置也不能在同一上下文同时激活两个命令；不改写原文件。
+                if any(value == key and overlapping(command, by_id[other]) for other, key in result.items()):
+                    value = None
+            result[command.id] = value
+        return {command.id: result[command.id] for command in commands}
+
+    def binding(self, command_id: str) -> str | None:
+        """返回指定命令当前有效的快捷键，None 表示未绑定。"""
+        return self.bindings[command_id]
+
+    @property
+    def custom_count(self) -> int:
+        """统计当前有效绑定与各命令默认值不同的命令数量。"""
+        bindings = self.bindings
+        return sum(bindings[command.id] != command.default for command in self.commands)
+
+    def conflicts(self, command_id: str, binding: str) -> list[ShortcutCommand]:
+        """查找与候选按键相同且焦点环境交叠的其他命令。"""
+        key = normalize_binding(binding)
+        command = self.command_by_id[command_id]
+        bindings = self.bindings
+        return [
+            other
+            for other in self.commands
+            if other.id != command_id and key and bindings[other.id] == key and overlapping(command, other)
+        ]
+
+    def save_binding(self, command_id: str, binding: str | None, *, replace: bool = False) -> bool:
+        """验证并保存指定命令的绑定，可按调用方选择解除冲突命令；失败时记录原因。"""
+        command = self.command_by_id[command_id]
+        self.last_error = validate_binding(binding, command)
+        if self.last_error:
+            return False
+        key = normalize_binding(binding)
+        conflicts = self.conflicts(command_id, key)
+        if conflicts and not replace:
+            self.last_error = tr("该组合键已被其他操作使用，请确认替换后再保存。")
+            return False
+        candidate = self.bindings
+        for other in conflicts:
+            candidate[other.id] = None
+        candidate[command_id] = key
+        return self._persist(candidate)
+
+    def restore_defaults(self) -> bool:
+        """将当前已登记命令的绑定恢复为默认值并持久化。"""
+        return self._persist({command.id: command.default for command in self.commands})
+
+    def restore(self, snapshot: dict[str, str | None]) -> bool:
+        """撤销整个快捷键事务；不恢复快照创建后修改的其他设置。"""
+        candidate: dict[str, str | None] = {}
+        by_id = self.command_by_id
+        for command in self.commands:
+            value = snapshot.get(command.id, command.default)
+            if value is not None:
+                error = validate_binding(value, command)
+                if error:
+                    self.last_error = error
+                    return False
+                value = normalize_binding(value)
+                if any(value == key and overlapping(command, by_id[other]) for other, key in candidate.items()):
+                    self.last_error = tr("待恢复的快捷键存在冲突。")
+                    return False
+            candidate[command.id] = value
+        return self._persist(candidate)
+
+    def _persist(self, candidate: dict[str, str | None]) -> bool:
+        """仅保存相对默认值的覆盖项，原子写入失败时保留错误信息并返回 False。"""
+        overrides = self.config.get("shortcuts.overrides")
+        if not isinstance(overrides, dict):
+            overrides = {}
+        for command in self.commands:
+            if candidate[command.id] == command.default:
+                overrides.pop(command.id, None)
+            else:
+                overrides[command.id] = candidate[command.id]
+        if not self.config.set_atomic("shortcuts.overrides", overrides):
+            self.last_error = tr("快捷键保存失败，已保持原有绑定。请检查设置文件是否只读或被占用后重试。")
+            return False
+        self.last_error = ""
+        return True
