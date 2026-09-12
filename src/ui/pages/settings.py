@@ -1252,3 +1252,152 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         except OSError as e:
             logger.warning("打开下载目录失败: %s", e)
         self._refresh_cache_usage()
+
+    def _load_settings(self):
+        """阻断控件信号后统一回填配置，再刷新复合控件显示，避免加载过程触发自动保存。"""
+        # 加载时阻断自动保存，避免混用尚未更新的控件值；全部回填后由重置入口统一发布。
+        with ExitStack() as blockers:
+            for widget in self.findChildren(QWidget):
+                blockers.enter_context(QSignalBlocker(widget))
+            self._populate_settings()
+        for widget_type in (SettingsRow, ChoiceSegments, ThemeChoices):
+            for widget in self.findChildren(widget_type):
+                widget.refresh()
+
+    def _populate_settings(self):
+        """将各类配置映射到控件，恢复自动并发策略，并按依赖顺序设置缓存范围和背景参数。"""
+        self._image_memory_settings.reload()
+        self._load_font_setting()
+        # 主题
+        theme = self._config.get("general.theme", "dark")
+        for i in range(self._theme_combo.count()):
+            if self._theme_combo.itemData(i) == theme:
+                self._theme_combo.setCurrentIndex(i)
+                break
+
+        # 语言
+        lang = normalize_language_code(self._config.get("general.language", "zh-CN"))
+        for i in range(self._language_combo.count()):
+            if self._language_combo.itemData(i) == lang:
+                self._language_combo.setCurrentIndex(i)
+                break
+
+        delete_method = self._config.get("mods.delete_method", "permanent")
+        for i in range(self._delete_method_combo.count()):
+            if self._delete_method_combo.itemData(i) == delete_method:
+                self._delete_method_combo.setCurrentIndex(i)
+                break
+
+        concurrency = self._config.get("mods.deploy_concurrency")
+        self._deploy_concurrency_auto = not (type(concurrency) is int and 1 <= concurrency <= MAX_DEPLOY_CONCURRENCY)
+        self._deploy_concurrency_input.setValue(effective_deploy_concurrency(concurrency))
+        self._deploy_concurrency_recommend_btn.setChecked(self._deploy_concurrency_auto)
+
+        import_format = self._config.get("import.format", "7z")
+        for i in range(self._import_format_combo.count()):
+            if self._import_format_combo.itemData(i) == import_format:
+                self._import_format_combo.setCurrentIndex(i)
+                break
+        self._import_strict_format_check.setChecked(self._config.get("import.strict_format", False))
+        self._on_import_format_changed()
+        workers = self._config.get("import.parallel_workers")
+        self._import_workers_auto = not (type(workers) is int and 1 <= workers <= MAX_ARCHIVE_WORKERS)
+        self._parallel_spin.setValue(effective_archive_workers(workers))
+        self._parallel_recommend_btn.setChecked(self._import_workers_auto)
+
+        # 导出设置
+        export_format = self._config.get("export.format", "zip")
+        for i in range(self._export_format_combo.count()):
+            if self._export_format_combo.itemData(i) == export_format:
+                self._export_format_combo.setCurrentIndex(i)
+                break
+        self._export_preserve_tree_check.setChecked(self._config.get("export.preserve_tree", True))
+        self._export_include_meta_check.setChecked(self._config.get("export.include_metadata", False))
+        self._export_strict_format_check.setChecked(self._config.get("export.strict_format", False))
+        # 文件夹导出不使用格式转换设置。
+        self._on_export_format_changed()
+        workers = self._config.get("export.parallel_workers")
+        self._export_workers_auto = not (type(workers) is int and 1 <= workers <= MAX_ARCHIVE_WORKERS)
+        self._export_parallel_spin.setValue(effective_archive_workers(workers))
+        self._export_parallel_recommend_btn.setChecked(self._export_workers_auto)
+
+        # 代理设置
+        self._load_proxy_settings()
+
+        # Mod 更新设置
+        uc = "gamebanana.update_check"
+        concurrency = self._config.get(f"{uc}.concurrency")
+        self._upd_concurrency_auto = not (type(concurrency) is int and 1 <= concurrency <= MAX_UPDATE_CONCURRENCY)
+        self._upd_concurrency_input.setValue(effective_update_concurrency(concurrency))
+        self._upd_concurrency_recommend_btn.setChecked(self._upd_concurrency_auto)
+        self._upd_enable_check.setChecked(self._config.get(f"{uc}.enabled", True))
+        self._upd_startup_check.setChecked(self._config.get(f"{uc}.on_startup", True))
+        ph = int(self._config.get(f"{uc}.periodic_hours", 0))
+        for i in range(self._upd_periodic_combo.count()):
+            if self._upd_periodic_combo.itemData(i) == ph:
+                self._upd_periodic_combo.setCurrentIndex(i)
+                break
+        ns = self._config.get(f"{uc}.notify_style", "badge")
+        for i in range(self._upd_notify_combo.count()):
+            if self._upd_notify_combo.itemData(i) == ns:
+                self._upd_notify_combo.setCurrentIndex(i)
+                break
+
+        # 先设置容量范围再设置当前值，避免值被旧范围截断；配置加载不触发自动保存。
+        _img_range = int(self._config.get("gamebanana.image_cache_range_mb", 4096) or 4096)
+        _img_cap = int(self._config.get("gamebanana.image_cache_max_mb", 0) or 0)
+        self._img_cache_cap.set_range_max_mb(_img_range)
+        self._img_cache_cap.set_value_mb(_img_cap)
+
+        # 下载数据：安装后自动删除源安装包（默认开）
+        self._dl_auto_delete_check.setChecked(bool(self._config.get("gamebanana.delete_archive_after_install", True)))
+
+        # 程序更新设置
+        self._app_upd_enable_check.setChecked(self._config.get("app_update.enabled", True))
+        self._app_upd_startup_check.setChecked(self._config.get("app_update.on_startup", True))
+        self._app_upd_backup_check.setChecked(self._config.get("app_update.backup_before_update", True))
+        src = self._config.get("app_update.download_source", "auto")
+        for i in range(self._app_upd_source_combo.count()):
+            if self._app_upd_source_combo.itemData(i) == src:
+                self._app_upd_source_combo.setCurrentIndex(i)
+                break
+
+        self._load_background_settings()
+
+    def _load_background_settings(self) -> None:
+        """切换主题/恢复默认只读取对应遮罩档位，不触发滑块的实时编辑通道。"""
+        bg = self._config.get("appearance.background", {}) or {}
+        with ExitStack() as blockers:
+            for widget in (self._bg_fit_combo, self._bg_scrim_slider, self._bg_blur_slider):
+                blockers.enter_context(QSignalBlocker(widget))
+            with QSignalBlocker(self._bg_path_edit):
+                self._bg_path_edit.setText(bg.get("path", "") or "")
+            resolved = theme.resolve_auto(self._config.get("general.theme", "dark"))
+            scrim = int(bg.get("scrim_dark", 45) if resolved == "dark" else bg.get("scrim_light", 30))
+            self._bg_scrim_slider.setValue(scrim)
+            self._bg_scrim_label.setText(f"{scrim}%")
+            blur = int(bg.get("blur", 60))
+            self._bg_blur_slider.setValue(blur)
+            self._bg_blur_label.setText(tr("关闭") if blur == 0 else f"{blur}%")
+            self._bg_fit_combo.setCurrentIndex(self._bg_fit_combo.findData(bg.get("fit", "cover")))
+            self._bg_sub.setVisible(bool(bg.get("enabled")))
+        self._load_dynamic_background_settings(bg)
+
+    # 实时保存接线
+    def _on_deploy_concurrency_changed(self, value: int) -> None:
+        """将部署并发切换为手动值，取消推荐选中状态并立即保存。"""
+        self._deploy_concurrency_auto = False
+        self._deploy_concurrency_recommend_btn.setChecked(False)
+        self._autosave("mods.deploy_concurrency", value)
+
+    def _set_recommended_deploy_concurrency(self) -> None:
+        """显示本机推荐部署并发，以零值保存自动策略并通知宿主更新。"""
+        self._deploy_concurrency_auto = True
+        self._deploy_concurrency_input.setValue(recommended_deploy_concurrency())
+        self._deploy_concurrency_recommend_btn.setChecked(True)
+        self._autosave("mods.deploy_concurrency", 0)
+
+    def _autosave(self, key: str, value) -> None:
+        """写单个配置项并通知主窗热生效。"""
+        self._config.set(key, value)
+        self.settings_changed.emit()
