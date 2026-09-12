@@ -1401,3 +1401,116 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         """写单个配置项并通知主窗热生效。"""
         self._config.set(key, value)
         self.settings_changed.emit()
+
+    def _autosave_proxy(self, *_args) -> None:
+        """代理各字段互相关——任一变更即整组保存 + 通知热生效。"""
+        self._save_proxy_settings()
+        self.settings_changed.emit()
+
+    def _wire_autosave(self) -> None:
+        """连接各项设置的即时保存与变化通知，按控件语义区分实时修改和编辑完成。"""
+        self._font_combo.currentIndexChanged.connect(self._on_font_changed)
+        # 字体已卸载时 UI 回落到首项；再次选择首项也应能明确保存「系统默认」。
+        self._font_combo.activated.connect(self._on_font_changed)
+        self._font_combo.lineEdit().editingFinished.connect(self._on_font_edit_finished)
+        uc = "gamebanana.update_check"
+        self._delete_method_combo.currentIndexChanged.connect(
+            lambda _i: self._autosave("mods.delete_method", self._delete_method_combo.currentData())
+        )
+        self._deploy_concurrency_input.valueChanged.connect(self._on_deploy_concurrency_changed)
+        self._deploy_concurrency_input.editingFinished.connect(
+            lambda: (
+                self._on_deploy_concurrency_changed(self._deploy_concurrency_input.value())
+                if self._deploy_concurrency_auto and not self._deploy_concurrency_recommend_btn.isChecked()
+                else None
+            )
+        )
+        self._dl_auto_delete_check.toggled.connect(
+            lambda v: self._autosave("gamebanana.delete_archive_after_install", v)
+        )
+        self._import_format_combo.currentIndexChanged.connect(
+            lambda _i: (
+                self._autosave("import.format", self._import_format_combo.currentData()),
+                self._on_import_format_changed(),
+            )
+        )
+        self._import_strict_format_check.toggled.connect(lambda v: self._autosave("import.strict_format", v))
+        self._parallel_spin.valueChanged.connect(self._on_import_workers_changed)
+        self._export_parallel_spin.valueChanged.connect(self._on_export_workers_changed)
+        self._parallel_spin.editingFinished.connect(
+            lambda: (
+                self._on_import_workers_changed(self._parallel_spin.value())
+                if self._import_workers_auto and not self._parallel_recommend_btn.isChecked()
+                else None
+            )
+        )
+        self._export_parallel_spin.editingFinished.connect(
+            lambda: (
+                self._on_export_workers_changed(self._export_parallel_spin.value())
+                if self._export_workers_auto and not self._export_parallel_recommend_btn.isChecked()
+                else None
+            )
+        )
+        self._export_format_combo.currentIndexChanged.connect(
+            lambda _i: (
+                self._autosave("export.format", self._export_format_combo.currentData()),
+                self._on_export_format_changed(),
+            )
+        )
+        self._export_preserve_tree_check.toggled.connect(lambda v: self._autosave("export.preserve_tree", v))
+        self._export_include_meta_check.toggled.connect(lambda v: self._autosave("export.include_metadata", v))
+        self._export_strict_format_check.toggled.connect(lambda v: self._autosave("export.strict_format", v))
+        self._upd_enable_check.toggled.connect(lambda v: self._autosave(f"{uc}.enabled", v))
+        self._upd_concurrency_input.valueChanged.connect(self._on_update_concurrency_changed)
+        self._upd_concurrency_input.editingFinished.connect(
+            lambda: (
+                self._on_update_concurrency_changed(self._upd_concurrency_input.value())
+                if self._upd_concurrency_auto and not self._upd_concurrency_recommend_btn.isChecked()
+                else None
+            )
+        )
+        self._upd_startup_check.toggled.connect(lambda v: self._autosave(f"{uc}.on_startup", v))
+        self._upd_periodic_combo.currentIndexChanged.connect(
+            lambda _i: self._autosave(f"{uc}.periodic_hours", self._upd_periodic_combo.currentData())
+        )
+        self._upd_notify_combo.currentIndexChanged.connect(
+            lambda _i: self._autosave(f"{uc}.notify_style", self._upd_notify_combo.currentData())
+        )
+        # 程序更新开关
+        self._app_upd_enable_check.toggled.connect(lambda v: self._autosave("app_update.enabled", v))
+        self._app_upd_startup_check.toggled.connect(lambda v: self._autosave("app_update.on_startup", v))
+        self._app_upd_backup_check.toggled.connect(lambda v: self._autosave("app_update.backup_before_update", v))
+        self._app_upd_source_combo.currentIndexChanged.connect(
+            lambda _i: self._autosave("app_update.download_source", self._app_upd_source_combo.currentData())
+        )
+        # 代理：地址/端口用 editingFinished（避免逐字保存+热重建代理抖动）；
+        # 「启用代理」开关有「未配置则回弹」逻辑，单独走 _on_proxy_enable_toggled（已在 build 接），
+        # 不再接 _autosave_proxy，否则回弹时会把 enabled=True 误存。
+        self._proxy_system_check.toggled.connect(self._autosave_proxy)
+        self._proxy_type_combo.currentIndexChanged.connect(self._autosave_proxy)
+        self._proxy_host_input.editingFinished.connect(self._autosave_proxy)
+        self._proxy_port_input.editingFinished.connect(self._autosave_proxy)
+
+    @staticmethod
+    def _get_recommended_workers() -> int:
+        """返回按当前设备能力计算的归档处理推荐并发数。"""
+        return recommended_archive_workers()
+
+    def _on_import_workers_changed(self, value: int) -> None:
+        """将导入并发标记为手动选择并保存，不改动导出并发策略。"""
+        self._import_workers_auto = False
+        self._parallel_recommend_btn.setChecked(False)
+        self._autosave("import.parallel_workers", value)
+
+    def _on_export_workers_changed(self, value: int) -> None:
+        """将导出并发标记为手动选择并保存，不改动导入并发策略。"""
+        self._export_workers_auto = False
+        self._export_parallel_recommend_btn.setChecked(False)
+        self._autosave("export.parallel_workers", value)
+
+    def _set_recommended_workers(self):
+        """保存自动模式，设备推荐值只用于显示。"""
+        self._import_workers_auto = True
+        self._parallel_spin.setValue(self._get_recommended_workers())
+        self._parallel_recommend_btn.setChecked(True)
+        self._autosave("import.parallel_workers", 0)
