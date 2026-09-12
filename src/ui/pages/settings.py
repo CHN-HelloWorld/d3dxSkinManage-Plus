@@ -1153,3 +1153,102 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         """请求宿主重新统计下载占用；结果经 :meth:`set_download_usage` 回填。"""
         if hasattr(self, "_dl_usage_label"):
             self.download_usage_requested.emit()
+
+    def set_download_usage(
+        self, total_bytes: int, total_count: int, purgeable_bytes: int, purgeable_count: int
+    ) -> None:
+        """宿主统计完成后回填（主线程调）。"""
+        self._dl_stats = (int(total_bytes), int(total_count), int(purgeable_bytes), int(purgeable_count))
+        self._render_download_usage()
+
+    def _render_download_usage(self) -> None:
+        """根据下载统计更新文字和容量条，以警告色标出可清理部分，并随主题刷新颜色。"""
+        if not hasattr(self, "_dl_usage_label") or not hasattr(self, "_dl_stats"):
+            return
+        from src.services.gamebanana.format import humanize_size
+
+        total_b, total_n, purge_b, purge_n = getattr(self, "_dl_stats", (0, 0, 0, 0))
+        amount, _, unit = humanize_size(total_b).rpartition(" ")
+        self._dl_total_label.setText(amount)
+        self._dl_total_unit.setText(unit)
+        self._dl_installed_label.setText(tr("已安装 {value}", value=humanize_size(purge_b)))
+        self._dl_pending_label.setText(tr("未安装 {value}", value=humanize_size(max(0, total_b - purge_b))))
+        if total_n <= 0:
+            self._dl_usage_label.setText(tr("暂无下载数据"))
+        else:
+            head = tr("{value} · 共 {total_n} 个安装包", value=humanize_size(total_b), total_n=total_n)
+            if purge_n > 0:
+                warn = theme.color("settings.teal")
+                self._dl_usage_label.setText(
+                    tr(
+                        "{head}，其中 <span style='color:{warn}'>{purge_n} 个（{value}）已入库可清理</span>",
+                        head=head,
+                        warn=warn,
+                        purge_n=purge_n,
+                        value=humanize_size(purge_b),
+                    )
+                )
+            else:
+                self._dl_usage_label.setText(tr("{head}，均未入库", head=head))
+        ratio = (purge_b / total_b) if total_b > 0 else 0.0
+        self._dl_usage_bar.set_ratio(ratio)
+        self._dl_usage_bar.setVisible(total_n > 0)
+        self._dl_purge_btn.setEnabled(purge_n > 0)
+
+    def set_download_purge_result(self, count: int, freed_bytes: int) -> None:
+        """显示清理完成的行内反馈，并重新计算空间占用。"""
+        if not hasattr(self, "_dl_purge_result_label"):
+            return
+        from src.services.gamebanana.format import humanize_size
+
+        self._dl_purge_result_label.show()
+        if count > 0:
+            self._dl_purge_result_label.setText(tr("已释放 {value}", value=humanize_size(freed_bytes)))
+            self._dl_purge_result_label.setStyleSheet(f"color: {theme.color('success')}; background: transparent;")
+        else:
+            self._dl_purge_result_label.setText(tr("没有可清理的文件"))
+            self._dl_purge_result_label.setStyleSheet(
+                f"color: {theme.surface_text_color('text.tertiary')}; background: transparent;"
+            )
+        self.refresh_download_usage()
+
+    def _on_purge_downloads(self) -> None:
+        """确认后交给宿主执行删除（宿主还要同步下载器的本地索引）。"""
+        total_b, total_n, purge_b, purge_n = getattr(self, "_dl_stats", (0, 0, 0, 0))
+        if purge_n <= 0:
+            return
+        from src.services.gamebanana.format import humanize_size
+
+        keep_n = max(0, total_n - purge_n)
+        keep_b = max(0, total_b - purge_b)
+        msg = tr(
+            (
+                "将删除 {purge_n} 个已入库的安装包，释放约 {value}。\n这些 Mod "
+                "在库里已有完整副本，删除不影响已安装的 Mod，也不影响更新检测。\n"
+            ),
+            purge_n=purge_n,
+            value=humanize_size(purge_b),
+        )
+        if keep_n:
+            msg += tr("另有 {keep_n} 个（{value}）尚未安装的下载将保留。\n", keep_n=keep_n, value=humanize_size(keep_b))
+        ret = QMessageBox.question(
+            self,
+            t("提示"),
+            msg + tr("\n确定继续？"),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ret == QMessageBox.StandardButton.Yes:
+            self.download_purge_requested.emit()
+
+    def _on_open_download_dir(self) -> None:
+        """请求打开下载目录，记录打开失败原因，并重新统计缓存占用。"""
+        import os
+
+        from src.utils.paths import get_gb_download_dir
+
+        try:
+            os.startfile(str(get_gb_download_dir()))
+        except OSError as e:
+            logger.warning("打开下载目录失败: %s", e)
+        self._refresh_cache_usage()
