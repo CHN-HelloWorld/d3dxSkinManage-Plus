@@ -1631,3 +1631,97 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
             QMessageBox.warning(self, t("错误"), t("字体设置保存失败，已保持原来的字体。请检查配置目录是否可写。"))
             return
         self.font_changed.emit(family)
+
+    def _on_theme_changed(self, index: int):
+        """保存有效主题选择，重新加载对应背景参数，并通知宿主切换外观。"""
+        theme = self._theme_combo.currentData()
+        if theme:
+            # 立即生效
+            self._config.set("general.theme", theme)
+            self._load_background_settings()
+            self.theme_changed.emit(theme)
+
+    def _on_language_changed(self, index: int):
+        """原子保存不同于当前配置的语言选择，失败时恢复列表，成功后通知宿主。"""
+        lang = self._language_combo.currentData()
+        if not lang or lang == self._config.get("general.language"):
+            return
+        if not self._config.set_atomic("general.language", lang):
+            self._refresh_languages()
+            QMessageBox.warning(self, t("错误"), t("语言设置保存失败，请检查设置文件是否只读后重试。"))
+            return
+        self.language_changed.emit(lang)
+
+    def _refresh_languages(self) -> None:
+        """重建语言列表，保留已配置但文件缺失的语言占位项，并阻断选择变化信号。"""
+        selected = normalize_language_code(self._config.get("general.language", "zh-CN"))
+        with QSignalBlocker(self._language_combo):
+            self._language_combo.clear()
+            for code, name in get_i18n().available_languages:
+                self._language_combo.addItem(name, code)
+            index = self._language_combo.findData(selected)
+            if index < 0 and selected:
+                self._language_combo.addItem(t("{code}（未找到语言包）", code=selected), selected)
+                index = self._language_combo.count() - 1
+            self._language_combo.setCurrentIndex(max(0, index))
+
+    def _open_language_folder(self) -> None:
+        """确保语言目录存在后交给系统打开，目录创建失败时显示错误。"""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        directory = get_i18n().directory
+        try:
+            directory.mkdir(parents=True, exist_ok=True)
+            QDesktopServices.openUrl(QUrl.fromLocalFile(str(directory)))
+        except OSError as error:
+            QMessageBox.warning(self, t("错误"), t("无法打开语言包文件夹：{error}", error=error))
+
+    # 代理设置
+
+    def _load_proxy_settings(self):
+        """将已校验的代理配置加载到界面，缺省值由 Config 提供。"""
+        active = bool(self._config.get("gamebanana.proxy_config.active"))
+        enabled = bool(self._config.get("gamebanana.proxy_config.enabled"))
+        mode = self._config.get("gamebanana.proxy_config.mode")
+        parsed_type = self._config.get("gamebanana.proxy_config.type")
+        parsed_host = self._config.get("gamebanana.proxy_config.host")
+        parsed_port = str(self._config.get("gamebanana.proxy_config.port"))
+
+        # 回填配置期间暂停信号，避免触发级联确认或自动保存。
+        self._proxy_active_check.blockSignals(True)
+        self._proxy_active_check.setChecked(active)
+        self._proxy_active_check.blockSignals(False)
+        self._proxy_enable_check.blockSignals(True)
+        self._proxy_enable_check.setChecked(enabled)
+        self._proxy_enable_check.blockSignals(False)
+        self._proxy_system_check.setChecked(mode == "system")
+
+        for i in range(self._proxy_type_combo.count()):
+            if self._proxy_type_combo.itemData(i) == parsed_type:
+                self._proxy_type_combo.setCurrentIndex(i)
+                break
+        self._proxy_host_input.setText(parsed_host)
+        self._proxy_port_input.setText(parsed_port)
+
+        # 同步显隐：总开关控制整块、系统代理控制手动区
+        self._proxy_cfg_sub.setVisible(active)
+        self._on_proxy_system_toggled(self._proxy_system_check.isChecked())
+        self._refresh_proxy_summary()
+
+    def _save_proxy_settings(self):
+        """整组保存代理总开关、在线开关、运行模式与连接参数，并刷新代理摘要。"""
+        active = self._proxy_active_check.isChecked()
+        enabled = self._proxy_enable_check.isChecked()
+        mode = "system" if self._proxy_system_check.isChecked() else "manual"
+        ptype = self._proxy_type_combo.currentData() or "http"
+        host = self._proxy_host_input.text().strip()
+        port = self._proxy_port_input.text().strip()
+
+        self._config.set("gamebanana.proxy_config.active", bool(active))
+        self._config.set("gamebanana.proxy_config.enabled", bool(enabled))
+        self._config.set("gamebanana.proxy_config.mode", mode)
+        self._config.set("gamebanana.proxy_config.type", ptype)
+        self._config.set("gamebanana.proxy_config.host", host)
+        self._config.set("gamebanana.proxy_config.port", port)
+        self._refresh_proxy_summary()
