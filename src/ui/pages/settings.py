@@ -842,3 +842,104 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         """切换到常规设置中的网络代理分区。"""
         self._switch_settings_section(0)
         self._stack.widget(0).select_section("network")
+
+    def _refresh_proxy_summary(self) -> None:
+        """按代理总开关和系统或手动模式，更新其他设置分区中的代理摘要。"""
+        if not self._proxy_active_check.isChecked():
+            summary = tr("代理总开关已关闭。")
+        elif self._proxy_system_check.isChecked():
+            summary = tr("使用 Windows 系统代理。")
+        else:
+            summary = (
+                f"{self._proxy_type_combo.currentText()} · "
+                f"{self._proxy_host_input.text()}:{self._proxy_port_input.text()}"
+            )
+        self._proxy_reference_row.description_label.setText(summary)
+
+    @staticmethod
+    def _set_combo_item_enabled(combo: QComboBox, index: int, enabled: bool, suffix: str = "") -> None:
+        """启用/禁用 QComboBox 的某一项（禁用项灰显不可选）。
+
+        Qt 的 QComboBox 无直接 API，经底层 model 的 item flags 实现。禁用时可附加
+        说明后缀（如「 — 未检测到 WinRAR」），让用户明白为何不可选。
+        """
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtGui import QStandardItemModel
+
+        model = combo.model()
+        if not isinstance(model, QStandardItemModel):
+            return
+        item = model.item(index)
+        if item is None:
+            return
+        if enabled:
+            item.setFlags(item.flags() | _Qt.ItemFlag.ItemIsEnabled)
+        else:
+            item.setFlags(item.flags() & ~_Qt.ItemFlag.ItemIsEnabled)
+            if suffix and suffix not in item.text():
+                item.setText(item.text() + suffix)
+
+    def _on_import_format_changed(self, *_args) -> None:
+        """仅在选择有效归档格式时显示强制格式统一选项。"""
+        if not hasattr(self, "_import_strict_format_row"):
+            return
+        fmt = self._import_format_combo.currentData()
+        self._import_strict_format_row.setVisible(fmt in ("zip", "7z", "rar"))
+
+    def _on_export_format_changed(self, *_args) -> None:
+        """仅在目标为归档格式时显示强制统一格式选项。"""
+        if not hasattr(self, "_export_strict_format_row"):
+            return
+        fmt = self._export_format_combo.currentData()
+        self._export_strict_format_row.setVisible(fmt in ("zip", "7z", "rar"))
+
+    def _build_update_page(self) -> QWidget:
+        """更新：仅「程序自身更新」；Mod 更新已并入「Mod 商店」页。"""
+        # 程序自身更新
+        from src.utils.constants import APP_VERSION
+
+        version_card, version_rows = self._make_group(tr("当前版本"), icon="refresh")
+        self._app_upd_check_btn = style_button(QPushButton(tr("检查程序更新")), icon="refresh")
+        self._app_upd_check_btn.clicked.connect(lambda: self.app_update_check_requested.emit())
+        self._add_row(
+            version_rows,
+            "d3dxSkinManage Plus",
+            self._app_upd_check_btn,
+            tr("当前版本 v{APP_VERSION}", APP_VERSION=APP_VERSION),
+        )
+        g2, gl2 = self._make_group(tr("更新偏好"), icon="settings")
+
+        self._app_upd_enable_check = ToggleSwitch()
+        self._add_row(gl2, tr("启用程序自动更新"), self._app_upd_enable_check, tr("关闭后不再检查/提示新版本。"))
+        self._app_upd_startup_check = ToggleSwitch()
+        self._add_row(
+            gl2, tr("启动时检查"), self._app_upd_startup_check, tr("启动后静默检查，带 24h 节流；有新版本才打扰。")
+        )
+        self._app_upd_backup_check = ToggleSwitch()
+        self._add_row(
+            gl2,
+            tr("更新前备份旧版本"),
+            self._app_upd_backup_check,
+            tr("一键更新前由更新器备份程序本体，失败可自动回滚。"),
+        )
+
+        # 下载源选择。
+        from src.utils.constants import APP_UPDATE_DOWNLOAD_MIRRORS
+
+        self._app_upd_source_combo = QComboBox()
+        self._app_upd_source_combo.addItem(tr("自动（镜像优先，失败回退）"), "auto")
+        for key, name, _prefix in APP_UPDATE_DOWNLOAD_MIRRORS:
+            self._app_upd_source_combo.addItem(tr(name), key)
+        self._app_upd_source_combo.setMinimumWidth(200)
+        self._add_row(
+            gl2,
+            tr("更新包下载源"),
+            self._app_upd_source_combo,
+            tr("下载更新包时优先使用的源；国内直连 GitHub 慢时可选加速镜像。"),
+        )
+        return SettingsCategoryPage(
+            tr("更新"),
+            [
+                ("app-update", tr("程序更新"), tr("管理 d3dxSkinManage Plus 自身的版本更新。"), [version_card, g2]),
+            ],
+        )
