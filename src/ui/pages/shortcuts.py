@@ -327,3 +327,128 @@ class ShortcutsPage(QWidget):
 
         self.system_toggle.toggled.connect(toggle)
         return card
+
+    def retheme(self):
+        """根据当前主题和嵌入背景生成快捷键分组、操作及滚动条样式，并刷新图标。"""
+        group_fill = fluent.surface(over="nav" if self._embedded else None)
+        line = fluent.stroke()
+        css = (
+            button_style() + "QWidget { background: transparent; }"
+            f"QLabel "
+            f"{{ background: transparent; "
+            f"border: none; "
+            f"color: {fluent.color('text')}; "
+            f"font-size: {theme.font('size_secondary')}px; "
+            f"}}"
+            f"#shortcutGroup, #shortcutSystem {{ background: {group_fill};"
+            f" border: 1px solid {line}; border-radius: {theme.radius('card')}px; }}"
+            f"#shortcutGroupHeading QLabel {{ font-size: {theme.font('size_subtitle')}px; font-weight: 600; }}"
+            f"#shortcutGroupHeading {{ border: none; border-bottom: 1px solid {line}; }}"
+            "#shortcutHeaderIcon { background: transparent; border: none; }"
+            f"QLabel#shortcutGroupCount {{ font-size: {theme.font('size_caption')}px; font-weight: 400;"
+            f" color: {fluent.color('muted')}; background: {fluent.surface('soft', 'strong', over='panel')};"
+            f" border: 1px solid {line}; border-radius: 4px; }}"
+            f"#shortcutRowTitle {{ font-size: {theme.font('size_body')}px; font-weight: 600; }}"
+            f"#shortcutDescription, #shortcutColumns QLabel, QLabel[settingsRole='muted'] "
+            f"{{ color: {fluent.color('secondary')}; "
+            f"font-size: {theme.font('size_secondary')}px; "
+            f"}}"
+            f"#shortcutRestore "
+            f"{{ background: transparent; "
+            f"border: none; "
+            f"color: {fluent.color('accent')}; "
+            f"font-size: {theme.font('size_secondary')}px; "
+            f"padding: 3px 0; "
+            f"}}"
+            f"#shortcutRestore:disabled {{ color: {fluent.color('muted')}; }}"
+            f"#shortcutCustom {{ color: {color('accent')}; background: {color('accent.subtle')};"
+            f" font-size: {theme.font('size_caption')}px; font-weight: 400; border-radius: 3px; padding: 0 5px; }}"
+            "#shortcutSystemToggle { background: transparent; border: none; padding: 0; min-height: 45px; }"
+            f"#shortcutSystemToggle:focus {{ border: 1px solid {color('accent')}; }}"
+            f"#shortcutSystemTitle, #shortcutSystemLine QLabel "
+            f"{{ color: {fluent.color('secondary')}; "
+            f"font-size: {theme.font('size_secondary')}px; "
+            f"}}"
+            f"#shortcutSystemLine {{ border: none; border-top: 1px solid {line}; }}"
+            f"QScrollBar:vertical {{ background: transparent; width: 6px; margin: 0; }}"
+            f"QScrollBar::handle:vertical {{ background: {color('scrollbar.handle')};"
+            " min-height: 30px; border-radius: 3px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }"
+        )
+        if self.styleSheet() != css:
+            self.setStyleSheet(css)
+        icons.retheme_icons(self)
+        self.update()
+
+    def refresh(self):
+        """从设置刷新每条命令的绑定，同步自定义标记和恢复默认按钮状态。"""
+        bindings = self.settings.bindings
+        for command in self.settings.commands:
+            self.binding_buttons[command.id].set_binding(bindings[command.id])
+            self._rows[command.id].custom.setVisible(bindings[command.id] != command.default)
+            self._rows[command.id].restore_button.setEnabled(bindings[command.id] != command.default)
+
+    def open_editor(self, command_id, *, restore=False):
+        """单实例打开指定命令的编辑器，可预置默认绑定，并保留编辑前快照用于撤销。"""
+        if self._dialog is not None or command_id not in self.binding_buttons:
+            return
+        self.toast.hide()
+        before = self.settings.bindings
+        dialog = ShortcutEditDialog(self.settings, command_id, self)
+        self._dialog = dialog
+        if restore:
+            dialog.reset_candidate()
+
+        def finished(result):
+            """编辑结束后恢复原按钮焦点，接受变更时保存撤销快照并显示冲突处理结果。"""
+            self._dialog = None
+            self.window().activateWindow()
+            origin = self.binding_buttons.get(command_id)
+            if origin is not None:
+                origin.setFocus(Qt.FocusReason.OtherFocusReason)
+            if result == QDialog.DialogCode.Accepted:
+                self._undo_snapshot = before
+                title = dialog.command.display_title
+                count = dialog.saved_conflict_count
+                message = (
+                    tr("已更新「{title}」，并清除 {count} 项冲突绑定", title=title, count=count)
+                    if count
+                    else tr("已更新「{title}」的快捷键", title=title)
+                )
+                self.toast.show_message(message, undo=True)
+            dialog.deleteLater()
+
+        dialog.finished.connect(finished)
+        dialog.open()
+
+    def undo(self):
+        """尝试恢复上次编辑前的完整绑定快照，失败时保留快照并显示可重试提示。"""
+        if self._undo_snapshot is None:
+            return
+        if not self.settings.restore(self._undo_snapshot):
+            self.toast.show_message(self.settings.last_error, undo=True, error=True)
+            return
+        self._undo_snapshot = None
+        self.toast.show_message(tr("已撤销上次更改"))
+
+    def resizeEvent(self, event):
+        """按主窗口尺寸调整列宽和分组间距，使独立及嵌入布局保持对齐，并重定位撤销提示。"""
+        super().resizeEvent(event)
+        compact = self.window().height() <= 760
+        narrow = self.window().width() <= 1100
+        top = 0 if compact else 14 if self.window().width() >= 1350 else 10
+        self._outer.setContentsMargins(0, 0, 0, 0) if self._embedded else self._outer.setContentsMargins(
+            20, top, 20, 24
+        )
+        inset = 14 if narrow else 20
+        for columns in self._column_rows:
+            columns.layout().setContentsMargins(inset, 7, inset, 7)
+            columns.layout().setSpacing(10 if narrow else 14)
+        for heading in self._key_headings:
+            heading.setFixedWidth(155 if narrow else 170)
+        for row in self._rows.values():
+            row.set_compact(compact, narrow)
+        for heading in self._group_headings:
+            heading.layout().setContentsMargins(20, 12 if compact else 16, 20, 12 if compact else 16)
+        self.toast.reposition()
