@@ -1514,3 +1514,68 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         self._parallel_spin.setValue(self._get_recommended_workers())
         self._parallel_recommend_btn.setChecked(True)
         self._autosave("import.parallel_workers", 0)
+
+    def _set_recommended_export_workers(self) -> None:
+        """恢复导出并发的自动策略，显示当前建议值并以零值保存配置。"""
+        self._export_workers_auto = True
+        self._export_parallel_spin.setValue(recommended_archive_workers())
+        self._export_parallel_recommend_btn.setChecked(True)
+        self._autosave("export.parallel_workers", 0)
+
+    def _on_update_concurrency_changed(self, value: int) -> None:
+        """保存手动 Mod 更新并发值，并取消自动推荐选中状态。"""
+        self._upd_concurrency_auto = False
+        self._upd_concurrency_recommend_btn.setChecked(False)
+        self._autosave("gamebanana.update_check.concurrency", value)
+
+    def _set_recommended_update_concurrency(self) -> None:
+        """恢复 Mod 更新并发的自动策略，刷新建议值并显式通知任务调度器。"""
+        self._upd_concurrency_auto = True
+        self._upd_concurrency_recommend_btn.setChecked(True)
+        self._upd_concurrency_input.setValue(recommended_update_concurrency())
+        # 保留自动模式；setValue 不发 valueChanged，需显式保存并通知调度器。
+        self._autosave("gamebanana.update_check.concurrency", 0)
+
+    def _reset_settings(self):
+        """恢复程序设置默认值，游戏配置由独立存储管理。
+
+        写入成功后才刷新界面并发布设置变化；失败时保留当前状态。
+        """
+        answer = QMessageBox.question(
+            self,
+            t("恢复默认"),
+            t(
+                "将恢复所有程序设置为默认值，包括外观、快捷键及导入、导出偏好。\n"
+                "支持自动推荐的设置将恢复为自动模式，按当前设备选择合适的值。\n"
+                "游戏配置和已导入的 Mod 不受影响。\n\n确定恢复默认设置吗？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        old_theme = self._config.get("general.theme")
+        old_language = self._config.get("general.language")
+        if not self._config.reset():
+            QMessageBox.warning(
+                self,
+                tr("恢复默认失败"),
+                tr("设置文件写入失败，已保持原有设置。\n\n请检查 config 目录是否只读或被其它程序占用，然后重试。"),
+            )
+            return
+        self._load_settings()
+        self._shortcut_settings.reload()
+        if old_theme != self._config.get("general.theme"):
+            self.theme_changed.emit(self._config.get("general.theme"))
+        self.font_changed.emit(self._config.get("appearance.font_family", ""))
+        # 所有控件已同步默认策略后，再通知主窗全量热生效。
+        self.background_changed.emit()
+        self.settings_changed.emit()
+        if old_language != self._config.get("general.language"):
+            self.language_changed.emit(self._config.get("general.language"))
+
+    def _on_bg_scrim_changed(self, value: int) -> None:
+        """非拖动输入立即保存遮罩值，滑块拖动则交由释放事件统一保存。"""
+        # 拖动在松开时保存；方向键、滚轮和轨道点击不会触发 sliderReleased。
+        if not self._bg_scrim_slider.isSliderDown():
+            self._save_bg_scrim(value)
