@@ -171,3 +171,7 @@ def create_demo() -> dict:
     manager.variants.stop_watch()
     print(f"演示数据已创建：{workspace}；{len(nodes)} 个分类，{len(mods)} 个 Mod，{len(variants)} 个变体。")
     return payload
+
+
+if __name__ == "__main__":
+    create_demo()
