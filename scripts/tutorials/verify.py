@@ -93,3 +93,66 @@ def source_image_path(reference: str, context: str) -> Path:
         f"{context} 图片来源不存在或越出教程目录：{reference}"
     )
     return path
+
+
+class TutorialHTML(HTMLParser):
+    """收集文档标识、链接与图片，检查是否存在外部依赖。"""
+
+    def __init__(self):
+        """初始化解析结果容器。"""
+        super().__init__(convert_charrefs=True)
+        self.ids = []
+        self.hrefs = []
+        self.images = []
+        self.figure_sources = []
+        self.dependencies = []
+        self.languages = []
+        self.headings = []
+        self.language_href = None
+        self.empty_lightbox_images = 0
+        self._ancestors = []
+        self._heading = None
+
+    def handle_starttag(self, tag, attrs):
+        """记录导航与资源引用。"""
+        attributes = dict(attrs)
+        if tag == "html":
+            self.languages.append(attributes.get("lang"))
+        if attributes.get("id"):
+            self.ids.append(attributes["id"])
+        if tag == "a" and attributes.get("href"):
+            self.hrefs.append(attributes["href"])
+            if attributes.get("id") == "language-link":
+                self.language_href = attributes["href"]
+        if tag == "img":
+            if not attributes.get("src") and any(item[1] == "lb-stage" for item in self._ancestors):
+                self.empty_lightbox_images += 1
+            else:
+                self.images.append(attributes)
+                if any(item[0] == "figure" for item in self._ancestors):
+                    self.figure_sources.append(attributes.get("data-source"))
+        if tag in {"script", "iframe", "video", "audio", "source"} and attributes.get("src"):
+            self.dependencies.append(attributes["src"])
+        if tag == "link" and attributes.get("href"):
+            self.dependencies.append(attributes["href"])
+        if attributes.get("srcset"):
+            self.dependencies.append(attributes["srcset"])
+        if re.fullmatch(r"h[1-6]", tag) and attributes.get("id"):
+            self._heading = (int(tag[1]), [])
+        if tag not in {
+            "area",
+            "base",
+            "br",
+            "col",
+            "embed",
+            "hr",
+            "img",
+            "input",
+            "link",
+            "meta",
+            "param",
+            "source",
+            "track",
+            "wbr",
+        }:
+            self._ancestors.append((tag, attributes.get("id")))
