@@ -54,3 +54,19 @@ def read_markdown_at_root(path: Path) -> str:
             line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", normalize, line)
         lines.append(line)
     return "".join(lines)
+
+
+def markdown_headings(value: str) -> list[tuple[int, str]]:
+    """读取实际正文的标题层级和显示文字，不执行 HTML 构建器。"""
+    headings = []
+    for line in markdown_lines(value):
+        match = re.match(r"^(#{1,6})\s+(.+)$", line)
+        if match:
+            parts = re.split(r"(`[^`]+`)", match[2])
+            for index, part in enumerate(parts):
+                if part.startswith("`") and part.endswith("`"):
+                    parts[index] = part[1:-1]
+                else:
+                    parts[index] = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", part).replace("*", "")
+            headings.append((len(match[1]), " ".join("".join(parts).split())))
+    return headings
