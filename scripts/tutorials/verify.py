@@ -70,3 +70,9 @@ def markdown_headings(value: str) -> list[tuple[int, str]]:
                     parts[index] = re.sub(r"\[([^\]]+)\]\([^)]+\)", r"\1", part).replace("*", "")
             headings.append((len(match[1]), " ".join("".join(parts).split())))
     return headings
+
+
+def markdown_images(value: str) -> list[str]:
+    """保留正文图片顺序和重复次数，以核对完整译文及 HTML 内容。"""
+    prose = "\n".join(markdown_lines(value))
+    return [unquote(target.strip("<>")).replace("\\", "/") for target in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prose)]
