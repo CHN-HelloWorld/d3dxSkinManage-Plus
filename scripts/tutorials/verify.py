@@ -30,3 +30,27 @@ def markdown_lines(value: str) -> list[str]:
         elif not fenced:
             lines.append(line)
     return lines
+
+
+def read_markdown_at_root(path: Path) -> str:
+    """以教程素材根目录比较各来源文档的链接，不依赖生成器的路径处理。"""
+
+    def normalize(match: re.Match[str]) -> str:
+        """保留外部地址与锚点，将本地路径换算为根目录下的对应位置。"""
+        parsed = urlsplit(match[2].strip("<>"))
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            return match[0]
+        target = (path.parent / unquote(parsed.path)).resolve()
+        relative = Path(os.path.relpath(target, TUTORIAL)).as_posix()
+        if parsed.fragment:
+            relative += "#" + parsed.fragment
+        return match[1] + relative + match[3]
+
+    lines, fenced = [], False
+    for line in path.read_text(encoding="utf-8").splitlines(keepends=True):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", normalize, line)
+        lines.append(line)
+    return "".join(lines)
