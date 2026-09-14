@@ -161,3 +161,13 @@ class TutorialHTML(HTMLParser):
         """收集正文标题的实际显示文字，忽略封面的无锚点标题。"""
         if self._heading is not None:
             self._heading[1].append(data)
+
+    def handle_endtag(self, tag):
+        """结束标题及祖先范围，识别唯一允许为空的灯箱图片。"""
+        if self._heading is not None and tag == f"h{self._heading[0]}":
+            self.headings.append((self._heading[0], " ".join("".join(self._heading[1]).split())))
+            self._heading = None
+        for index in range(len(self._ancestors) - 1, -1, -1):
+            if self._ancestors[index][0] == tag:
+                del self._ancestors[index:]
+                break
