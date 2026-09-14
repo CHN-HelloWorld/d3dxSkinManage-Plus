@@ -156,3 +156,8 @@ class TutorialHTML(HTMLParser):
             "wbr",
         }:
             self._ancestors.append((tag, attributes.get("id")))
+
+    def handle_data(self, data):
+        """收集正文标题的实际显示文字，忽略封面的无锚点标题。"""
+        if self._heading is not None:
+            self._heading[1].append(data)
