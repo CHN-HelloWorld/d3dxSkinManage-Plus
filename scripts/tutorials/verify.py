@@ -76,3 +76,20 @@ def markdown_images(value: str) -> list[str]:
     """保留正文图片顺序和重复次数，以核对完整译文及 HTML 内容。"""
     prose = "\n".join(markdown_lines(value))
     return [unquote(target.strip("<>")).replace("\\", "/") for target in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prose)]
+
+
+def source_image_path(reference: str, context: str) -> Path:
+    """data-source 必须指向教程目录内实际存在的原始 PNG。"""
+    relative = PurePosixPath(unquote(reference).replace("\\", "/"))
+    assert (
+        relative.parts
+        and relative.parts[0] == "images"
+        and not relative.is_absolute()
+        and ".." not in relative.parts
+        and relative.suffix.lower() == ".webp"
+    ), f"{context} 图片来源不是教程内的 PNG：{reference}"
+    path = (TUTORIAL / Path(*relative.parts)).resolve()
+    assert path.is_relative_to((TUTORIAL / "images").resolve()) and path.is_file(), (
+        f"{context} 图片来源不存在或越出教程目录：{reference}"
+    )
+    return path
