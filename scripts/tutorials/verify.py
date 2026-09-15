@@ -171,3 +171,8 @@ class TutorialHTML(HTMLParser):
             if self._ancestors[index][0] == tag:
                 del self._ancestors[index:]
                 break
+
+    def handle_startendtag(self, tag, attrs):
+        """自闭合标签使用相同的资源检查规则。"""
+        self.handle_starttag(tag, attrs)
+        self.handle_endtag(tag)
