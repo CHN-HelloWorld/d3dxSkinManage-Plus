@@ -241,3 +241,51 @@ def verify_html(path, *, language="zh-CN", markdown_texts=None, verified_images=
             f"多出 {dict(actual_images - expected_images)}"
         )
     return parser
+
+
+def read_build_constants() -> dict:
+    """只解析构建模块的常量，避免导入时执行任何业务代码。"""
+    root = ast.parse(Path(__file__).with_name("build.py").read_text(encoding="utf-8"))
+    found = {}
+    for node in root.body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in {
+                    "MANUAL_HEAD",
+                    "CHAPTER_ORDER",
+                    "EN_MANUAL_HEAD",
+                    "EN_CHAPTER_ORDER",
+                }:
+                    found[target.id] = ast.literal_eval(node.value)
+    assert set(found) == {"MANUAL_HEAD", "CHAPTER_ORDER", "EN_MANUAL_HEAD", "EN_CHAPTER_ORDER"}, (
+        "构建脚本缺少完整的中英文手册常量。"
+    )
+    return found
+
+
+def verify_translation(chinese: str, english: str, context: str) -> None:
+    """核对译文的章节、表格、代码块和配图完整性，允许示例数据保留中文。"""
+    zh_headings = markdown_headings(chinese)
+    en_headings = markdown_headings(english)
+    assert [level for level, _ in zh_headings] == [level for level, _ in en_headings], (
+        f"{context} 中英文标题数量或层级不一致。"
+    )
+    numbers = [
+        [
+            match[1]
+            for level, title in headings
+            if level > 1 and (match := re.match(r"^(\d+(?:\.\d+)*)(?=[\s.:：])", title))
+        ]
+        for headings in (zh_headings, en_headings)
+    ]
+    assert numbers[0] == numbers[1], f"{context} 英文章节编号缺失或顺序错误。"
+    zh_rows = [line.count("|") for line in markdown_lines(chinese) if line.startswith("|")]
+    en_rows = [line.count("|") for line in markdown_lines(english) if line.startswith("|")]
+    assert zh_rows == en_rows, f"{context} 中英文表格行数或列数不一致。"
+    fences = [
+        [line.strip()[3:] for line in value.splitlines() if line.strip().startswith(chr(96) * 3)]
+        for value in (chinese, english)
+    ]
+    assert fences[0] == fences[1], f"{context} 中英文代码块数量或类型不一致。"
+    expected_images = [image.replace("images/guide/", "images/guide-en/") for image in markdown_images(chinese)]
+    assert markdown_images(english) == expected_images, f"{context} 英文配图缺失、顺序错误或仍指向中文配图。"
