@@ -176,3 +176,68 @@ class TutorialHTML(HTMLParser):
         """自闭合标签使用相同的资源检查规则。"""
         self.handle_starttag(tag, attrs)
         self.handle_endtag(tag)
+
+
+def verify_html(path, *, language="zh-CN", markdown_texts=None, verified_images=None) -> TutorialHTML:
+    """四份 HTML 均须独立可读，内嵌图片与来源尺寸及 RGBA 像素完全一致。"""
+    document = path.read_text(encoding="utf-8")
+    assert "\x00" not in document, f"{path.name} 含未还原的行内 Markdown 占位符。"
+    assert "\ufffd" not in document, f"{path.name} 编码异常。"
+    assert not re.search(
+        r"__(?:CSS|JS|AVATAR|COVER|TOC|BODY|PORTRAIT|PORTRAIT_SOURCE|LANG|LANGUAGE|LANGUAGES|TITLE|MASCOT|CONTENTS|FILTER|THEME|VIEWER|FIT|ORIGINAL|CLOSE|HINT)__",
+        document,
+    ), f"{path.name} HTML 模板未完整替换。"
+    for phrase in ("适用：最终版", "最终版功能教程", "核对日期", "按 2026-10-30", "本教程按 "):
+        assert phrase not in document, f"{path.name} 残留内部维护措辞：{phrase}"
+    parser = TutorialHTML()
+    parser.feed(document)
+    parser.close()
+    assert parser.languages == [language], f"{path.name} HTML 语言错误：{parser.languages}，应为 {language}"
+    repeated = [key for key, count in Counter(parser.ids).items() if count > 1]
+    assert not repeated, f"{path.name} 标识重复：{repeated}"
+    ids = set(parser.ids)
+    plugin_anchor = "plugin-development-guide" if language == "en-US" else "插件开发指南"
+    assert plugin_anchor in ids, f"{path.name} 未包含对应语言的插件指南锚点：{plugin_anchor}"
+    for href in parser.hrefs:
+        if href.startswith("#"):
+            assert unquote(href[1:]) in ids, f"{path.name} 链接失效：{href}"
+        elif href == parser.language_href:
+            # 唯一允许的本地文档跳转；对应文件、语言和全部小节由专用检查器核验。
+            assert (path.parent / unquote(href.split("#", 1)[0])).is_file(), f"{path.name} 对应语言文件不存在。"
+        else:
+            assert re.match(r"https?://|mailto:", href), f"离线 HTML 依赖本地文档：{href}"
+    assert not parser.dependencies, f"存在外部脚本或媒体：{parser.dependencies}"
+    assert parser.empty_lightbox_images == 1, f"{path.name} 应仅保留一张空的灯箱图片。"
+    checked = verified_images if verified_images is not None else set()
+    for attributes in parser.images:
+        src = attributes.get("src", "")
+        reference = attributes.get("data-source", "")
+        assert src.startswith("data:image/") and ";base64," in src, f"{path.name} HTML 图片未内嵌。"
+        assert reference, f"{path.name} 内嵌图片缺少 data-source：{attributes.get('alt', '')}"
+        original = source_image_path(reference, path.name)
+        payload = base64.b64decode(src.split(",", 1)[1], validate=True)
+        identity = (reference, hashlib.sha256(payload).digest())
+        if identity not in checked:
+            with Image.open(io.BytesIO(payload)) as picture:
+                picture.verify()
+            with Image.open(io.BytesIO(payload)) as picture, Image.open(original) as source:
+                assert picture.size == source.size, (
+                    f"{path.name} 内嵌图片被缩放：{reference}，{picture.size} != {source.size}"
+                )
+                difference = ImageChops.difference(picture.convert("RGBA"), source.convert("RGBA"))
+                assert difference.getbbox(alpha_only=False) is None, (
+                    f"{path.name} 内嵌图片像素与原 PNG 不同：{reference}"
+                )
+            checked.add(identity)
+        # 后续只需要来源与数量，不保留四份 HTML 的大段 base64 字符串。
+        attributes.pop("src", None)
+    if markdown_texts is not None:
+        expected_headings = [heading for value in markdown_texts for heading in markdown_headings(value)]
+        assert parser.headings == expected_headings, f"{path.name} 正文标题缺失、顺序错误或与 Markdown 不一致。"
+        expected_images = Counter(image for value in markdown_texts for image in markdown_images(value))
+        actual_images = Counter(parser.figure_sources)
+        assert actual_images == expected_images, (
+            f"{path.name} 正文配图不完整：缺少 {dict(expected_images - actual_images)}，"
+            f"多出 {dict(actual_images - expected_images)}"
+        )
+    return parser
