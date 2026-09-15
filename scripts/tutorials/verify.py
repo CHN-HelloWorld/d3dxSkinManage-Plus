@@ -289,3 +289,15 @@ def verify_translation(chinese: str, english: str, context: str) -> None:
     assert fences[0] == fences[1], f"{context} 中英文代码块数量或类型不一致。"
     expected_images = [image.replace("images/guide/", "images/guide-en/") for image in markdown_images(chinese)]
     assert markdown_images(english) == expected_images, f"{context} 英文配图缺失、顺序错误或仍指向中文配图。"
+
+
+def index_records(records: list[dict], context: str) -> dict[str, dict]:
+    """按截图文件名建立索引，同时拒绝重复记录和路径形式的文件名。"""
+    assert isinstance(records, list) and records, f"{context} 缺少截图记录。"
+    by_file = {}
+    for record in records:
+        name = record.get("file", "")
+        assert re.fullmatch(r"\d{2}-[^/\\]+\.webp", name), f"{context} 截图文件名无效：{name}"
+        assert name not in by_file, f"{context} 截图记录重复：{name}"
+        by_file[name] = record
+    return by_file
