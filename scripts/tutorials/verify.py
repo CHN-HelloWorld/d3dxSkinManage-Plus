@@ -337,3 +337,94 @@ def annotation_box(mark: dict, capture: dict, messages: dict, context: str) -> l
         logical = ordered[occurrence]
     verify_box(logical, logical_size, f"{context} 逻辑坐标")
     return [round(value * capture["device_pixel_ratio"]) for value in logical]
+
+
+def verify_guides(language: str, layouts: dict[str, dict], reader_text: str, messages: dict) -> dict[str, dict]:
+    """核对每种语言的真实 2× 截图、完整标注记录、来源哈希和坐标缩放。"""
+    suffix = "-en" if language == "en-US" else ""
+    original_dir = TUTORIAL / f"images/final{suffix}"
+    guide_dir = TUTORIAL / f"images/guide{suffix}"
+    manifest = json.loads((original_dir / "captures.json").read_text(encoding="utf-8"))
+    assert manifest.get("language") == language and manifest.get("theme") == "dark", (
+        f"{original_dir.name} 截图清单的语言或主题错误。"
+    )
+    captures = index_records(manifest["screenshots"], f"{language} 原始截图")
+    assert captures.keys() == layouts.keys(), f"{language} 截图清单未覆盖全部 33 个布局场景。"
+    for name, capture in captures.items():
+        context = f"{language}/{name}"
+        assert capture.get("language") == language, f"{context} 截图语言不符。"
+        assert capture.get("device_pixel_ratio") == 2, f"{context} 截图不是原生 2× 渲染。"
+        geometry = [capture.get(key) for key in ("width", "height", "logical_width", "logical_height")]
+        assert all(type(value) is int and value > 0 for value in geometry), f"{context} 截图尺寸字段缺失或无效。"
+        width, height, logical_width, logical_height = geometry
+        assert (width, height) == (logical_width * 2, logical_height * 2), f"{context} 物理尺寸与逻辑尺寸及倍率不一致。"
+        with Image.open(original_dir / name) as picture:
+            assert picture.size == (width, height), f"{context} 截图尺寸与记录不符。"
+            picture.verify()
+        assert capture.get("controls"), f"{context} 缺少真实控件坐标。"
+        for index, control in enumerate(capture["controls"], 1):
+            assert control.get("class") and isinstance(control.get("text"), str), (
+                f"{context} 控件 {index} 缺少类型或文字。"
+            )
+            verify_box(control["box"], (logical_width, logical_height), f"{context} 控件 {index}")
+        visible_text = {control["text"].strip() for control in capture["controls"]}
+        for required in capture.get("required_text", []):
+            expected = messages.get(required, required) if language == "en-US" else required
+            assert required in visible_text or expected in visible_text, f"{context} 缺少必要控件：{expected}"
+
+    guides = index_records(
+        json.loads((guide_dir / "annotations.json").read_text(encoding="utf-8")),
+        f"{language} 操作配图",
+    )
+    assert guides.keys() == layouts.keys(), f"{language} 操作配图未覆盖全部 33 个布局场景。"
+    prefix = f"images/guide{suffix}/"
+    used_images = [image for image in markdown_images(reader_text) if image.startswith(prefix)]
+    assert used_images, f"{language} 正文没有引用对应语言的操作配图。"
+    for relative in used_images:
+        assert relative.removeprefix(prefix) in guides, f"{language} 缺少配图来源记录：{relative}"
+    for name, record in guides.items():
+        context = f"{language}/{name}"
+        capture = captures[name]
+        spec = layouts[name]
+        original = original_dir / name
+        annotated = guide_dir / name
+        assert record.get("source") == original.relative_to(TUTORIAL).as_posix(), f"{context} 标注来源路径错误。"
+        assert record.get("language") == language and record.get("device_pixel_ratio") == 2, (
+            f"{context} 标注语言或倍率错误。"
+        )
+        assert record.get("source_size") == [capture["width"], capture["height"]], (
+            f"{context} 标注记录使用了错误的原图物理尺寸。"
+        )
+        assert hashlib.sha256(original.read_bytes()).hexdigest() == record["source_sha256"], (
+            f"{context} 原图已变化，标注需要重建。"
+        )
+        assert hashlib.sha256(annotated.read_bytes()).hexdigest() == record["image_sha256"], (
+            f"{context} 标注图与记录不同步。"
+        )
+        with Image.open(annotated) as picture:
+            canvas_size = picture.size
+            assert record.get("size") == list(canvas_size), f"{context} 标注图尺寸与记录不符。"
+            picture.verify()
+        origin = record.get("screen_origin")
+        assert isinstance(origin, list) and len(origin) == 2 and all(type(value) is int for value in origin), (
+            f"{context} 缺少有效的原图放置坐标。"
+        )
+        verify_box([*origin, *record["source_size"]], canvas_size, f"{context} 原图放置范围")
+        assert origin[0] == (canvas_size[0] - capture["width"]) // 2, f"{context} 原图未按原尺寸居中放置。"
+        assert origin[1] > 0 and origin[1] + capture["height"] < canvas_size[1], f"{context} 缺少标题或说明区。"
+        assert record.get("title") == spec["title"] and spec["title"].strip(), f"{context} 配图标题与布局不一致。"
+        assert record.get("marks") and len(record["marks"]) == len(spec["marks"]), f"{context} 编号说明缺失或数量错误。"
+        for number, (mark, expected) in enumerate(zip(record["marks"], spec["marks"]), 1):
+            mark_context = f"{context} 标注 {number}"
+            assert expected.get("label", "").strip(), f"{mark_context} 缺少操作说明。"
+            assert all(mark.get(key) == value for key, value in expected.items() if key != "box"), (
+                f"{mark_context} 说明或目标与当前布局不一致。"
+            )
+            assert mark.get("box") == annotation_box(expected, capture, messages, mark_context), (
+                f"{mark_context} 未按控件逻辑坐标和 2× 倍率生成。"
+            )
+            verify_box(mark["box"], record["source_size"], f"{mark_context} 物理坐标")
+    assert (original_dir / "19-关于.webp").read_bytes() != (original_dir / "18-插件.webp").read_bytes(), (
+        f"{language} 关于页配图仍与插件页重复。"
+    )
+    return guides
