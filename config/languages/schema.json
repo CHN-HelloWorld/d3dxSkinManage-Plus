@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "d3dxSkinManage-Plus language pack",
+  "type": "object",
+  "properties": {
+    "$schema": {"type": "string"},
+    "_meta": {
+      "type": "object",
+      "properties": {
+        "format": {"const": 1},
+        "name": {"type": "string"},
+        "author": {"type": "string"},
+        "fallback": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9]*([-_][A-Za-z0-9]+)*$"}
+      }
+    },
+    "messages": {"type": "object", "additionalProperties": {"type": "string"}},
+    "gamebanana": {"type": "object", "additionalProperties": {"type": "string"}},
+    "qt": {"type": "object", "additionalProperties": {"type": "string"}}
+  },
+  "additionalProperties": false
+}

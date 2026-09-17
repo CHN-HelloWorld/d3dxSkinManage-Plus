@@ -6199,3 +6199,830 @@ class OverviewPage(QWidget):
                     self._panel_preview._update_nav()
                 # 同步卡片预览图
                 self._update_card_preview_by_path(fresh_mod.mod_id, saved_preview_path)
+
+    def _apply_sort(self, cats: list, mods: list) -> tuple:
+        """根据当前排序方式对类别和Mod列表排序，返回排序后的 (cats, mods)"""
+        if self._sort_key == "alpha_asc":
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+            mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name))
+        elif self._sort_key == "alpha_desc":
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
+            mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name), reverse=True)
+        elif self._sort_key == "time_asc":
+            cats = sorted(cats, key=lambda c: c.get("sort_order", 0))
+            mods = sorted(mods, key=lambda m: m.imported_at or "")
+        elif self._sort_key == "time_desc":
+            cats = sorted(cats, key=lambda c: c.get("sort_order", 0), reverse=True)
+            mods = sorted(mods, key=lambda m: m.imported_at or "", reverse=True)
+        elif self._sort_key == "author_asc":
+            mods_with_author = [m for m in mods if (m.info.author or "").strip()]
+            mods_without_author = [m for m in mods if not (m.info.author or "").strip()]
+            mods_with_author = sorted(
+                mods_with_author,
+                key=lambda m: (
+                    self._sort_text_key((m.info.author or "").strip()),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            mods = mods_with_author + mods_without_author
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "author_desc":
+            mods_with_author = [m for m in mods if (m.info.author or "").strip()]
+            mods_without_author = [m for m in mods if not (m.info.author or "").strip()]
+            mods_with_author = sorted(
+                mods_with_author,
+                key=lambda m: (
+                    self._sort_text_key((m.info.author or "").strip()),
+                    self._sort_text_key(m.display_name),
+                ),
+                reverse=True,
+            )
+            mods = mods_with_author + mods_without_author
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
+        elif self._sort_key == "status_desc":
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    0 if m.is_enabled else 1,
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "age_asc":
+            rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    rating_rank.get(m.info.age_rating.value, 999),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        elif self._sort_key == "age_desc":
+            rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
+            mods = sorted(
+                mods,
+                key=lambda m: (
+                    -rating_rank.get(m.info.age_rating.value, -1),
+                    self._sort_text_key(m.display_name),
+                ),
+            )
+            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
+        return cats, mods
+
+    def _on_card_scale_changed(self, value: int) -> None:
+        """即时调整卡片容器与布局，非拖动输入通过定时器延后完成图片缩放。"""
+        self._card_scale = value
+        if self._view_mode == "grid" and not self._mods_loading:
+            self._begin_card_scale()
+            # 即时轻量更新（仅容器尺寸+布局，不缩放图片）
+            self._apply_card_scale_fast()
+            # 键盘和滚轮调整不会发出滑块释放信号。
+            if not self._card_size_slider.isSliderDown():
+                self._scale_timer.start()
+
+    def _begin_card_scale(self) -> None:
+        """进入卡片缩放手势状态，停止出现效果和预取，并通知边缘效果进入尺寸调整模式。"""
+        self._scale_timer.stop()
+        if self._card_scale_active or self._view_mode != "grid" or self._mods_loading:
+            return
+        self._card_scale_active = True
+        self._cancel_directory_intro()
+        self._vs_invalidate_prefetch()
+        self._scroll_edge_fade.set_resizing(True)
+
+    def _end_card_scale(self) -> None:
+        """结束缩放并按需保存比例，统一卡片尺寸、作废不匹配的预览，再安排视口更新。"""
+        self._scale_timer.stop()
+        if not self._card_scale_active:
+            return
+        self._card_scale_active = False
+        self._scroll_edge_fade.set_resizing(False, deferred=True)
+        from src.core.config import Config as _Cfg
+
+        if _Cfg.instance().get("ui.overview_card_scale") != self._card_scale:
+            _Cfg.instance().set("ui.overview_card_scale", int(self._card_scale))
+        for card in self._vs_card_cache.values():
+            changed = card._card_width != self._vs_card_w or card._card_height != self._vs_card_h
+            if isinstance(card, CharacterCard):
+                card.resize_card(self._vs_card_w, self._vs_card_h, defer_preview=True)
+            else:
+                card.resize_card_fast(self._vs_card_w, self._vs_card_h)
+            if changed and card._cached_pixmap is not None:
+                card._preview_resolved = False
+        self._vs_window = None
+        # 隐藏或切换范围也可能结束手势，加载和关闭会停止调度，普通显示可恢复。
+        self._vs_scroll_timer.start()
+
+    def _apply_card_scale_fast(self) -> None:
+        """即时轻量卡片缩放 — 更新虚拟滚动布局参数并重定位可见卡片"""
+        if self._mods_loading or self._view_mode != "grid" or not self._display_items:
+            return
+        scaled_w = int(CharacterCard.CARD_WIDTH * self._card_scale / 100)
+        scaled_h = int(CharacterCard.CARD_HEIGHT * self._card_scale / 100)
+        avail_w = (
+            self._main_splitter.widget(0).width() if self._main_splitter.widget(0).width() > 100 else self.width() - 48
+        )
+        cols = max(1, (avail_w - 48) // (scaled_w + 12))
+
+        # 更新虚拟滚动布局参数
+        self._vs_card_w = scaled_w
+        self._vs_card_h = scaled_h
+        self._vs_row_h = scaled_h + 12
+        self._vs_cols = cols
+        self._vs_total_rows = (len(self._display_items) + cols - 1) // cols
+        total_h = self._vs_total_rows * self._vs_row_h + 12
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+        self._last_cards_per_row = cols
+
+        # 调整已缓存卡片的尺寸并重新定位
+        spacing = 12
+        x_pad = 6
+        self._scroll_content.setUpdatesEnabled(False)
+        for item_id, card in self._vs_card_cache.items():
+            changed = card._card_width != scaled_w or card._card_height != scaled_h
+            if self._card_scale_active:
+                # 手势期间缩放已有表面，仅更新外部边界，结束时统一更新字体、标签和子控件尺寸。
+                card.setFixedSize(scaled_w, scaled_h)
+            elif isinstance(card, CharacterCard):
+                card.resize_card(scaled_w, scaled_h, defer_preview=True)
+            elif isinstance(card, ModCard):
+                card.resize_card_fast(scaled_w, scaled_h)
+            if not self._card_scale_active and changed and card._cached_pixmap is not None:
+                card._preview_resolved = False
+            idx = self._display_idx_map.get(item_id, -1)
+            if idx >= 0:
+                row = idx // cols
+                col = idx % cols
+                card.move(x_pad + col * (scaled_w + spacing), spacing // 2 + row * self._vs_row_h)
+        self._scroll_content.setUpdatesEnabled(True)
+        self._scroll_content.update()
+
+        # 缩放后可能需要创建/回收卡片
+        self._vs_update_visible()
+
+    def _apply_card_scale_pixmaps(self) -> None:
+        """最终模糊和裁剪仍在有界后台预览队列执行。"""
+        if self._card_size_slider.isSliderDown():
+            return
+        self._end_card_scale()
+        from src.core.config import Config as _Cfg
+
+        if _Cfg.instance().get("ui.overview_card_scale") != self._card_scale:
+            _Cfg.instance().set("ui.overview_card_scale", int(self._card_scale))
+        if self._mods_loading or self._view_mode != "grid" or not self._vs_card_cache:
+            return
+        for card in self._vs_card_cache.values():
+            self._vs_restore_preview(card)
+        self._vs_update_visible()
+
+    # 预设
+
+    def set_presets(self, presets: list, current_preset_id: str = "", rename_id: str | None = None) -> None:
+        """填充预设选择器。rename_id 给出时，立即进入该预设的重命名模式"""
+        self._preset_selector.set_presets(presets, current_preset_id, rename_id=rename_id)
+
+    def _on_add_character(self) -> None:
+        """以同级和全局角色名称约束新建类别，确认后附加当前父目录并通知宿主添加。"""
+        # 收集同级已有名称。
+        existing = [c.get("name", "") for c in self._characters]
+        # 收集当前游戏中全部角色或对象名称。
+        all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
+        dialog = CharacterDialog(existing_names=existing, all_character_names=all_char_names, parent=self)
+        if dialog.exec():
+            result = dialog.get_result()
+            if result:
+                result["parent_id"] = self._current_parent_id
+                self.character_add_requested.emit(result)
+
+    def _on_edit_character(self, char_id: str) -> None:
+        """查找当前目录中的目标类别，带入重名约束编辑，确认后向宿主提交字段变化。"""
+        char_data = None
+        for c in self._characters:
+            if c.get("id") == char_id:
+                char_data = c
+                break
+        if not char_data:
+            return
+        # 收集同级已有名称。
+        existing = [c.get("name", "") for c in self._characters]
+        # 收集当前游戏中全部角色或对象名称。
+        all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
+        dialog = CharacterDialog(
+            char_data=char_data, existing_names=existing, all_character_names=all_char_names, parent=self
+        )
+        if dialog.exec():
+            result = dialog.get_result()
+            if result:
+                self.character_edit_requested.emit(char_id, result)
+
+    def prepare_batch_add_dialog(self) -> BatchAddCharacterDialog:
+        """接受输入前准备静态表单，主题变化时更新局部颜色。"""
+        dialog = self._batch_add_dialog
+        if dialog is not None and not dialog.isVisible() and dialog._built_theme != theme.current_theme():
+            dialog.deleteLater()
+            dialog = None
+        if dialog is None:
+            # 窗口归顶层所有，避免亚克力准备使整张页面变成原生控件。
+            dialog = BatchAddCharacterDialog(parent=self.window())
+            dialog.layout().activate()
+            self._batch_add_dialog = dialog
+        return dialog
+
+    def _on_batch_add(self) -> None:
+        """批量添加类别 - 弹出批量版对话框"""
+        dialog = self.prepare_batch_add_dialog()
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog.prepare_for_open()
+        if dialog.exec():
+            results = dialog.get_results()
+            if results:
+                for r in results:
+                    r["parent_id"] = self._current_parent_id
+                self.character_batch_add_requested.emit(results)
+
+    def _on_batch_disable(self) -> None:
+        """批量禁用当前目录及所有子目录下已启用的Mod"""
+        if self._enabled_mod_ids_loader is not None:
+            try:
+                mod_ids = list(self._enabled_mod_ids_loader(self._current_parent_id))
+            except Exception:
+                logger.exception("Failed to read enabled Mods for the current directory")
+                QMessageBox.warning(self, tr("读取失败"), tr("无法读取当前目录的启用状态，请刷新后重试。"))
+                return
+        else:
+            mod_ids = [mod.mod_id for mod in self._subtree_mods if mod.is_enabled]
+        if not mod_ids:
+            QMessageBox.information(self, tr("提示"), tr("当前目录下没有已启用的Mod。"))
+            return
+
+        reply = QMessageBox.question(
+            self,
+            tr("确认批量禁用"),
+            tr("确定禁用当前目录及子目录下的 {count} 个已启用Mod？", count=len(mod_ids)),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+        )
+        if reply == QMessageBox.StandardButton.Yes:
+            self.batch_disable_requested.emit(mod_ids)
+
+    def resizeEvent(self, event):
+        """非加载状态下调整列表列宽，卡片模式则合并安排延后的布局刷新。"""
+        super().resizeEvent(event)
+        if self._mods_loading:
+            return
+        if self._view_mode == "list" and not self._overview_header_dragging:
+            self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+        if (self._characters or self._current_mods) and self._view_mode == "grid":
+            self._resize_timer.start()
+
+    def _deferred_refresh(self) -> None:
+        """窗口/分割线大小变化时的延迟刷新 — 利用虚拟滚动重排"""
+        if self._mods_loading:
+            return
+        if self._view_mode == "grid":
+            if self._display_items:
+                # 已有数据时只重算列数并重定位
+                self._vs_relayout()
+            else:
+                self._refresh_cards(self._search_input.text().strip())
+        else:
+            # 状态控件可能改变分隔布局，已有记录仍有效，不重建表格。
+            self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+
+    def _vs_relayout(self) -> None:
+        """窗口/分割线变化后重排活动卡片，回收新窗口外的旧绑定。"""
+        if self._mods_loading:
+            return
+        scaled_w = self._vs_card_w
+        avail_w = (
+            self._main_splitter.widget(0).width() if self._main_splitter.widget(0).width() > 100 else self.width() - 48
+        )
+        new_cols = max(1, (avail_w - 48) // (scaled_w + 12))
+        if new_cols == self._vs_cols:
+            self._vs_update_visible()  # 高度增长也需要补齐新增可见行。
+            return
+        self._vs_cols = new_cols
+        self._last_cards_per_row = new_cols
+        self._vs_total_rows = (len(self._display_items) + new_cols - 1) // new_cols
+        total_h = self._vs_total_rows * self._vs_row_h + 12
+        self._scroll_content.setMinimumHeight(total_h)
+        self._scroll_content.setMaximumHeight(total_h)
+
+        # 保留当前绑定的重排动画；移出新窗口的卡片先隐藏再供新行复用。
+        self._reflowing = True
+        try:
+            self._vs_update_visible()
+        finally:
+            self._reflowing = False
+
+    def _set_view(self, mode: str) -> None:
+        """保存切换目标和离开位置并持久化布局模式，加载中保留现有控件，空闲时切换对应视图。"""
+        self._end_card_scale()
+        self._cancel_directory_intro()
+        if mode not in ("grid", "list"):
+            mode = "grid"
+        self._request_view_position(mode=mode)
+        self._view_mode = mode
+        self._directory_intro_pending = anim.is_enabled()
+        # 记忆视图模式，下次启动恢复（与卡片缩放滑块的持久化对称）。
+        try:
+            from src.core.config import Config as _Cfg
+
+            _Cfg.instance().set("ui.overview_view_mode", mode)
+        except Exception:
+            pass
+        idx = self._view_combo.findData(mode)
+        if idx >= 0 and self._view_combo.currentIndex() != idx:
+            self._view_combo.blockSignals(True)
+            self._view_combo.setCurrentIndex(idx)
+            self._view_combo.blockSignals(False)
+        if self._mods_loading:
+            return  # 使用当前显示的控件，另一布局可能尚未更新。
+        # 卡片大小滑动条仅卡片视图可见
+        self._card_size_slider.setVisible(mode == "grid")
+        self._card_size_label.setVisible(mode == "grid")
+        if mode == "grid":
+            self._scroll_area.setVisible(True)
+            self._table.setVisible(False)
+            self._refresh_cards(self._search_input.text().strip())
+        else:
+            self._scroll_area.setVisible(False)
+            self._refresh_table(self._search_input.text().strip())
+
+    def _refresh_table(self, filter_text: str = "") -> None:
+        """刷新列表视图 - 混合显示类别和 Mod"""
+        if self._mods_loading:
+            return
+        view, position = self._prepare_view_position(filter_text)
+        restore = self._pending_view is not None or position != 0
+        self._table_reveal_gen = getattr(self, "_table_reveal_gen", 0) + 1
+        previous_syncing = self._table._syncing_rows
+        self._table._syncing_rows = True
+        self._applying_position = True
+        try:
+            self._rebuild_table(filter_text)
+            self._commit_view_position(view, position if self._display_items else 0)
+        finally:
+            self._applying_position = False
+            self._table._syncing_rows = previous_syncing
+        self._table._sync_visible_rows()
+        if self._directory_intro_pending or not restore:
+            self._reveal_table_rows(len(self._display_items))
+        self._directory_intro_pending = False
+
+    def _rebuild_table(self, filter_text: str) -> None:
+        """立即建立行身份与选择映射，其余单元格按需填充，再同步有效选择、空状态和列宽。"""
+        filtered_cats, filtered_mods = self._filtered_content(filter_text)
+
+        # 重建 display_items
+        category_items = [{"id": cat.get("id", ""), "type": "category", "data": cat} for cat in filtered_cats]
+        mod_items = [{"id": mod.mod_id, "type": "mod", "data": mod} for mod in filtered_mods]
+        self._display_items = (
+            mod_items + category_items if self._sort_key == "status_desc" else category_items + mod_items
+        )
+        self._display_idx_map = {item["id"]: i for i, item in enumerate(self._display_items)}
+
+        total_rows = len(self._display_items)
+        selection_blocker = QSignalBlocker(self._table)
+        self._table.clearContents()
+        self._table.setRowCount(total_rows)
+        self._table.verticalHeader().setDefaultSectionSize(52)
+        # 仅分类行覆盖默认尺寸，不为重置高度重建全部行或改变滚动范围。
+        for row in getattr(self, "_table_category_rows", ()):
+            if row < total_rows:
+                self._table.setRowHeight(row, 52)
+        self._table_category_rows = []
+        for row in range(min(total_rows, 24)):
+            if self._table.isRowHidden(row):
+                self._table.setRowHidden(row, False)
+        entries = self._display_items
+        category_template = QTableWidgetItem(icons.get_icon("meta/category"), tr("类别"))
+        category_template.setData(Qt.ItemDataRole.UserRole + 1, "category")
+        mod_templates = {}
+        for enabled in (False, True):
+            template = QTableWidgetItem(icons.get_icon("actions/mod"), "Mod")
+            template.setData(Qt.ItemDataRole.UserRole + 1, "mod")
+            template.setData(ModListTable.ROLE_ENABLED, enabled)
+            mod_templates[enabled] = template
+        # 所有身份立即可供选择和快捷键使用，其余单元格按需填充。
+        for i, item in enumerate(entries):
+            is_mod = item["type"] == "mod"
+            template = mod_templates[bool(item["data"].is_enabled)] if is_mod else category_template
+            type_item = QTableWidgetItem(template)
+            type_item.setData(Qt.ItemDataRole.UserRole, item["id"])
+            if is_mod:
+                self._table._mod_rows[item["id"]] = i
+            self._table.setItem(i, 0, type_item)
+            if not is_mod:
+                self._table.setRowHeight(i, 32)
+                self._table_category_rows.append(i)
+
+        def populate_row(i: int) -> None:
+            """按分类或 Mod 类型填充指定行的名称、作者、分级、标签和状态信息。"""
+            item = entries[i]
+            if item["type"] == "category":
+                cat = item["data"]
+                self._table.setItem(i, 1, QTableWidgetItem(cat.get("name", tr("未知"))))
+                name_en = cat.get("name_en", "")
+                name_item = QTableWidgetItem(name_en)
+                name_item.setToolTip(name_en)
+                self._table.setItem(i, 2, name_item)
+                count = cat.get("mod_count", 0)
+                enabled = cat.get("enabled_count", 0)
+                self._table.setItem(i, 3, QTableWidgetItem("-"))
+                self._table.setItem(i, 4, QTableWidgetItem(f"{enabled} / {count}"))
+            else:
+                mod = item["data"]
+                self._set_table_mod_name(i, mod)
+                author = mod.info.author or ""
+                author_item = QTableWidgetItem(author)
+                author_item.setToolTip(author)
+                self._table.setItem(i, 2, author_item)
+                self._table.setItem(i, 3, QTableWidgetItem(_age_rating_text(mod.info.age_rating)))
+                self._set_table_mod_status(i, mod)
+
+        self._table.set_row_factory(populate_row)
+
+        self._prune_selection()
+        previous_selection = self._selected_ids.copy()
+        self._selected_ids.intersection_update(item["id"] for item in self._display_items)
+        self._sync_table_selection_visual()
+        selection_blocker.unblock()
+        # 尺寸/后台刷新不应重做选择时的预览展开；只有实际选区改变才更新面板。
+        if self._selected_ids != previous_selection:
+            self._on_table_selection_changed()
+        else:
+            self._update_card_selection()
+        self._update_filter_empty(bool(self._display_items), filter_text)
+        self._apply_overview_column_widths(force_ratio=not self._overview_user_resized)
+
+        # 更新状态栏
+        self._update_status_bar_selection()
+
+    def _reveal_table_rows(self, total_rows: int) -> None:
+        """按当前视口逐行揭示，保持行高、选择和恢复的滚动位置不变。"""
+        if total_rows > 0:
+            self._table.reveal_visible_rows()
+
+    def _apply_overview_column_widths(self, force_ratio: bool = False, preferred_col: int = 1) -> None:
+        """按比例或手动宽度补足视口，自动模式下按优先顺序收缩至各列下限，并防止递归调整。"""
+        if self._overview_header_dragging:
+            return
+        if self._overview_syncing_widths:
+            return
+        self._overview_syncing_widths = True
+        try:
+            viewport_w = max(520, self._table.viewport().width())
+            if force_ratio:
+                used = 0
+                for idx in range(4):
+                    w = max(self._overview_col_min_widths[idx], int(viewport_w * self._overview_col_ratios[idx]))
+                    self._table.setColumnWidth(idx, w)
+                    used += w
+                self._table.setColumnWidth(4, max(self._overview_col_min_widths[4], viewport_w - used))
+
+            widths = [self._table.columnWidth(i) for i in range(5)]
+            total_w = sum(widths)
+            if total_w < viewport_w:
+                target_col = preferred_col if 0 <= preferred_col < 5 else 1
+                self._table.setColumnWidth(target_col, widths[target_col] + (viewport_w - total_w))
+                return
+
+            if not force_ratio:
+                # 用户已手动调整列宽，不强制收缩，让水平滚动条自然出现
+                return
+
+            overflow = total_w - viewport_w
+            shrink_order = [1, 2, 4, 3, 0]
+            if 0 <= preferred_col < 5 and preferred_col in shrink_order:
+                shrink_order = [idx for idx in shrink_order if idx != preferred_col] + [preferred_col]
+
+            for idx in shrink_order:
+                if overflow <= 0:
+                    break
+                cur = self._table.columnWidth(idx)
+                min_w = self._overview_col_min_widths[idx]
+                can_shrink = max(0, cur - min_w)
+                if can_shrink <= 0:
+                    continue
+                cut = min(overflow, can_shrink)
+                self._table.setColumnWidth(idx, cur - cut)
+                overflow -= cut
+        finally:
+            self._overview_syncing_widths = False
+
+    def _on_overview_header_section_resized(self, logical_index: int, old_size: int, new_size: int) -> None:
+        """非内部同步且列宽实际变化时记录手动调整状态，使后续布局保留用户列宽。"""
+        if self._overview_syncing_widths:
+            return
+        if old_size == new_size:
+            return
+        self._overview_user_resized = True
+
+    def _on_table_selection_changed(self) -> None:
+        """鼠标、方向键和全选共用 Qt 选区，剪切/删除目标始终与行高亮一致。"""
+        selected = self._table.selectionModel().selectedRows()
+        self._selected_ids = {index.data(Qt.ItemDataRole.UserRole) for index in selected}
+        self._update_card_selection()
+        if len(selected) == 1:
+            self._last_clicked_index = selected[0].row()
+        self._show_selection_panel()
+
+    def _on_table_double_clicked(self, row: int, col: int) -> None:
+        """列表双击 → 类别=进入，Mod=切换"""
+        item = self._table.item(row, 0)
+        if not item:
+            return
+        item_id = item.data(Qt.ItemDataRole.UserRole)
+        item_type = item.data(Qt.ItemDataRole.UserRole + 1) or "category"
+        if item_type == "category":
+            self._navigate_to(item_id)
+        elif item_id not in self._deploying_frac:
+            self.mod_toggle_requested.emit(item_id)
+
+    def _show_table_context_menu(self, pos) -> None:
+        """按命中行与多选范围构建分类或 Mod 菜单，分发导航、剪贴板、启用、编辑、导出和删除请求。"""
+        item = self._table.itemAt(pos)
+        if not item:
+            self._show_empty_area_context_menu(self._table.viewport().mapToGlobal(pos))
+            return
+        row = item.row()
+        type_item = self._table.item(row, 0)
+        if not type_item:
+            return
+        item_id = type_item.data(Qt.ItemDataRole.UserRole)
+        item_type = type_item.data(Qt.ItemDataRole.UserRole + 1) or "category"
+
+        # 右键未选中行时先选中它（同步行高亮）
+        self._select_for_context_menu(item_id)
+        multi = len(self._selected_ids) > 1 and item_id in self._selected_ids
+        del_label = tr("删除选中的 {count} 项", count=len(self._selected_ids)) if multi else t("删除")
+
+        menu = QMenu(self)
+        if item_type == "category":
+            self._add_item_clipboard_actions(menu)
+            menu.addSeparator()
+            enter_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("进入"))
+            menu.addSeparator()
+            open_dir_act = menu.addAction(icons.get_icon("actions/folder"), tr("打开源目录"))
+            online_act = menu.addAction(icons.get_icon("actions/search", "success"), tr("在线查找"))
+            menu.addSeparator()
+            edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+            export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+            delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
+            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            if action == enter_act:
+                self._navigate_to(item_id)
+            elif action == open_dir_act:
+                self._open_category_folder(item_id)
+            elif action == online_act:
+                self._online_search_by_cat_id(item_id)
+            elif action == edit_act:
+                self._on_edit_character(item_id)
+            elif action == export_act:
+                self._export_from_context(item_id, is_mod=False)
+            elif action == delete_act:
+                if multi:
+                    self._delete_selected()
+                else:
+                    self.character_delete_requested.emit(item_id)
+        else:
+            # 获取Mod对象以确定启用/禁用状态
+            self._add_item_clipboard_actions(menu)
+            menu.addSeparator()
+            mod = self._mod_by_id(item_id)
+            toggle_label = tr("禁用") if (mod and mod.is_enabled) else tr("启用")
+            toggle_act = menu.addAction(
+                icons.get_icon("status/disabled" if (mod and mod.is_enabled) else "status/enabled"), toggle_label
+            )
+            if item_id in self._deploying_frac:
+                toggle_act.setText(tr("正在启用…"))
+                toggle_act.setEnabled(False)
+            edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+            open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+            export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+            menu.addSeparator()
+            delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
+            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            if action == toggle_act:
+                self.mod_toggle_requested.emit(item_id)
+            elif action == edit_act:
+                self.mod_edit_requested.emit(item_id)
+            elif action == open_folder_act:
+                self._open_mod_folder(item_id)
+            elif action == export_act:
+                self._export_from_context(item_id, is_mod=True)
+            elif action == delete_act:
+                if multi:
+                    self._delete_selected()
+                else:
+                    self.mod_delete_requested.emit(item_id)
+
+    def _add_item_clipboard_actions(self, menu: QMenu, *, include_cut: bool = True) -> None:
+        """各项目菜单共用键盘剪贴板操作。"""
+        if include_cut:
+            cut = menu.addAction(icons.get_icon("actions/cut"), tr("剪切"))
+            cut.setEnabled(bool(self._selected_ids))
+            cut.triggered.connect(self._cut_selected)
+        paste = menu.addAction(icons.get_icon("actions/paste"), tr("粘贴"))
+        paste.setEnabled(
+            bool(self._clipboard_cat_ids or self._clipboard_mod_ids)
+            and self._clipboard_source_parent != self._current_parent_id
+        )
+        paste.setToolTip(tr("将剪切的项目移动到当前目录"))
+        paste.triggered.connect(self._paste_items)
+
+    def _show_empty_area_context_menu(self, global_pos) -> None:
+        """空白处右键菜单：返回上一级、导入Mod、新建类别、切换视图"""
+        menu = QMenu(self)
+        at_sub = bool(self._current_parent_id)  # 仅在子层级（非根目录）这两项才可用
+        # 顶层目录下「返回上一级 / 导入 Mod」不可用：除 setEnabled 外，图标也染成 disabled 灰，
+        # 否则只有文字变灰、SVG 图标仍是亮色，视觉上看不出禁用。
+        back_act = menu.addAction(
+            icons.get_icon("actions/up", "text.primary" if at_sub else "text.disabled"), tr("返回上一级")
+        )
+        back_act.setEnabled(at_sub)
+        menu.addSeparator()
+        self._add_item_clipboard_actions(menu, include_cut=False)
+        menu.addSeparator()
+        import_act = menu.addAction(
+            icons.get_icon("actions/import", "text.primary" if at_sub else "text.disabled"), tr("导入 Mod")
+        )
+        import_act.setEnabled(at_sub)
+        add_cat_act = menu.addAction(icons.get_icon("actions/new-folder"), tr("新建类别"))
+        menu.addSeparator()
+        if self._view_mode == "grid":
+            switch_view_act = menu.addAction(icons.get_icon("actions/list-view"), tr("进入列表视图"))
+        else:
+            switch_view_act = menu.addAction(icons.get_icon("actions/card-view"), tr("进入卡片视图"))
+        action = menu.exec(global_pos)
+        if action == back_act:
+            self._navigate_back()
+        elif action == import_act:
+            self.mod_import_requested.emit()
+        elif action == add_cat_act:
+            self._on_add_character()
+        elif action == switch_view_act:
+            if self._view_mode == "grid":
+                self._set_view("list")
+            else:
+                self._set_view("grid")
+
+    def hideEvent(self, event) -> None:
+        """页面隐藏时结束卡片缩放状态并取消目录出现效果。"""
+        self._end_card_scale()
+        self._cancel_directory_intro()
+        super().hideEvent(event)
+
+    def closeEvent(self, event) -> None:
+        """确保后台详情/图片线程先退出，再允许页面析构。"""
+        self._end_card_scale()
+        self._invalidate_view_position(clear=True)
+        self._cancel_directory_intro()
+        self._vs_population_timer.stop()
+        self._vs_scroll_timer.stop()
+        self._vs_pixmap_timer.stop()
+        for attr in (
+            "_pixmap_worker",
+            "_panel_preview_worker",
+            "_key_bindings_worker",
+        ):
+            worker = getattr(self, attr, None)
+            if worker is not None and worker.isRunning():
+                worker.stop()
+                worker.wait(1000)
+        super().closeEvent(event)
+
+    def _navigate_back(self) -> None:
+        """返回上一级目录"""
+        if not self._current_parent_id:
+            return
+        # 找到当前目录的parent_id
+        parent_id = ""
+        for c in self._all_characters:
+            if c["id"] == self._current_parent_id:
+                parent_id = c.get("parent_id") or ""
+                break
+        self._navigate_to(parent_id)
+
+    def _open_mod_folder(self, mod_id: str) -> None:
+        """通过mod_id打开源文件夹"""
+        import os
+        import subprocess
+
+        mod = self._mod_by_id(mod_id)
+        if mod is None:
+            return
+        path = Path(mod.path)
+        if fs.exists(path):
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", str(path)])
+            else:
+                subprocess.Popen(["xdg-open", str(path)])
+
+    def _add_previews_to_mod(self, mod_id: str, paths: list[str]) -> int:
+        """给某个 Mod 追加预览图（走既有 preview_image_dropped 写入磁盘链，最后一张成为主图）。"""
+        added = 0
+        for path in paths:
+            if path and fs.exists(path):
+                self.preview_image_dropped.emit(mod_id, path)
+                added += 1
+        if added:
+            # 新图已被落库提成主图，会话内的「显示第 N 张」记忆必须作废，
+            # 否则视图重建后卡片又切回旧图（串图 bug 的另一面）。
+            self._preview_override_paths.pop(mod_id, None)
+        return added
+
+    def _paste_preview_onto_mod(self, mod_id: str) -> bool:
+        """把剪贴板里的图片贴成该 Mod 的预览图（快捷上图 / 菜单项共用）。"""
+        path = clipboard_image_path()
+        if not path:
+            return False
+        return self._add_previews_to_mod(mod_id, [path]) > 0
+
+    def _browse_previews_for_mod(self, mod_id: str) -> None:
+        """文件对话框选图，追加为该 Mod 的预览图。"""
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            tr("选择预览图"),
+            "",
+            tr("图片文件 (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;所有文件 (*)"),
+        )
+        if files:
+            self._add_previews_to_mod(mod_id, list(files))
+
+    def _show_mod_card_context_menu(self, card, mod_id: str, pos) -> None:
+        """显示 Mod 卡片的操作菜单。
+
+        右键未选中卡片时先选中，已多选时保留选择以支持批量操作。
+        Ctrl 或 Shift 加右键直接粘贴预览，普通右键显示菜单。
+        上下文菜单信号同步分发，可读取当时的键盘修饰状态。
+        """
+        self._select_for_context_menu(mod_id)
+        quick = QApplication.keyboardModifiers() & (
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier
+        )
+        if quick:
+            self._paste_preview_onto_mod(mod_id)
+            return
+        mod = self._mod_by_id(mod_id)
+        menu = QMenu(self)
+        toggle_label = tr("禁用") if (mod and mod.is_enabled) else tr("启用")
+        toggle_act = menu.addAction(
+            icons.get_icon("status/disabled" if (mod and mod.is_enabled) else "status/enabled"), toggle_label
+        )
+        if mod_id in self._deploying_frac:
+            toggle_act.setText(tr("正在启用…"))
+            toggle_act.setEnabled(False)
+        edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
+        open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+        export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
+        menu.addSeparator()
+        self._add_item_clipboard_actions(menu)
+        menu.addSeparator()
+        paste_act = menu.addAction(icons.get_icon("actions/image"), tr("粘贴预览图"))
+        paste_act.setEnabled(clipboard_has_image())
+        browse_act = menu.addAction(icons.get_icon("actions/add"), tr("添加预览图"))
+        menu.addSeparator()
+        multi = len(self._selected_ids) > 1 and mod_id in self._selected_ids
+        delete_act = menu.addAction(
+            icons.get_icon("actions/remove"),
+            tr("删除选中的 {count} 项", count=len(self._selected_ids)) if multi else t("删除"),
+        )
+
+        # menus：把插件 mod-context 贡献点追加到菜单末尾
+        from src.ui import plugin_menu
+
+        plugin_actions = plugin_menu.menu_actions("mod-context", mod_id)
+        plugin_act_map = {}
+        if plugin_actions:
+            menu.addSeparator()
+            for _title, _cb in plugin_actions:
+                _a = menu.addAction(_title)
+                plugin_act_map[_a] = _cb
+
+        action = menu.exec(card.mapToGlobal(pos))
+        if action in plugin_act_map:
+            plugin_act_map[action]()
+            return
+        if action == toggle_act:
+            self.mod_toggle_requested.emit(mod_id)
+        elif action == edit_act:
+            self.mod_edit_requested.emit(mod_id)
+        elif action == paste_act:
+            self._paste_preview_onto_mod(mod_id)
+        elif action == browse_act:
+            self._browse_previews_for_mod(mod_id)
+        elif action == open_folder_act:
+            self._open_mod_folder(mod_id)
+        elif action == export_act:
+            self._export_from_context(mod_id, is_mod=True)
+        elif action == delete_act:
+            if multi:
+                self._delete_selected()
+            else:
+                self.mod_delete_requested.emit(mod_id)
