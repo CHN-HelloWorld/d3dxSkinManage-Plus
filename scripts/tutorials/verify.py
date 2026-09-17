@@ -428,3 +428,193 @@ def verify_guides(language: str, layouts: dict[str, dict], reader_text: str, mes
         f"{language} 关于页配图仍与插件页重复。"
     )
     return guides
+
+
+def verify(output_dir: Path | None = None) -> None:
+    """核验双语源文、手册、33 个场景和四份无损内嵌 HTML，保留原有策略检查。"""
+    output_dir = output_dir or REPO / "build/tutorials"
+    verify_language_navigation(output_dir)
+    constants = read_build_constants()
+    editions = {
+        "zh-CN": {
+            "prefix": "",
+            "draft": TUTORIAL / "chapters/zh",
+            "quick": "zh/5分钟快速上手.md",
+            "manual": "zh/完整功能手册.md",
+            "plugin": "zh/插件开发指南.md",
+            "html": "d3dxSkinManage-Plus 使用教程.html",
+            "plugin_html": "d3dxSkinManage-Plus 插件开发指南.html",
+        },
+        "en-US": {
+            "prefix": "EN_",
+            "draft": TUTORIAL / "chapters/en",
+            "quick": "en/Quickstart.en.md",
+            "manual": "en/Manual.en.md",
+            "plugin": "en/PluginGuide.en.md",
+            "html": "d3dxSkinManage-Plus User Guide.html",
+            "plugin_html": "d3dxSkinManage-Plus Plugin Development Guide.html",
+        },
+    }
+    for language, edition in editions.items():
+        names = constants[f"{edition['prefix']}CHAPTER_ORDER"]
+        assert len(names) == len(set(names)) == 8, f"{language} 应包含完整的八章且不得重复。"
+        sources = [edition["draft"] / name for name in names]
+        edition["chapters"] = [read_markdown_at_root(path) for path in sources]
+        expected = (
+            "\n\n---\n\n".join(
+                [
+                    constants[f"{edition['prefix']}MANUAL_HEAD"].rstrip(),
+                    *(value.strip() for value in edition["chapters"]),
+                ]
+            )
+            + "\n"
+        )
+        for kind in ("quick", "manual", "plugin"):
+            edition[f"{kind}_text"] = read_markdown_at_root(TUTORIAL / edition[kind])
+        assert edition["manual_text"] == expected, f"{edition['manual']} 与分章不一致，请重新构建。"
+        chapter_pattern = r"^## Chapter (\d+)\b" if language == "en-US" else r"^## 第 (\d+) 章"
+        assert re.findall(chapter_pattern, expected, re.MULTILINE) == [str(number) for number in range(1, 9)], (
+            f"{language} 手册缺少章节或章号顺序错误。"
+        )
+        edition["reader_text"] = "\n".join([edition["quick_text"], *edition["chapters"]])
+
+    chinese, english = editions["zh-CN"], editions["en-US"]
+    for number, (zh, en) in enumerate(zip(chinese["chapters"], english["chapters"]), 1):
+        verify_translation(zh, en, f"第 {number} 章")
+    verify_translation(chinese["quick_text"], english["quick_text"], "快速上手")
+    verify_translation(chinese["plugin_text"], english["plugin_text"], "插件开发指南")
+    sdk_tree = ast.parse((REPO / "src/plugin_sdk/__init__.py").read_text(encoding="utf-8"))
+    api_version = next(
+        ast.literal_eval(node.value)
+        for node in sdk_tree.body
+        if isinstance(node, ast.Assign)
+        and any(isinstance(item, ast.Name) and item.id == "API_VERSION" for item in node.targets)
+    )
+    for edition in editions.values():
+        assert f'"apiVersion": "{api_version}"' in edition["plugin_text"], "插件清单示例必须使用当前 SDK。"
+
+    markdowns = sorted(TUTORIAL.rglob("*.md"))
+    md_images = set()
+    for path in markdowns:
+        value = path.read_text(encoding="utf-8")
+        link_base = path.parent
+        assert "\ufffd" not in value and "\x00" not in value, f"文档编码异常：{path}"
+        assert sum(line.strip().startswith(chr(96) * 3) for line in value.splitlines()) % 2 == 0, (
+            f"代码块未闭合：{path}"
+        )
+        for link in re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", "\n".join(markdown_lines(value))):
+            target = unquote(link.strip("<>").split("#", 1)[0])
+            if not target or "://" in target or target.startswith("mailto:"):
+                continue
+            assert (link_base / target).is_file(), f"引用不存在：{path.name} -> {target}"
+        for target in markdown_images(value):
+            image_path = (link_base / target).resolve()
+            reference = image_path.relative_to(TUTORIAL.resolve()).as_posix()
+            assert reference.startswith(
+                (
+                    "images/guide/",
+                    "images/guide-en/",
+                    "images/final/",
+                    "images/final-en/",
+                    "images/final-light/",
+                    "images/final-light-en/",
+                    "images/plusa/",
+                )
+            ), f"仍引用旧版或未知截图：{path.name} -> {target}"
+            md_images.add(image_path)
+    for path in md_images:
+        with Image.open(path) as picture:
+            picture.verify()
+    assert not list((TUTORIAL / "images").glob("*.webp")), "教程目录仍有旧版平铺截图。"
+    assert not (TUTORIAL / "images/raw").exists(), "教程目录仍有旧版原始截图。"
+
+    layouts = {}
+    for language, filename in (("zh-CN", "guide_layouts.json"), ("en-US", "guide_layouts.en.json")):
+        layouts[language] = index_records(
+            json.loads(Path(__file__).with_name(filename).read_text(encoding="utf-8")),
+            filename,
+        )
+        assert sorted(int(name[:2]) for name in layouts[language]) == list(range(1, 34)), (
+            f"{filename} 应包含 01–33 全部操作场景。"
+        )
+    assert layouts["zh-CN"].keys() == layouts["en-US"].keys(), "中英文操作场景不完整。"
+    assert [len(spec["marks"]) for spec in layouts["zh-CN"].values()] == [
+        len(layouts["en-US"][name]["marks"]) for name in layouts["zh-CN"]
+    ], "中英文编号说明数量不一致。"
+    messages = json.loads((REPO / "config/languages/en-US/strings.json").read_text(encoding="utf-8"))["messages"]
+    default_keys = []
+    tree = ast.parse((REPO / "src/core/shortcuts.py").read_text(encoding="utf-8"))
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "ShortcutCommand":
+            if len(node.args) >= 5 and isinstance(node.args[4], ast.Constant):
+                default_keys.append(node.args[4].value)
+    assert len(default_keys) == len(set(default_keys)) == 21, "默认快捷键清单应包含 21 个独立绑定。"
+
+    checked_images = set()
+    html_counts = []
+    guide_count = mark_count = 0
+    for language, edition in editions.items():
+        suffix = "-en" if language == "en-US" else ""
+        reader_images = markdown_images(edition["reader_text"])
+        assert not any(
+            image.startswith(
+                (
+                    "images/final/",
+                    "images/final-en/",
+                    "images/final-light/",
+                    "images/final-light-en/",
+                )
+            )
+            for image in reader_images
+        ), f"{language} 正文仍引用未标注的原始截图。"
+        step_pattern = r"^## Step (\d+)\b" if language == "en-US" else r"^## 第 (\d+) 步"
+        step_numbers = re.findall(step_pattern, edition["quick_text"], re.MULTILINE)
+        assert step_numbers == [str(number) for number in range(1, 7)], f"{language} 快速上手缺少六步流程。"
+        step_three = re.search(
+            r"^## (?:Step 3\b|第 3 步).*?\n(.*?)(?=^## (?:Step 4\b|第 4 步))",
+            edition["quick_text"],
+            re.MULTILINE | re.DOTALL,
+        )
+        assert step_three is not None, f"{language} 缺少新建类别步骤。"
+        for name in ("30-新建类别入口.webp", "31-新建类别.webp"):
+            required = f"images/guide{suffix}/{name}"
+            assert required in step_three[1], f"{language} 新建类别步骤缺少必要配图：{required}"
+        for name in ("分类整理", "组合变体", "下载更新", "备份排障"):
+            assert f"images/plusa/supplement/{name}.webp" in edition["manual_text"], f"{language} 未接入补图：{name}"
+        appendix_prefix = "## Appendix" if language == "en-US" else "## 附录"
+        assert f"{appendix_prefix} A" in edition["manual_text"] and f"{appendix_prefix} B" in edition["manual_text"], (
+            f"{language} 缺少附录 A 或 B。"
+        )
+        appendix = edition["manual_text"].split(f"{appendix_prefix} A", 1)[1].split(f"{appendix_prefix} B", 1)[0]
+        keys = re.findall(r"^\| `([^`]+)` \|", appendix, re.MULTILINE)
+        assert Counter(keys) == Counter(default_keys), (
+            f"{language} 快捷键附录不完整：缺少 {list((Counter(default_keys) - Counter(keys)).elements())}，"
+            f"多出 {list((Counter(keys) - Counter(default_keys)).elements())}"
+        )
+        guides = verify_guides(language, layouts[language], edition["reader_text"], messages)
+        guide_count += len(guides)
+        mark_count += sum(len(record["marks"]) for record in guides.values())
+        texts = [edition["quick_text"], edition["manual_text"], edition["plugin_text"]]
+        for filename, source_texts in ((edition["html"], texts), (edition["plugin_html"], texts[-1:])):
+            parser = verify_html(
+                output_dir / filename,
+                language=language,
+                markdown_texts=source_texts,
+                verified_images=checked_images,
+            )
+            html_counts.append(len(parser.images))
+
+    for path in Path(__file__).parent.glob("*.py"):
+        ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    print(
+        f"检查通过：中英文各 8 章、各 {len(default_keys)} 个默认快捷键；"
+        f"{guide_count} 张操作配图、{mark_count} 处标注；"
+        f"四份 HTML 分别内嵌 {' / '.join(map(str, html_counts))} 张无损图片。"
+    )
+    print("双语内容结构、手册组装、本地引用、锚点、2× 坐标、图片哈希、RGBA 像素及 Python 语法检查通过。")
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--output-dir", type=Path, default=REPO / "build/tutorials", help="待核验的离线 HTML 目录")
+    verify(parser.parse_args().output_dir)
