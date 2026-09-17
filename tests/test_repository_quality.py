@@ -146,3 +146,48 @@ def test_does_not_scan_generated_source_files(tmp_path, monkeypatch):
 
     assert maintained in found
     assert generated not in found
+
+
+@pytest.mark.parametrize(
+    "annotation",
+    [
+        "# 按当前游戏筛选，防止混入其他游戏的下载记录。",
+        "# Qt 工作线程退出后再释放对象。",
+        "# 提交阶段保留原文件，失败时恢复。",
+        "# 按照外部 API 的字段约定读取下载量。",
+    ],
+)
+def test_allows_production_explanations(annotation):
+    assert check_repository.annotation_errors(annotation) == []
+
+
+@pytest.mark.parametrize(
+    "relative",
+    ["docs/sample.md", "sample.JSON", "config/languages/zh-CN/strings.json", "resources/licenses/component.txt"],
+)
+def test_checks_text_encoding(tmp_path, monkeypatch, relative):
+    """所有维护文本都需要有效的 UTF-8 编码。"""
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    path = tmp_path / relative
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xfe")
+
+    assert any("UTF-8" in error for error in check_repository.check_text_encoding(path))
+
+
+def test_binary_resources_do_not_require_utf8(tmp_path, monkeypatch):
+    """二进制图片不参与文本编码检查。"""
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    path = tmp_path / "image.png"
+    path.write_bytes(b"\x89PNG\r\n\x1a\n")
+
+    assert check_repository.check_text_encoding(path) == []
+
+
+def test_accepts_utf8_public_text(tmp_path, monkeypatch):
+    """有效文本可以包含完整的中文和技术标识。"""
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    path = tmp_path / "README.md"
+    path.write_text("# 使用说明\n\n通过 API 导入样例条目。\n", encoding="utf-8")
+
+    assert check_repository.check_text_encoding(path) == []
