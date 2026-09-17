@@ -301,3 +301,14 @@ def index_records(records: list[dict], context: str) -> dict[str, dict]:
         assert name not in by_file, f"{context} 截图记录重复：{name}"
         by_file[name] = record
     return by_file
+
+
+def verify_box(box, size, context: str) -> None:
+    """坐标必须是有面积且位于指定坐标系内的整数矩形。"""
+    assert isinstance(box, (list, tuple)) and len(box) == 4 and all(type(value) is int for value in box), (
+        f"{context} 矩形坐标无效：{box}"
+    )
+    x, y, width, height = box
+    assert 0 <= x < x + width <= size[0] and 0 <= y < y + height <= size[1], (
+        f"{context} 矩形越界或没有面积：{box}，边界 {size}"
+    )
