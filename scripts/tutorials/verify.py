@@ -312,3 +312,28 @@ def verify_box(box, size, context: str) -> None:
     assert 0 <= x < x + width <= size[0] and 0 <= y < y + height <= size[1], (
         f"{context} 矩形越界或没有面积：{box}，边界 {size}"
     )
+
+
+def annotation_box(mark: dict, capture: dict, messages: dict, context: str) -> list[int]:
+    """由布局的逻辑矩形或真实控件独立计算应有的物理标注坐标。"""
+    logical_size = (capture["logical_width"], capture["logical_height"])
+    if "box" in mark:
+        logical = mark["box"]
+    else:
+        target = mark["target"]
+        if capture["language"] == "en-US":
+            target = mark.get("target_en", messages.get(target, target))
+        matches = {
+            tuple(control["box"])
+            for control in capture["controls"]
+            if control["text"].strip() == target and (not mark.get("class") or control["class"] == mark["class"])
+        }
+        ordered = sorted(matches, key=lambda box: (box[1], box[0]))
+        assert ordered and (len(ordered) == 1 or "occurrence" in mark), (
+            f"{context} 无法唯一定位实际控件 {target!r}：{ordered}"
+        )
+        occurrence = mark.get("occurrence", 0)
+        assert type(occurrence) is int and 0 <= occurrence < len(ordered), f"{context} 控件序号超出范围：{occurrence}"
+        logical = ordered[occurrence]
+    verify_box(logical, logical_size, f"{context} 逻辑坐标")
+    return [round(value * capture["device_pixel_ratio"]) for value in logical]
