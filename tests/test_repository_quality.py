@@ -75,3 +75,74 @@ def test_accepts_documented_protocol_and_property_accessors(tmp_path, monkeypatc
     )
 
     assert check_repository.check_source(path) == []
+
+
+def test_keeps_test_names_outside_documentation_gate(tmp_path, monkeypatch):
+    """行为明确的测试名称不强制添加重复的文档字符串。"""
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    path = tmp_path / "tests/test_sample.py"
+    path.parent.mkdir()
+    path.write_text("def test_empty_selection_is_rejected():\n    pass\n", encoding="utf-8", newline="\n")
+    assert check_repository.check_source(path) == []
+
+
+def test_invalid_document_encoding_is_reported_without_aborting_link_checks(tmp_path, monkeypatch):
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    document = tmp_path / "docs/invalid.md"
+    document.parent.mkdir()
+    document.write_bytes(b"\xff\xfe")
+    (tmp_path / "README.md").write_text("[缺失页面](missing.md)\n", encoding="utf-8")
+
+    errors = check_repository.check_document_links()
+
+    assert any("docs/invalid.md" in error and "UTF-8" in error for error in errors)
+    assert any("README.md" in error and "missing.md" in error for error in errors)
+
+
+def test_scans_maintained_files_without_user_data_or_build_output(tmp_path, monkeypatch):
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    maintained = (
+        "README.md",
+        "src/module.py",
+        "tests/fixtures/sample.json",
+        "docs/guide.md",
+        "config/languages/zh-CN/strings.json",
+        "resources/icon.svg",
+        ".github/workflows/quality.yml",
+        "plugins/example.mod-inventory/entry.py",
+        "scripts/launch/open_experience.py",
+    )
+    excluded = (
+        "data/sample.json",
+        "config/games.json",
+        "build/package/README.md",
+        "updater/bin/generated.json",
+        "updater/obj/generated.json",
+        "src/__pycache__/module.pyc",
+        "plugins/custom/entry.py",
+        "local-library/sample.json",
+    )
+    for relative in (*maintained, *excluded):
+        path = tmp_path / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("{}\n", encoding="utf-8")
+
+    found = {path.relative_to(tmp_path).as_posix() for path in check_repository.public_files()}
+
+    assert set(maintained) <= found
+    assert not set(excluded) & found
+
+
+def test_does_not_scan_generated_source_files(tmp_path, monkeypatch):
+    monkeypatch.setattr(check_repository, "ROOT", tmp_path)
+    maintained = tmp_path / "src/module.py"
+    generated = tmp_path / "src/build/module.py"
+    maintained.parent.mkdir(parents=True)
+    generated.parent.mkdir(parents=True)
+    maintained.write_text("value = 1\n", encoding="utf-8")
+    generated.write_text("value = 2\n", encoding="utf-8")
+
+    found = check_repository.source_files()
+
+    assert maintained in found
+    assert generated not in found
