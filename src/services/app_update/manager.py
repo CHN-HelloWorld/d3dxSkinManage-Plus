@@ -373,3 +373,131 @@ class AppUpdateManager(QObject):
         self._close_progress()
 
         self._install(path)
+
+    # 安装：解压 → 备份 → 拉起 updater.exe → 退出
+
+    def _install(self, zip_path: Path) -> None:
+        """在工作线程解压并备份，完成后由主线程启动更新器并退出应用。"""
+        self._installer = AppUpdateInstaller(zip_path)
+        self._install_progress = UpdateProgressDialog(tr("安装更新"), tr("正在准备安装…"), self._win, cancellable=False)
+        self._install_progress.show()
+
+        backup = bool(self._config.get("app_update.backup_before_update", True))
+        self._install_worker = _InstallWorker(self._installer, backup, self)
+        self._install_worker.step.connect(self._on_install_step)
+        self._install_worker.done.connect(self._on_install_done)
+        self._install_worker.start()
+
+    def _on_install_step(self, text: str) -> None:
+        """在安装进度框仍存在时显示工作线程报告的准备阶段。"""
+        if self._install_progress is not None:
+            self._install_progress.setLabelText(text)
+
+    def _on_install_done(self, ok: bool, message: str) -> None:
+        """安装线程结束（主线程槽）：成功则拉起更新器并退出；失败则报错。"""
+        if not ok:
+            self._close_install_progress()
+            self._is_busy = False
+            if self._installer:
+                self._installer.cleanup_extract()
+            self.update_failed.emit(message)
+            self._error_box(tr("安装失败"), message)
+            return
+
+        updater_exe = self._installer.locate_updater()
+        if updater_exe is None:
+            self._close_install_progress()
+            self._is_busy = False
+            self._error_box(
+                tr("更新器缺失"),
+                tr(
+                    "未找到更新器 updater.exe（应位于程序目录的 Updater/ 下）。\n"
+                    "请手动解压更新包完成更新，或重新安装完整版。"
+                ),
+            )
+            return
+
+        args = self._installer.prepare_for_updater()
+        token = self._generate_launch_token()
+        cmd = [
+            str(updater_exe),
+            str(args["pid"]),
+            str(args["extract_dir"]),
+            str(args["install_dir"]),
+            json.dumps(args["preserve_files"]),
+            token,
+        ]
+        logger.info("程序更新：拉起更新器 %s", " ".join(cmd))
+
+        creationflags = 0
+        if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP"):
+            creationflags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+        try:
+            subprocess.Popen(cmd, creationflags=creationflags)
+        except Exception as e:
+            self._close_install_progress()
+            self._is_busy = False
+            logger.error("程序更新：拉起更新器失败: %s", e)
+            self.update_failed.emit(str(e))
+            self._error_box(tr("启动更新器失败"), tr("无法启动更新器：{e}", e=e))
+            return
+
+        self._close_install_progress()
+        logger.info("程序更新：更新器已启动，退出主程序以让其替换文件")
+        QApplication.quit()
+
+    def _close_install_progress(self) -> None:
+        """结束安装进度框并解除持有引用，容忍对话框已经关闭或释放。"""
+        if self._install_progress is not None:
+            try:
+                self._install_progress.finish()
+            except Exception:
+                pass
+            self._install_progress = None
+
+    # 工具
+
+    @staticmethod
+    def _generate_launch_token() -> str:
+        """生成 <timestamp_hex>.<hmac_hex> 令牌，供 updater.exe 校验来源。"""
+        ts_hex = format(int(time.time()), "x")
+        mac = hmac.new(APP_UPDATE_TOKEN_SECRET, ts_hex.encode("ascii"), hashlib.sha256).hexdigest()
+        return f"{ts_hex}.{mac}"
+
+    @staticmethod
+    def _verify_sha256(path: Path, expected: str) -> bool:
+        """分块计算文件 SHA256 并忽略大小写比较，文件读取失败时返回 False。"""
+        try:
+            h = hashlib.sha256()
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    h.update(chunk)
+            return h.hexdigest().lower() == expected.lower()
+        except OSError:
+            return False
+
+    @staticmethod
+    def _safe_unlink(path: Path) -> None:
+        """尽力删除无效下载包，路径不存在或删除失败时不向调用方抛出。"""
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+
+    def _close_progress(self) -> None:
+        """停止下载速度定时器并结束进度框，随后解除管理器持有的对话框引用。"""
+        self._speed_timer.stop()
+        if self._progress is not None:
+            try:
+                self._progress.finish()
+            except Exception:
+                pass
+            self._progress = None
+
+    def _info_box(self, title: str, text: str) -> None:
+        """以主窗口为父级同步显示更新信息通知。"""
+        UpdateNoticeDialog(title, text, self._win).exec()
+
+    def _error_box(self, title: str, text: str) -> None:
+        """以错误样式同步显示更新失败通知，关闭后返回调用流程。"""
+        UpdateNoticeDialog(title, text, self._win, error=True).exec()
