@@ -201,3 +201,175 @@ class AppUpdateManager(QObject):
             return
 
         self._prompt_update(info)
+
+    def _prompt_update(self, info: AppUpdateInfo) -> None:
+        """显示版本说明并处理更新、跳过或稍后动作，只有发现新版本时才开始下载或保存跳过选择。"""
+        dialog = UpdatePromptDialog(info.to_dict(), parent=self._win)
+        dialog.exec()
+        action = dialog.user_action
+        if action == "update" and info.has_update:
+            self._start_download(info)
+        elif action == "skip" and info.has_update:
+            self._config.set("app_update.skipped_version", info.latest_version)
+            logger.info("程序更新：用户跳过版本 %s", info.latest_version)
+        else:
+            logger.info("程序更新：用户选择稍后")
+
+    # 下载
+
+    def _start_download(self, info: AppUpdateInfo) -> None:
+        """在打包环境准备下载缓存、候选源及进度对话框，然后启动首个下载源。"""
+        if not is_frozen():
+            self._info_box(
+                tr("开发环境"),
+                tr("检测到当前为源码/开发环境，已跳过自动安装。\n自更新仅在打包后的程序上生效。"),
+            )
+            return
+        if not info.download_url:
+            self._error_box(tr("下载失败"), tr("本次发布未找到 .zip 更新包资源。"))
+            return
+
+        self._is_busy = True
+        self._dl_info = info
+        self._dl_cancelled = False
+        save_dir = get_app_dir() / "Updater" / "Cache" / "download"
+        save_dir.mkdir(parents=True, exist_ok=True)
+        self._dl_save_path = save_dir / (info.download_url.split("/")[-1] or "update.zip")
+
+        # 任务5：按用户选择的下载源构造候选 URL 列表（auto=镜像优先、失败回退）
+        self._dl_candidates = self._build_download_candidates(info.download_url)
+        self._dl_index = 0
+
+        self._progress = UpdateProgressDialog(tr("下载更新"), tr("正在下载更新包…"), self._win)
+        self._progress.canceled.connect(self._on_download_cancel)
+        self._progress.show()
+
+        self._try_next_download()
+
+    def _build_download_candidates(self, url: str) -> list[str]:
+        """据 app_update.download_source 生成候选下载 URL（按尝试顺序）。"""
+        from src.utils.constants import APP_UPDATE_DOWNLOAD_MIRRORS
+
+        source = (self._config.get("app_update.download_source", "auto") or "auto").strip()
+        prefixes = {key: prefix for key, _name, prefix in APP_UPDATE_DOWNLOAD_MIRRORS}
+
+        def apply(prefix: str) -> str:
+            """为原始下载地址添加镜像前缀，空前缀保留直连地址。"""
+            return f"{prefix}{url}" if prefix else url
+
+        if source != "auto" and source in prefixes:
+            return [apply(prefixes[source])]
+
+        # 自动模式优先使用镜像，最后使用官方地址，并按配置顺序去重。
+        ordered = [p for k, _n, p in APP_UPDATE_DOWNLOAD_MIRRORS if p]  # 非空=镜像
+        ordered.append("")  # 官方直连垫底
+        seen, cands = set(), []
+        for p in ordered:
+            u = apply(p)
+            if u not in seen:
+                seen.add(u)
+                cands.append(u)
+        return cands
+
+    def _try_next_download(self) -> None:
+        """尝试候选列表中的下一个源；全部失败则报错。"""
+        if self._dl_cancelled:
+            return
+        if self._dl_index >= len(self._dl_candidates):
+            self._is_busy = False
+            self._close_progress()
+            self.update_failed.emit(tr("所有下载源均失败"))
+            self._error_box(tr("下载失败"), tr("所有下载源均无法获取更新包，请检查网络/代理或稍后重试。"))
+            return
+        url = self._dl_candidates[self._dl_index]
+        self._dl_index += 1
+        n, total = self._dl_index, len(self._dl_candidates)
+        logger.info("程序更新：尝试下载源 %d/%d -> %s", n, total, url)
+        if self._progress:
+            self._progress.setLabelText(tr("正在下载更新包…（源 {n}/{total}）", n=n, total=total))
+            self._progress.setDownloadSpeed(None)
+        self._download_rate.reset()
+        self._speed_timer.start()
+        self._download_worker = self._network.download_file(
+            url=url,
+            save_path=self._dl_save_path,
+            on_progress=self._on_download_progress,
+            on_finished=self._on_download_finished,
+            on_error=self._on_download_error,
+            # 任务3：更新下载也走代理（总开关开启时），代理失败/超时自动降级直连
+            proxy=get_configured_proxy_url(self._config),
+        )
+
+    def _on_download_progress(self, downloaded: int, total: int) -> None:
+        """更新已接收字节和速度采样，总大小未知时将进度框切换为不确定进度。"""
+        if not self._progress:
+            return
+        self._download_rate.record(downloaded)
+        self._update_download_speed()
+        if total > 0:
+            self._progress.setMaximum(100)
+            self._progress.setValue(int(downloaded / total * 100))
+            self._progress.setLabelText(
+                tr(
+                    "正在下载更新包…  {value:.1f} / {value_2:.1f} MB",
+                    value=downloaded / 1024 / 1024,
+                    value_2=total / 1024 / 1024,
+                )
+            )
+        else:
+            self._progress.setMaximum(0)  # 不确定进度
+            self._progress.setLabelText(tr("已下载 {value:.1f} MB", value=downloaded / 1024 / 1024))
+
+    def _update_download_speed(self) -> None:
+        """仅在下载进度框存在且未取消时刷新采样速度。"""
+        if self._progress is not None and not self._dl_cancelled:
+            self._progress.setDownloadSpeed(self._download_rate.sample())
+
+    def _on_download_cancel(self) -> None:
+        """标记下载取消并停止速度定时器，向工作线程发出取消请求后解除忙碌状态。"""
+        self._dl_cancelled = True
+        self._speed_timer.stop()
+        if self._download_worker:
+            try:
+                self._download_worker.cancel()
+            except Exception:
+                pass
+        self._is_busy = False
+        logger.info("程序更新：用户取消下载")
+
+    def _on_download_error(self, message: str) -> None:
+        """未取消时记录当前源失败并尝试下一个候选下载地址。"""
+        if self._dl_cancelled:
+            return
+        logger.warning("程序更新：下载源失败（%s），尝试下一个源", message)
+        self._try_next_download()
+
+    def _on_download_finished(self, file_path: str) -> None:
+        """检查下载包最小预期大小及可选 SHA256，校验失败换源，通过后关闭进度并进入安装准备。"""
+        if self._dl_cancelled:
+            return
+        info = self._dl_info
+        path = Path(file_path)
+
+        # 校验①：大小（拦截镜像错误页/残包冒充完整包）→ 失败则换下一个源
+        if info.download_size > 0:
+            try:
+                actual = path.stat().st_size
+            except OSError:
+                actual = 0
+            if actual < info.download_size * 0.99:
+                logger.warning("程序更新：源返回残包(%d/%d)，换下一个源", actual, info.download_size)
+                self._safe_unlink(path)
+                self._try_next_download()
+                return
+
+        # 校验②：SHA256（发布说明提供时才强校验）→ 失败则换下一个源
+        if info.sha256 and not self._verify_sha256(path, info.sha256):
+            logger.warning("程序更新：源 SHA256 不符，换下一个源")
+            self._safe_unlink(path)
+            self._try_next_download()
+            return
+
+        self._close_progress()
+
+        self._install(path)
