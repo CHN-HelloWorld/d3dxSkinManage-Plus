@@ -356,3 +356,153 @@ class ModUpdateService(QObject):
     def _prepare_check_slice(self) -> None:
         """由 Qt 单次定时器驱动一段有时间预算的候选准备工作。"""
         self._advance_check_preparation(sliced=True)
+
+    def _advance_check_preparation(self, *, sliced: bool) -> bool:
+        """推进候选生成器并按需续约定时器；游戏失效或准备异常时取消收尾。"""
+        preparation, token = self._check_preparation, self._check_token
+        if preparation is None:
+            return False
+        if not self._is_current_check():
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True})
+            return False
+        deadline = time.perf_counter() + _PREPARATION_SLICE_SECONDS if sliced else None
+        try:
+            while True:
+                try:
+                    next(preparation)
+                except StopIteration as ready:
+                    ignored_map, force = ready.value
+                    break
+                if deadline is not None and time.perf_counter() >= deadline:
+                    self._preparation_timer.start(0)
+                    return True
+        except Exception as exc:
+            logger.warning("准备更新检测失败: %s", exc)
+            self._on_finished(
+                {"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True, "error": str(exc) or type(exc).__name__}
+            )
+            return False
+        self._check_preparation = None
+        return self._start_prepared_check(token, ignored_map, force=force)
+
+    def _start_prepared_check(self, token, ignored_map, *, force: bool) -> bool:
+        """发布开始信号后复核令牌，启动网络检查；空任务立即完成，启动失败逐项登记错误。"""
+        jobs = list(self._check_jobs.items())
+        self._check_snapshot.update(phase="connecting", total=len(jobs), last_progress_at=time.monotonic())
+        self.check_started.emit(len(jobs))
+        # check_started 的同步接收者也可能取消或启动了下一轮。
+        if self._check_token is not token:
+            return True
+        if not self._is_current_check():
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True})
+            return True
+        if not jobs:
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0})
+            return True
+        try:
+            started = self._checker.start(jobs, ignored_map, force=force)
+            error = tr("更新检测未能启动")
+        except Exception as exc:
+            started = False
+            error = str(exc) or type(exc).__name__
+        if started is False and self._check_token is token:
+            for mid, _ in jobs:
+                self._on_failed(mid, error)
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": len(jobs)})
+            return False
+        return True
+
+    def cancel_check(self) -> bool:
+        """取消当前检查并立即收尾尚未提交给检查器的轮次；没有活动检查时返回 False。"""
+        if not self._check_in_progress:
+            return False
+        token = self._check_token
+        self._checker.cancel()
+        if self._check_token is token:
+            # started 信号期间取消，或尚未进入 checker 的空轮次也要立即收尾。
+            counts = {
+                kind: list(self._check_outcomes.values()).count(kind) for kind in ("found", "up_to_date", "failed")
+            }
+            self._on_finished({**counts, "cancelled": True})
+        return True
+
+    # checker 信号处理
+    def _is_current_check(self) -> bool:
+        """判断活动检查是否仍属于当前游戏，作为结果写入和界面通知的前置条件。"""
+        return self._check_in_progress and self._check_game_id == self._mm.current_game_id
+
+    def _on_check_progress(self, done: int, total: int) -> None:
+        """仅将当前游戏的检查进度写入快照并转发给界面。"""
+        if self._is_current_check():
+            self._check_snapshot.update(
+                phase="checking",
+                done=done,
+                total=total,
+                last_progress_at=time.monotonic(),
+            )
+            self.progress.emit(done, total)
+
+    def _record_check_outcome(self, mid: str, outcome: str) -> None:
+        """替换单个 Mod 的检查结论，并相应修正发现更新与失败计数。"""
+        previous = self._check_outcomes.get(mid)
+        if previous in {"found", "failed"}:
+            self._check_snapshot[previous] -= 1
+        self._check_outcomes[mid] = outcome
+        if outcome in {"found", "failed"}:
+            self._check_snapshot[outcome] += 1
+
+    def _check_mod(self, mid: str):
+        """校验结果属于本轮且未被用户操作覆盖，再按 ID 读取条目；失效时返回 None。"""
+        if not self._is_current_check() or mid not in self._check_jobs or mid in self._check_superseded:
+            return None
+        # jobs 已按发起游戏收集；每条结果只查对应 ID，不能反复载入整个 Mod 库。
+        return self._mm.get_mod(mid)
+
+    def _preserve_user_change(self, mid: str) -> None:
+        """取消只撤销本轮检测，不能撤销期间已完成的更新、忽略或撤销忽略。"""
+        if not self._is_current_check():
+            return
+        self._check_superseded.add(mid)
+        if self._check_preparation is not None:
+            self._check_jobs.pop(mid, None)
+        self._pending_last_checked.discard(mid)
+        if mid in self._status:
+            self._status_before_check[mid] = self._status[mid]
+        else:
+            self._status_before_check.pop(mid, None)
+        if mid in self._failures:
+            self._failures_before_check[mid] = self._failures[mid]
+        else:
+            self._failures_before_check.pop(mid, None)
+
+    def _write_last_checked(self, mid: str) -> None:
+        """为仍存在的 Mod 写入本地检查时间并交由管理器持久化。"""
+        mod = self._mm.get_mod(mid)
+        if not mod:
+            return
+        gb = mod.info.custom_data.setdefault(_GB, {})
+        gb["last_checked_iso"] = datetime.now().isoformat()
+        self._mm.update_mod(mod)
+
+    def _on_update_found(self, mid: str, info: UpdateInfo) -> None:
+        """接收有效更新结果，补充本地展示信息并暂存检查时间，随后通知状态变更。"""
+        mod = self._check_mod(mid)
+        if mod is None:
+            return
+        info.local_name = mod.display_name
+        info.local_preview = mod.primary_preview or ""
+        self._status[mid] = info
+        self._failures.pop(mid, None)
+        self._pending_last_checked.add(mid)
+        self._record_check_outcome(mid, "found")
+        self.status_changed.emit()
+
+    def _on_up_to_date(self, mid: str) -> None:
+        """清除有效条目的更新和失败状态，并将检查时间留待整轮提交。"""
+        if self._check_mod(mid) is None:
+            return
+        self._status.pop(mid, None)
+        self._failures.pop(mid, None)
+        self._pending_last_checked.add(mid)
+        self._record_check_outcome(mid, "up_to_date")
+        self.status_changed.emit()
