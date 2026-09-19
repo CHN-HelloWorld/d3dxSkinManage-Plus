@@ -702,3 +702,56 @@ class ModUpdateService(QObject):
     def update_task_snapshots(self) -> dict[str, dict]:
         """返回当前游戏安装任务的展示快照，包括已结束任务。"""
         return self._update_tasks.snapshots()
+
+    def update_task_infos(self) -> dict[str, UpdateInfo]:
+        """返回当前游戏任务持有的更新详情，省略没有详情的记录。"""
+        return self._update_tasks.infos()
+
+    def active_update_ids(self, *, all_games: bool = False) -> list[str]:
+        """列出尚未结束的更新 ID，默认限定当前游戏，可供退出流程查询所有游戏。"""
+        return self._update_tasks.active_ids(all_games=all_games)
+
+    def refresh_update_concurrency(self) -> None:
+        """让安装队列重新读取并发配置并尝试调度等待任务。"""
+        self._update_tasks.refresh_concurrency()
+
+    def acknowledge_completed_updates(self) -> bool:
+        """收起当前游戏全部成功的更新批次，同时保留新任务。"""
+        game_id = self._mm.current_game_id
+        if not game_id or self._status_game_id != game_id or self._check_in_progress or self._status or self._failures:
+            return False
+        if not self._update_tasks.clear_completed():
+            return False
+        # 以当前结果为准，早先检查可能取消或未完成。
+        self._snapshot_game_id = game_id
+        self._check_snapshot = _idle_check_snapshot()
+        self.status_changed.emit()
+        return True
+
+    def pause_update(self, mid: str) -> bool:
+        """请求暂停当前游戏的指定更新，返回任务队列是否接受暂停。"""
+        return self._update_tasks.pause(mid)
+
+    def resume_update(self, mid: str) -> bool:
+        """解除指定更新的用户暂停，返回任务是否存在且允许恢复。"""
+        return self._update_tasks.resume(mid)
+
+    def pause_all_updates(self) -> bool:
+        """暂停当前游戏的全部可暂停更新，任一暂停失败时返回 False。"""
+        return self._update_tasks.pause_all()
+
+    def resume_all_updates(self) -> None:
+        """请求恢复当前游戏的活动更新，确认窗口持有的暂停仍然有效。"""
+        self._update_tasks.resume_all()
+
+    def begin_stop_confirmation(self, mids=None, *, all_games: bool = False):
+        """为待确认停止的更新取得暂停凭据；无法暂停时由任务队列回滚并抛出异常。"""
+        return self._update_tasks.begin_stop_confirmation(mids, all_games=all_games)
+
+    def finish_stop_confirmation(self, token, *, confirmed: bool) -> None:
+        """结算停止确认凭据，确认时取消任务，放弃时仅解除该凭据施加的暂停。"""
+        self._update_tasks.finish_stop_confirmation(token, confirmed=confirmed)
+
+    def shutdown_updates(self) -> bool:
+        """停止所有游戏的更新并等待资源退出，返回工作进程和下载是否已结束。"""
+        return self._update_tasks.shutdown()
