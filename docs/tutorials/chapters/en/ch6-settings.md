@@ -121,3 +121,41 @@ Animated backgrounds provide pause, resume, and retry controls. They pause autom
 
 If playback fails, check that the file still exists, its encoding is supported, and the WE path and project are complete. Image backgrounds do not require Wallpaper Engine, nor do ordinary local videos.
 
+### 6.8 Shortcuts → Key bindings
+
+![Shortcut settings](../../images/guide-en/13-快捷键.webp)
+
+Commands are grouped by where they are used. Click the corresponding key binding to record a shortcut, then save it. Combinations of Ctrl / Alt / Shift with one primary key are supported.
+
+When a conflict is found, the app identifies the conflicting command. Confirming replacement may leave the previously assigned command unbound; canceling keeps the original binding. System-reserved combinations cannot be assigned to ordinary commands.
+
+Shortcuts depend on focus: editing in a text box, working with items in Category Overview, and copying in the presets list each have their own context. The manager does not provide global hotkeys that work in other applications.
+
+Commands registered by plugins can also appear in the relevant groups. See Appendix A for the complete default shortcut table.
+
+### 6.9 Import and export
+
+![Import and export settings](../../images/guide-en/14-导入与导出.webp)
+
+The **Import** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod import format | 7z | Folder inputs are compressed to this format; archives keep their original format when conversion is not forced |
+| Always use the import format | Off | Extracts and recompresses when needed |
+| Import concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+The **Export** subpage:
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Mod export format | ZIP | Also offers 7z, RAR, or a folder |
+| Always use the export format | Off | When off, the source archive format may be retained; this option is unnecessary for folder exports |
+| Preserve the category folder structure | On | Organizes output by category path |
+| Include metadata and previews | Off | Enable to share tags, additional previews, and named variants |
+| Export concurrency | Auto recommend | Manually adjustable from 1–16 tasks |
+
+Creating RAR archives requires WinRAR. Reading RAR archives does not require a separate archiver installation. Read the explanations for unavailable options before choosing an output format.
+
+The current category determines the destination for a local import. For online installation, check the category in the installation destination selection flow.
+
