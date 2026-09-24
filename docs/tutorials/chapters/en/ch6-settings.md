@@ -70,3 +70,54 @@ The automatic memory allowance varies with your device and display. Use the reco
 
 The disk cache is not a backup folder. Do not manually clear `data/`, operation recovery records, or `.d3dxmeta/` as though they were caches.
 
+### 6.6 Personalization → Appearance
+
+![Appearance settings](../../images/guide-en/12-设置个性化.webp)
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Theme | Dark | Also offers Light and Follow System; the latter follows the Windows app theme |
+| Font | System default | Choose and preview a font installed on this computer |
+| Language | Simplified Chinese | Options come from language packs in the configuration folder |
+
+Restart the app after switching languages or editing a language pack to refresh the entire interface.
+
+To create another language pack:
+
+1. Click **Open language packs folder**.
+2. Copy an existing language folder and name it with a language code, such as `ja-JP`.
+3. Edit the UTF-8 `strings.json` file, preserving the source-text keys and dynamic placeholders.
+4. Return to Settings, click **Refresh list**, select the language, and restart.
+
+Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
+
+### 6.7 Personalization → Window background
+
+You can turn the background off or use an image, video, or WE scene.
+
+![Choosing a window background source](../../images/guide-en/28-整窗背景.webp)
+
+| Source | What to select |
+| --- | --- |
+| Close (off) | Uses the theme's background color |
+| Image | A supported local image such as PNG, JPG, JPEG, BMP, or WebP |
+| Video | A supported local video such as MP4, WebM, MKV, AVI, or MOV |
+| WE scene | The `project.json` from a Wallpaper Engine scene project, together with the local Wallpaper Engine application configuration |
+
+For WE scenes, use **Find automatically** or manually specify an application path such as `wallpaper64.exe`. Keep the complete scene project and its resource files; copying only the JSON file is not enough to play it.
+
+Display settings:
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| Image fit | Fill (crop to cover) | Can be changed to fit; images also support Tile |
+| Background overlay | 45 for Dark, 30 for Light | Saved separately for each theme; darkens in Dark mode and softens and brightens in Light mode |
+| Background blur | 60 | Range 0–100; 0 turns it off |
+| Background frame rate | 30 FPS | Used for animated backgrounds; adjustable through the available options |
+| Scene quality | 2× | WE scenes can use 1× to reduce resource use |
+| Background volume | Muted | Adjust sound for supported animated backgrounds as needed |
+
+Animated backgrounds provide pause, resume, and retry controls. They pause automatically when the window is minimized and resume when it is restored. Restoring the window does not override a manual pause.
+
+If playback fails, check that the file still exists, its encoding is supported, and the WE path and project are complete. Image backgrounds do not require Wallpaper Engine, nor do ordinary local videos.
+
