@@ -39,3 +39,34 @@ Online Mods also requires **Enable proxy** in its own section. If Online Mods is
 
 If no configuration is detected in system proxy mode, check Windows settings first. In manual mode, check the address, port, and whether the proxy application is running.
 
+### 6.4 General → Download data
+
+This page shows total package storage, split into installed and uninstalled packages, and provides:
+
+| Control | Purpose |
+| --- | --- |
+| Delete installer packages automatically | On by default; removes the corresponding source package after the mod is successfully added to the library |
+| Clean up installed | Removes downloaded source packages already added to the library, after confirmation |
+| Open folder | Opens the actual downloads folder |
+
+Keep downloads that have not yet been installed until you install them or decide how to handle them. These source packages are stored separately from the managed mod contents in the library, so cleaning up installed packages reduces duplicate storage.
+
+### 6.5 General → Images and cache
+
+This page separates the image memory cache from the disk cache, each with its own limit and cleanup controls.
+
+![Image memory and disk caches](../../images/guide-en/27-图片与缓存.webp)
+
+| Item | Default or range | Description |
+| --- | --- | --- |
+| Image memory cache | Auto recommend; manual range 64–8192 MiB | Keeps recently decoded images so returning to them is faster |
+| Current image memory | Live statistics | Measures only the image cache, not the whole application's memory use |
+| Clear image memory | Button | Releases cache entries that can be freed; images currently on screen remain in memory |
+| Disk cache limit | 512 MB by default; 0 means unlimited | Manages online images and other caches that can be regenerated |
+| Disk slider range | Maximum 4096 MB by default | Controls how far the slider can go, rather than the effective cache limit |
+| Clear disk cache | Requires confirmation | Clears regenerable caches while retaining downloaded mod source packages |
+
+The automatic memory allowance varies with your device and display. Use the recommendation shown on your device. Lowering the allowance may require images to be decoded again when revisited, but does not delete mods or their metadata.
+
+The disk cache is not a backup folder. Do not manually clear `data/`, operation recovery records, or `.d3dxmeta/` as though they were caches.
+
