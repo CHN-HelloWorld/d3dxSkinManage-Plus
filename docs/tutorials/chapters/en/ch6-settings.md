@@ -159,3 +159,36 @@ Creating RAR archives requires WinRAR. Reading RAR archives does not require a s
 
 The current category determines the destination for a local import. For online installation, check the category in the installation destination selection flow.
 
+### 6.10 Online Mods
+
+The **Online Mod proxy** subpage provides a switch and **Open proxy settings**. It uses the proxy configured in General. You cannot enable the online proxy separately while the main switch is off.
+
+The **Mod updates** subpage provides automatic checks, startup checks, scheduled frequency, notification style, and check concurrency. Automatic and startup checks are on by default, scheduled checks are off, and notifications use **Badge only**. Concurrency uses **Auto recommend**, with a manual range of 1–16.
+
+See Chapter 5 for pausing, resuming, background tasks, and file selection in the update window.
+
+### 6.11 Update → Application updates
+
+| Option | Default | Description |
+| --- | --- | --- |
+| Check application updates | Manual control | Displays the current version and checks the update source configured by the publisher |
+| Enable automatic application updates | On | Controls automatic checks and notifications |
+| Check on startup | On | Checks in the background, with a 24-hour minimum interval |
+| Back up the previous version | On | Backs up application files before updating the manager itself |
+| Update package source | Automatic | Tries mirrors first and falls back on failure; you can also choose a specific source |
+
+The supplied updater installs application updates. If no update source is configured, obtain the new version through the software publisher's download channel.
+
+### 6.12 Restoring defaults
+
+**Reset**, in the lower-right corner, first opens a confirmation dialog with Cancel selected by default. Confirming resets all application preferences, including:
+
+- Appearance, language, font, and background.
+- Customized shortcuts.
+- Import, export, deletion, network, and update preferences.
+- Settings that support automatic recommendations, which return to recommendations based on the device.
+- Options such as interface layout stored in application preferences.
+
+**Game configurations and imported mods are retained.** The game list, active game, and current preset selection are saved separately in `config/games.json`.
+
+If the reset fails, the app keeps the original settings and displays a message. To revert just one option, adjust it directly without resetting all preferences.
