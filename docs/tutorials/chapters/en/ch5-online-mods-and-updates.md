@@ -52,3 +52,44 @@ Online installation still checks the archive, metadata, and destination path. A 
 
 If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
 
+### 5.4 Managing downloads
+
+Open **Downloads** from the online page to see queued, downloading, paused, completed, and failed tasks, along with their progress, speed, and size.
+
+| Control or menu item | Purpose |
+| --- | --- |
+| Pause / Resume | Control downloads that support pausing |
+| Cancel | Stop the current task |
+| Retry | Retry a failed download |
+| Open Mod category | Locate an installed mod |
+| Show in File Explorer | Locate a retained download file |
+| Remove from list | Remove the record |
+| Delete, including local files | Also handle that download's local files; follow the confirmation prompt |
+| Clear completed / Clear all | Process download list entries in bulk; check the scope in the prompt before proceeding |
+
+Downloaded source packages are stored in `<data-root>/data/downloads/`. They are not disposable image caches.
+
+**Delete installer packages automatically**, under **Settings → General → Download data**, is on by default. **The corresponding source package is deleted only after the mod has been successfully added to the library.** Turn this off to retain packages for an offline archive.
+
+**Clean up installed** removes source packages that have been confirmed as added to the library, while keeping downloads that have not yet been installed. Deleting a source package does not delete the imported mod from the library, but retaining source packages is not a substitute for a complete backup.
+
+### 5.5 Checking installed mods for updates
+
+Click **Check for updates** in **Category Overview** to open the mod updates window. Checks depend on saved GameBanana source information. Mods installed from the online page have the relevant records; other local packages may not.
+
+The update window separates check progress from the update list. You can search mod names and view local and new version information, update notes, file dates, and estimated download sizes.
+
+If a check fails or covers only some items, the interface reports that the check is incomplete. This does not mean that all mods are up to date. Use **Check again** once the network connection is restored.
+
+Automatic checks are configured under **Settings → Online Mods → Mod updates**:
+
+| Setting | Default and behavior |
+| --- | --- |
+| Check Mod updates automatically | On |
+| Check on startup | On, with a minimum interval between checks |
+| Scheduled check frequency | Off by default; also offers Every 6 hours, Every 12 hours, and Daily |
+| Notification style | Badge only by default; a status bar notice can also be added |
+| Check concurrency | Auto recommend by default; lets you adjust concurrency in the update workflow |
+
+Manual and automatic checks have different triggers. For everyday use, refer to the latest check results shown in the update window.
+
