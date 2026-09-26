@@ -93,3 +93,48 @@ Automatic checks are configured under **Settings → Online Mods → Mod updates
 
 Manual and automatic checks have different triggers. For everyday use, refer to the latest check results shown in the update window.
 
+### 5.6 Updating one or more mods
+
+Click **Update** for an individual item or **Update all** for a batch. If an entry offers multiple files, **Choose update files** appears first. You must select one file for each relevant mod before starting.
+
+Tasks may pass through preparation, download, verification, extraction, and installation stages. Use the **Updated** status or the results summary to confirm completion.
+
+| Action | Behavior |
+| --- | --- |
+| Pause / Resume for one item | Controls the task at stages that currently allow pausing |
+| Pause all / Resume all / Stop all | Applies to all unfinished updates for the current game, including tasks hidden by the search filter |
+| Close update window | If tasks are running, you can return to them, stop unfinished updates, or continue in the background |
+| Stop | Unfinished items keep their old versions; completed updates are not undone. You may need to wait during installation commit or final cleanup |
+
+If preparing the new content fails, check the specific file or verification error. The app retains the materials needed for recovery. Do not manually delete source containers, working folders, or transaction records during an update.
+
+Export or back up important custom changes beforehand. Updating a mod and **Back up the previous version** for application updates are separate features; the latter does not replace a mod backup.
+
+### 5.7 Ignoring updates and restoring notifications
+
+An item's More menu offers:
+
+- **View on GameBanana**: open the source page in a browser.
+- **Ignore this version**: skip notifications for this version.
+- **Ignore this Mod**: stop notifications for future updates to this mod as well.
+
+After ignoring an update, you can use **Undo** in the window's current notification. Undo requires the mod and game to remain valid. After closing the window, do not assume this temporary Undo control will still be available.
+
+### 5.8 Updating the application
+
+Application version updates are under **Settings → Update → Application updates**. Use **Check application updates**.
+
+![Application update settings](../../images/guide-en/16-程序更新.webp)
+
+Update availability depends on whether the distribution channel provides a valid update source and a matching package. If the app reports that no update source is configured, obtain the new version through the software publisher's download channel.
+
+When a new version is found, you can read its release notes and release history, then update, ask to be reminded later, or skip that version.
+
+The one-click update process downloads, checks, and extracts the package, then makes a backup according to your settings. A separate updater replaces the application and restarts it. Keep the `Updater/` folder supplied with the distribution; you do not need to launch the updater directly.
+
+- Finish active tasks before installing an update, then close the application when prompted.
+- Updates preserve your mods, settings, and plugins. Regular backups of personal data are still recommended.
+- The download source can be automatic or a specific mirror. Automatic mode falls back through the candidate sources.
+- If the updater reports an error, retain both application and updater logs, check paths and files in use, then retry.
+
+Application updates and GameBanana mod updates serve different purposes. The former upgrades the manager; the latter replaces resources in the library.
