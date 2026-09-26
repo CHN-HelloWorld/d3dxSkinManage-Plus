@@ -19,3 +19,36 @@ Configure the proxy in two steps:
 
 Local categories, importing, and deployment do not require a connection to GameBanana.
 
+### 5.2 Browsing, searching, and details
+
+The online page lets you browse by category, search for mods, change the sort order, and refresh the list. Sort options include **Default**, **Newest**, **Recently updated**, **Most liked**, **Most downloaded**, and **Most viewed**.
+
+![Online browsing with placeholder content](../../images/guide-en/24-在线Mod.webp)
+
+*The names, covers, authors, and statistics are tutorial placeholders used to show the browsing controls in the real interface.*
+
+**Hide NSFW**, **Blur NSFW**, and **Show NSFW** control online content previews; the default is to blur them. This preference is saved separately from the display preference for local X-rated mods.
+
+Click a card to open its details, where you can view images, **Overview**, **Description**, **Update**, and **Available files**. An entry with multiple files often offers different versions, optional content, or attachments. Read the author's instructions before choosing a file.
+
+![Online details and file selection](../../images/guide-en/29-在线详情.webp)
+
+*The filenames and sizes shown here are also placeholders. Read each file's description when using real entries.*
+
+Author descriptions and downloadable files come from an external site. This tutorial uses placeholder content to explain the controls; actual entries depend on the site's content.
+
+### 5.3 Downloading and choosing an installation destination
+
+Select an available file in the details view and click **Download**. When the download finishes, the app prepares to import it into a destination category.
+
+Installation can proceed when there is one unambiguous category match. Otherwise, **Choose installation destination** appears:
+
+- Select an existing category in the tree. You can search by category name.
+- Check the destination game and category to avoid installing into another game.
+- If the interface offers to save the site's category name as the English name, you can do so to help future matching.
+- If the destination folder already has an English name, follow the overwrite confirmation prompt.
+
+Online installation still checks the archive, metadata, and destination path. A finished download does not necessarily mean the mod has been added to the library; wait for the installation result.
+
+If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
+
