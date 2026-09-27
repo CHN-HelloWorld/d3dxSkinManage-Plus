@@ -36,3 +36,27 @@ Existing categories and category images are handled according to the comparison 
 
 Cancellation takes effect at a safe boundary. If the app reports that categories have been imported but cleanup is pending, keep the recovery records. Follow the prompt to retry, or restart and wait for cleanup to finish.
 
+### 7.3 Exporting a category preset
+
+![Exporting the complete category tree](../../images/guide-en/25-分类导出.webp)
+
+Activate a game, then click **Export category preset** in Tools:
+
+- Enter a preset name.
+- Review the current game's complete category tree and counts.
+- Select **Include category images** if needed.
+- Repair unreadable images, or deselect those images using the available controls.
+- Choose an output location, confirm the output file, and click **Start export**.
+
+The export covers the current game's complete category tree, rather than a single selected mod. Recipients of this file still need to import their own mods.
+
+### 7.4 Rebuilding the index
+
+Use this when source files still exist but the categories or mod list no longer match the disk. First try refreshing with the default `F5` shortcut. Rebuild only when the index needs restoring.
+
+Before starting, check that the resource drive is accessible and the correct game is selected, and finish related file tasks. After confirmation, the app scans the library, reads category and mod markers, and restores the index entries and associations it can recognize.
+
+A normal rebuild mainly handles the current game. **If the app detects corruption of the entire index database at startup, recovery involves all configured games.** Connect each game's resource drive and follow the prompts.
+
+The completion report lists registered entries, classification results, and problems such as invalid metadata. Unreadable files or files with conflicting identities may not be recoverable; keep the report and address the affected items. Rebuilding cannot recover permanently deleted archives and does not replace a backup.
+
