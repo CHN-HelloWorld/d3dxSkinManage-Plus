@@ -3,5 +3,149 @@
   "title": "插件清单",
   "description": "公开 SDK 2.0 的插件清单；命令归属、依赖区间及引用关系由宿主进一步校验。",
   "type": "object",
-  "additionalProperties": false
+  "additionalProperties": false,
+  "required": ["id", "name", "version", "apiVersion", "entry"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "id": {"$ref": "#/$defs/pluginId"},
+    "name": {"type": "string", "minLength": 1},
+    "version": {"$ref": "#/$defs/version"},
+    "apiVersion": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+$", "examples": ["2.0"]},
+    "minAppVersion": {"type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+){1,3}$", "default": "0.0.0"},
+    "entry": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(?:/[A-Za-z_][A-Za-z0-9_]*)*\\.py$"},
+    "author": {"type": "string"},
+    "description": {"type": "string"},
+    "homepage": {"type": "string"},
+    "permissions": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"enum": ["mods:read", "mods:write", "mods:manage", "storage", "ui:tools-page", "ui:menus", "ui:settings", "ui:views", "ui:shortcuts", "network", "fs:read", "fs:write", "background", "process", "native"]}
+    },
+    "activationEvents": {
+      "type": "array",
+      "uniqueItems": true,
+      "default": [],
+      "items": {
+        "anyOf": [
+          {"enum": ["onStartup", "onEvent:mod_imported", "onEvent:mod_enabled", "onEvent:mod_disabled", "onEvent:mod_deleted", "onEvent:game_changed", "onEvent:preset_applied", "onEvent:mod_metadata_changed", "onEvent:tags_changed", "onEvent:mod_updated", "onEvent:index_rebuilt", "onEvent:variant_restored", "onEvent:variant_state_changed", "onEvent:variant_references_missing"]},
+          {"type": "string", "pattern": "^onCommand:[A-Za-z0-9_.-]+$"},
+          {"type": "string", "pattern": "^onView:[A-Za-z0-9_.-]+$"}
+        ]
+      }
+    },
+    "dependencies": {
+      "type": "object",
+      "propertyNames": {"$ref": "#/$defs/pluginId"},
+      "additionalProperties": {"type": "string", "minLength": 1},
+      "description": "插件依赖，支持精确版本、*、^、~ 和以空格分隔的比较符交集；不是第三方 Python 包。",
+      "examples": [{"com.example.provider": "^1.0.0"}]
+    },
+    "files": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {"type": "string", "minLength": 1},
+      "description": "发布文件或目录的相对路径，不接受通配符或越界路径。pack 命令要求显式声明，plugin.json 总会包含。"
+    },
+    "contributes": {"$ref": "#/$defs/contributes"}
+  },
+  "$defs": {
+    "pluginId": {"type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]*[A-Za-z0-9_-]$"},
+    "version": {"type": "string", "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"},
+    "command": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 160, "pattern": "^[A-Za-z0-9_.-]+$"},
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "icon": {"type": "string"}
+      }
+    },
+    "tool": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {"type": "string"},
+        "title": {"type": "string"},
+        "icon": {"type": "string"},
+        "group": {"type": "string"}
+      }
+    },
+    "menu": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command"],
+      "properties": {
+        "command": {"type": "string"},
+        "title": {"type": "string"},
+        "icon": {"type": "string"},
+        "when": {"enum": ["", "always", "modSelected", "characterSelected"]}
+      }
+    },
+    "view": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z0-9_.-]{1,128}$"},
+        "title": {"type": "string"},
+        "icon": {"type": "string"}
+      }
+    },
+    "shortcut": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["command", "default"],
+      "properties": {
+        "command": {"type": "string"},
+        "default": {"type": ["string", "null"]},
+        "context": {"enum": ["window", "overview", "preset"], "default": "window"}
+      }
+    },
+    "setting": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["key", "type", "default"],
+      "properties": {
+        "key": {"type": "string", "pattern": "^[A-Za-z][A-Za-z0-9_.-]{0,127}$"},
+        "type": {"enum": ["bool", "int", "float", "str"]},
+        "default": {"type": ["boolean", "integer", "number", "string"]},
+        "title": {"type": "string"},
+        "description": {"type": "string"},
+        "minimum": {"type": "number"},
+        "maximum": {"type": "number"},
+        "minLength": {"type": "integer", "minimum": 0},
+        "maxLength": {"type": "integer", "minimum": 0},
+        "enum": {"type": "array", "minItems": 1, "uniqueItems": true, "items": {"type": ["boolean", "integer", "number", "string"]}},
+        "enumTitles": {"type": "array", "items": {"type": "string"}}
+      },
+      "allOf": [
+        {"if": {"properties": {"type": {"const": "bool"}}}, "then": {"properties": {"default": {"type": "boolean"}}}},
+        {"if": {"properties": {"type": {"const": "int"}}}, "then": {"properties": {"default": {"type": "integer"}}}},
+        {"if": {"properties": {"type": {"const": "float"}}}, "then": {"properties": {"default": {"type": "number"}}}},
+        {"if": {"properties": {"type": {"const": "str"}}}, "then": {"properties": {"default": {"type": "string"}}}}
+      ]
+    },
+    "contributes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "commands": {"type": "array", "items": {"$ref": "#/$defs/command"}},
+        "toolsPage": {"type": "array", "items": {"$ref": "#/$defs/tool"}},
+        "views": {"type": "array", "items": {"$ref": "#/$defs/view"}},
+        "settings": {"type": "array", "items": {"$ref": "#/$defs/setting"}},
+        "shortcuts": {"type": "array", "items": {"$ref": "#/$defs/shortcut"}},
+        "menus": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "mod-context": {"type": "array", "items": {"$ref": "#/$defs/menu"}},
+            "character-context": {"type": "array", "items": {"$ref": "#/$defs/menu"}}
+          }
+        }
+      }
+    }
+  }
 }
