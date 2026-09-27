@@ -60,3 +60,47 @@ A normal rebuild mainly handles the current game. **If the app detects corruptio
 
 The completion report lists registered entries, classification results, and problems such as invalid metadata. Unreadable files or files with conflicting identities may not be recoverable; keep the report and address the affected items. Rebuilding cannot recover permanently deleted archives and does not replace a backup.
 
+### 7.5 Log Viewer
+
+![Log Viewer](../../images/guide-en/23-日志.webp)
+
+Click **View Logs** in Tools to access:
+
+| Control | Purpose |
+| --- | --- |
+| Session | Selects a startup session by date and sequence, such as “2026-10-30 #1” |
+| Level | All, or one of DEBUG, INFO, WARNING, ERROR, and CRITICAL |
+| Auto-scroll to bottom | Moves to the newest entries after a refresh |
+| Refresh | Rereads the selected file |
+| Open Log Folder | Locates the actual log files |
+| Copy | Copies the currently displayed content |
+
+The level filter matches exactly: selecting WARNING does not also include ERROR. Use **All** when you need the context before and after an error.
+
+The window reads only approximately the final 1 MiB of a log. Open the full file from the log folder if you need earlier content. Logs are saved by date and startup sequence and retained for 14 days by default, so save the relevant session promptly when reporting a problem.
+
+Updater logs are also part of the logging system. Keep them alongside the application logs if an application update fails. Remove unrelated personal paths or sensitive information before submitting a report.
+
+### 7.6 Installing and managing plugins
+
+![Plugin list and details](../../images/guide-en/18-插件.webp)
+
+The Plugins page lists plugins on the left and shows details for the selected plugin on the right. Search by name, author, or description, or filter by **All**, **Enabled**, or **Disabled**.
+
+There are two installation methods:
+
+| Method | Steps |
+| --- | --- |
+| Install an archive | Click **Install plugin**, choose a ZIP, 7z, or RAR file, and follow the result message |
+| Add a folder manually | Click **Open plugins folder**, add the complete plugin folder containing `plugin.json`, then click **Rescan** |
+
+Plugins are discovered in `plugins/` under the application root by default. If that folder is not writable, the app uses its data-folder fallback; use the actual location shown by **Open plugins folder**. Bundled examples and plugins you install use the same folder and management rules.
+
+After installation, check the plugin's status in the list. Select it to review its author, description, permissions, and source, then enable it as needed. The first trust prompt explains that the plugin runs code inside the app and lists its requested capabilities. Confirm only for sources you trust. New permissions discovered after an update or rescan require confirmation again.
+
+**Ready** means the plugin is already available: its tool buttons, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
+
+If the status is **Dependency blocked**, expand the details and follow the instructions to install and enable dependency plugins with compatible versions. Confirm trust separately for each dependency. Dependencies are not installed or authorized automatically. After resolving the requirements, reload or enable the original plugin again.
+
+Installing a new archive for the same plugin replaces its code folder and preserves private settings data. Before replacement, the installer checks the archive, manifest, version requirements, and code; a failed check keeps the original plugin. Check its status after updating, and confirm any additional permissions.
+
