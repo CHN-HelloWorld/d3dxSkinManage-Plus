@@ -1,4 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "插件清单"
+  "title": "插件清单",
+  "description": "公开 SDK 2.0 的插件清单；命令归属、依赖区间及引用关系由宿主进一步校验。",
+  "type": "object",
+  "additionalProperties": false
 }
