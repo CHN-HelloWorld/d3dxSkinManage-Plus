@@ -14,3 +14,5 @@ Start with the skeleton in section 1 and confirm that its command works. Then re
 
 Section 10 provides reading and practice steps for each example. Sections 2–9 cover the interfaces, section 11 covers custom interfaces, and section 12 covers development checks and troubleshooting.
 
+## 1. Environment and your first plugin
+
