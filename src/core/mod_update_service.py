@@ -356,3 +356,402 @@ class ModUpdateService(QObject):
     def _prepare_check_slice(self) -> None:
         """由 Qt 单次定时器驱动一段有时间预算的候选准备工作。"""
         self._advance_check_preparation(sliced=True)
+
+    def _advance_check_preparation(self, *, sliced: bool) -> bool:
+        """推进候选生成器并按需续约定时器；游戏失效或准备异常时取消收尾。"""
+        preparation, token = self._check_preparation, self._check_token
+        if preparation is None:
+            return False
+        if not self._is_current_check():
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True})
+            return False
+        deadline = time.perf_counter() + _PREPARATION_SLICE_SECONDS if sliced else None
+        try:
+            while True:
+                try:
+                    next(preparation)
+                except StopIteration as ready:
+                    ignored_map, force = ready.value
+                    break
+                if deadline is not None and time.perf_counter() >= deadline:
+                    self._preparation_timer.start(0)
+                    return True
+        except Exception as exc:
+            logger.warning("准备更新检测失败: %s", exc)
+            self._on_finished(
+                {"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True, "error": str(exc) or type(exc).__name__}
+            )
+            return False
+        self._check_preparation = None
+        return self._start_prepared_check(token, ignored_map, force=force)
+
+    def _start_prepared_check(self, token, ignored_map, *, force: bool) -> bool:
+        """发布开始信号后复核令牌，启动网络检查；空任务立即完成，启动失败逐项登记错误。"""
+        jobs = list(self._check_jobs.items())
+        self._check_snapshot.update(phase="connecting", total=len(jobs), last_progress_at=time.monotonic())
+        self.check_started.emit(len(jobs))
+        # check_started 的同步接收者也可能取消或启动了下一轮。
+        if self._check_token is not token:
+            return True
+        if not self._is_current_check():
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0, "cancelled": True})
+            return True
+        if not jobs:
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": 0})
+            return True
+        try:
+            started = self._checker.start(jobs, ignored_map, force=force)
+            error = tr("更新检测未能启动")
+        except Exception as exc:
+            started = False
+            error = str(exc) or type(exc).__name__
+        if started is False and self._check_token is token:
+            for mid, _ in jobs:
+                self._on_failed(mid, error)
+            self._on_finished({"found": 0, "up_to_date": 0, "failed": len(jobs)})
+            return False
+        return True
+
+    def cancel_check(self) -> bool:
+        """取消当前检查并立即收尾尚未提交给检查器的轮次；没有活动检查时返回 False。"""
+        if not self._check_in_progress:
+            return False
+        token = self._check_token
+        self._checker.cancel()
+        if self._check_token is token:
+            # started 信号期间取消，或尚未进入 checker 的空轮次也要立即收尾。
+            counts = {
+                kind: list(self._check_outcomes.values()).count(kind) for kind in ("found", "up_to_date", "failed")
+            }
+            self._on_finished({**counts, "cancelled": True})
+        return True
+
+    # checker 信号处理
+    def _is_current_check(self) -> bool:
+        """判断活动检查是否仍属于当前游戏，作为结果写入和界面通知的前置条件。"""
+        return self._check_in_progress and self._check_game_id == self._mm.current_game_id
+
+    def _on_check_progress(self, done: int, total: int) -> None:
+        """仅将当前游戏的检查进度写入快照并转发给界面。"""
+        if self._is_current_check():
+            self._check_snapshot.update(
+                phase="checking",
+                done=done,
+                total=total,
+                last_progress_at=time.monotonic(),
+            )
+            self.progress.emit(done, total)
+
+    def _record_check_outcome(self, mid: str, outcome: str) -> None:
+        """替换单个 Mod 的检查结论，并相应修正发现更新与失败计数。"""
+        previous = self._check_outcomes.get(mid)
+        if previous in {"found", "failed"}:
+            self._check_snapshot[previous] -= 1
+        self._check_outcomes[mid] = outcome
+        if outcome in {"found", "failed"}:
+            self._check_snapshot[outcome] += 1
+
+    def _check_mod(self, mid: str):
+        """校验结果属于本轮且未被用户操作覆盖，再按 ID 读取条目；失效时返回 None。"""
+        if not self._is_current_check() or mid not in self._check_jobs or mid in self._check_superseded:
+            return None
+        # jobs 已按发起游戏收集；每条结果只查对应 ID，不能反复载入整个 Mod 库。
+        return self._mm.get_mod(mid)
+
+    def _preserve_user_change(self, mid: str) -> None:
+        """取消只撤销本轮检测，不能撤销期间已完成的更新、忽略或撤销忽略。"""
+        if not self._is_current_check():
+            return
+        self._check_superseded.add(mid)
+        if self._check_preparation is not None:
+            self._check_jobs.pop(mid, None)
+        self._pending_last_checked.discard(mid)
+        if mid in self._status:
+            self._status_before_check[mid] = self._status[mid]
+        else:
+            self._status_before_check.pop(mid, None)
+        if mid in self._failures:
+            self._failures_before_check[mid] = self._failures[mid]
+        else:
+            self._failures_before_check.pop(mid, None)
+
+    def _write_last_checked(self, mid: str) -> None:
+        """为仍存在的 Mod 写入本地检查时间并交由管理器持久化。"""
+        mod = self._mm.get_mod(mid)
+        if not mod:
+            return
+        gb = mod.info.custom_data.setdefault(_GB, {})
+        gb["last_checked_iso"] = datetime.now().isoformat()
+        self._mm.update_mod(mod)
+
+    def _on_update_found(self, mid: str, info: UpdateInfo) -> None:
+        """接收有效更新结果，补充本地展示信息并暂存检查时间，随后通知状态变更。"""
+        mod = self._check_mod(mid)
+        if mod is None:
+            return
+        info.local_name = mod.display_name
+        info.local_preview = mod.primary_preview or ""
+        self._status[mid] = info
+        self._failures.pop(mid, None)
+        self._pending_last_checked.add(mid)
+        self._record_check_outcome(mid, "found")
+        self.status_changed.emit()
+
+    def _on_up_to_date(self, mid: str) -> None:
+        """清除有效条目的更新和失败状态，并将检查时间留待整轮提交。"""
+        if self._check_mod(mid) is None:
+            return
+        self._status.pop(mid, None)
+        self._failures.pop(mid, None)
+        self._pending_last_checked.add(mid)
+        self._record_check_outcome(mid, "up_to_date")
+        self.status_changed.emit()
+
+    def _on_failed(self, mid: str, err: str) -> None:
+        """登记有效条目的失败原因，不更新检查时间，以便后续重新尝试。"""
+        if self._check_mod(mid) is None:
+            return
+        # 失败不写 last_checked（下次仍会重试）
+        self._failures[mid] = err
+        self._pending_last_checked.discard(mid)
+        self._record_check_outcome(mid, "failed")
+        self.status_changed.emit()
+
+    def _on_finished(self, counts: dict) -> None:
+        """关闭准备生成器并结束本轮；取消时恢复检查前结果，跨游戏结果不发布到当前界面。"""
+        if not self._check_in_progress:
+            return
+        self._preparation_timer.stop()
+        if self._check_preparation is not None:
+            self._check_preparation.close()
+            self._check_preparation = None
+        current = self._is_current_check()
+        cancelled = bool(counts.get("cancelled"))
+        if current:
+            current_ids = self._current_mod_ids()
+            if cancelled:
+                self._status = {mid: info for mid, info in self._status_before_check.items() if mid in current_ids}
+                self._failures = {
+                    mid: error for mid, error in self._failures_before_check.items() if mid in current_ids
+                }
+            else:
+                self._status = {mid: info for mid, info in self._status.items() if mid in current_ids}
+                self._failures = {mid: error for mid, error in self._failures.items() if mid in current_ids}
+                for mid in self._pending_last_checked & current_ids:
+                    self._write_last_checked(mid)
+            self._check_snapshot.update(
+                checking=False,
+                phase=(
+                    "failed"
+                    if counts.get("error")
+                    else "cancelled"
+                    if cancelled
+                    else "partial"
+                    if counts.get("failed")
+                    else "done"
+                ),
+                done=sum(int(counts.get(key, 0)) for key in ("found", "up_to_date", "failed")),
+                found=int(counts.get("found", 0)),
+                failed=int(counts.get("failed", 0)),
+                finished_at=time.monotonic(),
+            )
+            if counts.get("error"):
+                self._check_snapshot["error"] = str(counts["error"])
+        else:
+            self._snapshot_game_id = self._mm.current_game_id
+            self._check_snapshot = _idle_check_snapshot()
+        self._check_in_progress = False
+        self._check_game_id = None
+        self._check_token = None
+        self._check_jobs.clear()
+        self._check_outcomes.clear()
+        self._check_superseded.clear()
+        self._pending_last_checked.clear()
+        self._status_before_check.clear()
+        self._failures_before_check.clear()
+        if not current:
+            # 只通知忙碌状态结束，不把旧游戏的统计结果带入当前游戏。
+            self.status_changed.emit()
+            return
+        self._save_status()
+        self.status_changed.emit()
+        self.check_finished.emit(counts)
+
+    # 忽略
+    def ignore_version(self, local_mod_id: str) -> _IgnoreUndo | None:
+        """将当前推荐文件加入忽略列表并返回撤销凭据；条目或更新不存在时返回 None。"""
+        info = self._status.get(local_mod_id)
+        mod = self._mm.get_mod(local_mod_id)
+        if not mod or not info:
+            return
+        gb = mod.info.custom_data.setdefault(_GB, {})
+        ids = set(int(x) for x in (gb.get("ignored_file_ids") or []))
+        ids.add(int(info.latest_file.file_id))
+        return self._apply_ignore(mod, {"ignored_file_ids": sorted(ids)})
+
+    def ignore_mod(self, local_mod_id: str) -> _IgnoreUndo | None:
+        """持久化整个 Mod 的更新忽略标记并返回撤销凭据，条目不存在时不操作。"""
+        mod = self._mm.get_mod(local_mod_id)
+        if not mod:
+            return
+        return self._apply_ignore(mod, {"ignored": True})
+
+    def _apply_ignore(self, mod, changes: dict) -> _IgnoreUndo | None:
+        """仅修改当前游戏条目，保存忽略字段后移除更新提示，并返回带来源校验信息的撤销凭据。"""
+        game_id = self._mm.current_game_id
+        if not game_id or mod.game_id != game_id:
+            return None
+        gb = mod.info.custom_data.setdefault(_GB, {})
+        token = _IgnoreUndo(
+            game_id,
+            mod.mod_id,
+            {key: deepcopy(gb[key]) for key in changes if key in gb},
+            deepcopy(changes),
+            {key: gb.get(key) for key in ("mod_id", "file_id", "file_md5", "file_ts")},
+            deepcopy(self._status.get(mod.mod_id)),
+        )
+        gb.update(changes)
+        if not self._mm.update_mod(mod):
+            return None
+        self._status.pop(mod.mod_id, None)
+        self._preserve_user_change(mod.mod_id)
+        self._save_status()
+        self.status_changed.emit()
+        return token
+
+    def undo_ignore(self, token: _IgnoreUndo) -> bool:
+        """恢复本次修改的字段，保留此前忽略的版本和后续其他元数据修改。"""
+        if not isinstance(token, _IgnoreUndo) or token.game_id != self._mm.current_game_id:
+            return False
+        mod = self._mm.get_mod(token.mod_id)
+        if mod is None or mod.game_id != token.game_id:
+            return False
+        gb = mod.info.custom_data.setdefault(_GB, {})
+        if any(gb.get(key) != value for key, value in (token.after | token.source).items()):
+            return False
+        for key in token.after:
+            if key in token.before:
+                gb[key] = deepcopy(token.before[key])
+            else:
+                gb.pop(key, None)
+        if not self._mm.update_mod(mod):
+            return False
+        if token.info is not None:
+            self._status.setdefault(token.mod_id, deepcopy(token.info))
+        self._preserve_user_change(token.mod_id)
+        self._save_status()
+        self.status_changed.emit()
+        return True
+
+    # 一键更新 / 回滚
+    def apply_update(self, local_mod_id: str, chosen_file=None) -> None:
+        """选定显式或默认更新文件并入队；缺少本地条目或可用文件时通过失败信号报告。"""
+        mod = self._mm.get_mod(local_mod_id)
+        if mod is None:
+            self.update_failed.emit(local_mod_id, tr("找不到本地 Mod"))
+            return
+        info = self._status.get(local_mod_id)
+        if chosen_file is None and info is not None:
+            chosen_file = (
+                pick_default_file(info.candidate_files, mod.folder_name)
+                if len(info.candidate_files) > 1
+                else info.latest_file
+            )
+        if chosen_file is None:
+            self.update_failed.emit(local_mod_id, tr("没有可用的更新文件"))
+            return
+        gb = dict((mod.info.custom_data or {}).get(_GB) or {})
+        self._update_tasks.start(local_mod_id, chosen_file, self._update_metadata(chosen_file, gb), info=info)
+
+    @staticmethod
+    def _update_metadata(file, gb: dict) -> GbInstallMetadata:
+        """由选定文件和原安装来源组装新的安装元数据，保留页面及作者信息。"""
+        return GbInstallMetadata(
+            mod_id=int(gb.get("mod_id") or 0),
+            file_id=int(file.file_id),
+            file_md5=file.md5_checksum,
+            file_ts=int(file.date_added_ts),
+            page_url=gb.get("page_url") or "",
+            version=(file.version or None),
+            submitter_id=int(gb.get("submitter_id") or 0),
+            submitter_name=gb.get("submitter_name") or "",
+            last_checked_iso=datetime.now().isoformat(),
+        )
+
+    def _finish_apply(self, mid: str, archive_path, chosen_file, gb: dict, *, game_id: str) -> None:
+        """将已下载归档连同原游戏身份提交安装队列，沿用对应条目的更新信息。"""
+        self._update_tasks.start(
+            mid,
+            chosen_file,
+            self._update_metadata(chosen_file, gb),
+            info=self._status.get(mid),
+            archive=archive_path,
+            game_id=game_id,
+        )
+
+    def _on_task_applied(self, mid: str, mod) -> None:
+        """安装提交后移除过期检查状态，保存结果并发布库更新及界面完成通知。"""
+        self._status.pop(mid, None)
+        self._failures.pop(mid, None)
+        self._preserve_user_change(mid)
+        self._save_status()
+        self._mm._emit("mod_updated", mod_id=mid, game_id=self._mm._index.get_mod_game_id(mid) or "")
+        self.update_applied.emit(mid, mod)
+        self.status_changed.emit()
+
+    def update_task_snapshots(self) -> dict[str, dict]:
+        """返回当前游戏安装任务的展示快照，包括已结束任务。"""
+        return self._update_tasks.snapshots()
+
+    def update_task_infos(self) -> dict[str, UpdateInfo]:
+        """返回当前游戏任务持有的更新详情，省略没有详情的记录。"""
+        return self._update_tasks.infos()
+
+    def active_update_ids(self, *, all_games: bool = False) -> list[str]:
+        """列出尚未结束的更新 ID，默认限定当前游戏，可供退出流程查询所有游戏。"""
+        return self._update_tasks.active_ids(all_games=all_games)
+
+    def refresh_update_concurrency(self) -> None:
+        """让安装队列重新读取并发配置并尝试调度等待任务。"""
+        self._update_tasks.refresh_concurrency()
+
+    def acknowledge_completed_updates(self) -> bool:
+        """收起当前游戏全部成功的更新批次，同时保留新任务。"""
+        game_id = self._mm.current_game_id
+        if not game_id or self._status_game_id != game_id or self._check_in_progress or self._status or self._failures:
+            return False
+        if not self._update_tasks.clear_completed():
+            return False
+        # 以当前结果为准，早先检查可能取消或未完成。
+        self._snapshot_game_id = game_id
+        self._check_snapshot = _idle_check_snapshot()
+        self.status_changed.emit()
+        return True
+
+    def pause_update(self, mid: str) -> bool:
+        """请求暂停当前游戏的指定更新，返回任务队列是否接受暂停。"""
+        return self._update_tasks.pause(mid)
+
+    def resume_update(self, mid: str) -> bool:
+        """解除指定更新的用户暂停，返回任务是否存在且允许恢复。"""
+        return self._update_tasks.resume(mid)
+
+    def pause_all_updates(self) -> bool:
+        """暂停当前游戏的全部可暂停更新，任一暂停失败时返回 False。"""
+        return self._update_tasks.pause_all()
+
+    def resume_all_updates(self) -> None:
+        """请求恢复当前游戏的活动更新，确认窗口持有的暂停仍然有效。"""
+        self._update_tasks.resume_all()
+
+    def begin_stop_confirmation(self, mids=None, *, all_games: bool = False):
+        """为待确认停止的更新取得暂停凭据；无法暂停时由任务队列回滚并抛出异常。"""
+        return self._update_tasks.begin_stop_confirmation(mids, all_games=all_games)
+
+    def finish_stop_confirmation(self, token, *, confirmed: bool) -> None:
+        """结算停止确认凭据，确认时取消任务，放弃时仅解除该凭据施加的暂停。"""
+        self._update_tasks.finish_stop_confirmation(token, confirmed=confirmed)
+
+    def shutdown_updates(self) -> bool:
+        """停止所有游戏的更新并等待资源退出，返回工作进程和下载是否已结束。"""
+        return self._update_tasks.shutdown()
