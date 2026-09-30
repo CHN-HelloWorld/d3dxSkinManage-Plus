@@ -1,0 +1,25 @@
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.31903.59
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "updater", "updater.vcxproj", "{5120AD85-7054-438B-ACCA-F18E73540690}"
+EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "updater_tests", "tests\updater_tests.vcxproj", "{BF88B3CB-3876-44C2-9A42-99D4B812E3DC}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|x64 = Debug|x64
+		Release|x64 = Release|x64
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{5120AD85-7054-438B-ACCA-F18E73540690}.Debug|x64.ActiveCfg = Debug|x64
+		{5120AD85-7054-438B-ACCA-F18E73540690}.Debug|x64.Build.0 = Debug|x64
+		{5120AD85-7054-438B-ACCA-F18E73540690}.Release|x64.ActiveCfg = Release|x64
+		{5120AD85-7054-438B-ACCA-F18E73540690}.Release|x64.Build.0 = Release|x64
+		{BF88B3CB-3876-44C2-9A42-99D4B812E3DC}.Debug|x64.ActiveCfg = Debug|x64
+		{BF88B3CB-3876-44C2-9A42-99D4B812E3DC}.Release|x64.ActiveCfg = Release|x64
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+EndGlobal
