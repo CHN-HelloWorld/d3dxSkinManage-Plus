@@ -1,0 +1,14 @@
+{
+  "id": "example.preset-audit",
+  "name": "预设检查",
+  "version": "0.1.0",
+  "apiVersion": "2.0",
+  "activationEvents": ["onStartup"],
+  "files": ["entry.py", "README.md", "languages"],
+  "minAppVersion": "0.1.0",
+  "author": "d3dxSkinManage-Plus",
+  "description": "集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。",
+  "entry": "entry.py",
+  "permissions": ["mods:read", "storage", "ui:views"],
+  "contributes": {}
+}
