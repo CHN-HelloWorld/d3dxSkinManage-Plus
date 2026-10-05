@@ -390,3 +390,25 @@ Call `task.cancel()` to request stopping at a safe boundary. Mod operations and 
 
 SDK reads and writes, events, commands, completion callbacks, and Qt widget access must run on the host's main thread. The host performs file I/O for archive deployment and batch disabling in the background. Do not poll `done` in a GUI callback, call `sleep`, or access SQLite yourself. Chain multistep operations through completion callbacks: for example, confirm that `disable_all()` succeeded before enabling a replacement Mod. The preset cycling example in section 10.3 demonstrates busy state, immediate completion callbacks, and cancellation on deactivation. Deletion does not guarantee that all file I/O runs in the background.
 
+### 7.3 Events
+
+Import constants from `src.plugin_sdk.events` and subscribe with `ctx.events.on(EVENT, handler)`. Handlers receive payload fields as keyword arguments, for example `def on(self, mod_id="", game_id="", **_): ...`.
+
+| Constant | Event name | Payload |
+|------|--------|---------|
+| `MOD_IMPORTED` | `mod_imported` | `mod_id`, `node_id`, `game_id` |
+| `MOD_ENABLED` | `mod_enabled` | `mod_id`, `game_id` |
+| `MOD_DISABLED` | `mod_disabled` | `mod_id`, `game_id` |
+| `MOD_DELETED` | `mod_deleted` | `mod_id`, `game_id` |
+| `GAME_CHANGED` | `game_changed` | `game_id` |
+| `PRESET_APPLIED` | `preset_applied` | `affected_ids`, `game_id` |
+| `MOD_METADATA_CHANGED` | `mod_metadata_changed` | `mod_id`, `game_id` |
+| `TAGS_CHANGED` | `tags_changed` | `affected_ids`, `game_id` |
+| `MOD_UPDATED` | `mod_updated` | `mod_id`, `game_id` |
+| `INDEX_REBUILT` | `index_rebuilt` | `game_id` |
+| `VARIANT_RESTORED` | `variant_restored` | `mod_id`, `game_id`, `applied`, `removed_keys` |
+| `VARIANT_STATE_CHANGED` | `variant_state_changed` | `mod_id`, `game_id` |
+| `VARIANT_REFERENCES_MISSING` | `variant_references_missing` | `game_id`, `preset_id`, `mod_ids`, `names` |
+
+Mod data-change events are emitted after their corresponding business operations commit. Editing tags can also change Mod metadata and emit both event types; do not count different notifications as repeated operations. `VARIANT_RESTORED` means variant restoration has run, possibly before the entire preset commits. For restoration at preset scope, `mod_id` can be empty; observe `PRESET_APPLIED` for overall completion. `VARIANT_STATE_CHANGED` signals that you should query the Mod's variant snapshot again. `VARIANT_REFERENCES_MISSING` reports missing variant references when a combination commits: `mod_ids` contains persistent Mod IDs, and `names` is for display. Rebuilding the index invalidates snapshots only; continue resolving persistent references through `mod_id`.
+
