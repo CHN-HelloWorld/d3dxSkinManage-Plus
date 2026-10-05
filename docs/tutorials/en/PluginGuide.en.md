@@ -244,3 +244,33 @@ def observe_game(ctx, callback):
 
 ---
 
+## 5. Contribution points (contributes)
+
+```jsonc
+"contributes": {
+  "commands":  [{ "id": "myplugin.scan", "title": "Scan" }, { "id": "myplugin.inspect", "title": "Inspect" }],
+  "shortcuts": [{ "command": "myplugin.scan", "default": "Ctrl+Alt+S", "context": "window" }],
+  "toolsPage": [{ "command": "myplugin.scan", "group": "Plugins", "icon": "navigation/tools" }],
+  "menus":     { "mod-context": [{ "command": "myplugin.inspect", "when": "modSelected" }] },
+  "settings":  [{ "key": "threshold", "type": "int", "default": 2, "title": "Threshold" }],
+  "views":     [{ "id": "myplugin.panel", "title": "My panel" }]
+}
+```
+
+| Contribution | Location | Description |
+|--------|----------|------|
+| `commands` | — | Executable unit for contributions; implement with `ctx.commands.register(id, handler)` |
+| `toolsPage` | Buttons in the Tools page's **Plugins** group | Clicking executes `command` |
+| `menus."mod-context"` | Mod card context menu | Receives the `mod_id` keyword argument; `when` supports `modSelected` / `always` |
+| `menus."character-context"` | Character card context menu | Receives the `node_id` keyword argument; `when` supports `characterSelected` / `always` |
+| Global commands | **Plugin commands** button in navigation | All plugin `commands` appear in this panel automatically, with no additional declaration; clicking executes them directly |
+| `settings` | Plugin details | Types `bool` / `int` / `float` / `str`, with range, length, and enum constraints; use `ctx.configuration` |
+| `views` | Inside the plugin's card on the Plugins page | Supply a QWidget factory with `ctx.ui.register_view(view_id, factory)` |
+| `shortcuts` | Plugin group in **Settings → Shortcuts** | Declare default keys and focus context for commands; requires `ui:shortcuts` |
+
+Command IDs must start with the complete plugin ID followed by `.`, such as `com.example.mod-summary.summary`. A plugin can update its own handlers but cannot overwrite another plugin's commands. Menus, Tools buttons, and shortcuts must reference commands declared by the same plugin. Every declared command must be registered before `activate()` returns; a missing handler causes activation to fail and all contributions to be rolled back.
+
+`context` defaults to `window` and can also be `overview` (category overview list) or `preset` (preset list). Shortcuts use the host's conflict checks, text-editing priority, input-method composition rules, and dialog rules. System-reserved keys cannot be bound. Plugin shortcuts work only inside the application. A default key never overwrites an existing binding; the new command's unbound state is saved, and restarting or reloading does not change assigned keys. Users can reassign shortcuts or restore defaults in Settings. Changes take effect immediately. Disabling, reloading, fault isolation, and uninstalling remove active bindings while preserving user preferences for the next activation.
+
+---
+
