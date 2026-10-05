@@ -169,3 +169,5 @@ The [JSON Schema](../../plugin.schema.json) provides editor completion. The host
 
 ---
 
+## 4. Lifecycle
+
