@@ -171,3 +171,56 @@ The [JSON Schema](../../plugin.schema.json) provides editor completion. The host
 
 ## 4. Lifecycle
 
+### 4.1 Discovery and activation
+
+Discovery parses manifests without executing plugin code. Enabled, trusted plugins whose version and dependency requirements are satisfied enter `ready`. Their commands, menus, shortcuts, and settings can appear immediately.
+
+| Activation condition | Trigger |
+| --- | --- |
+| `onCommand:<command ID>` | First execution of the plugin's command; inferred from `contributes.commands` |
+| `onView:<view ID>` | First opening of the corresponding plugin details view; inferred from `contributes.views` |
+| `onEvent:<event name>` | Receipt of a host event from §7.3; the host activates the plugin and then delivers that event |
+| `onStartup` | Immediate activation after startup or rescanning; used for plugins needing persistent event subscriptions or dynamic navigation pages |
+
+For example, `"activationEvents": ["onEvent:game_changed"]` starts a plugin on the first game switch. Declared commands and views do not need to be repeated in the array. A service used only by other plugins can omit activation events and be started through its consumers' dependencies.
+
+```python
+from src.plugin_sdk import PluginBase, PluginContext
+
+
+class Plugin(PluginBase):
+    """Describe the functionality provided by this plugin."""
+
+    def activate(self, ctx: PluginContext) -> None:
+        """Keep the context and register commands, events, or UI factories."""
+        ...
+
+    def deactivate(self) -> None:
+        """Stop plugin-owned tasks; the host cleans up registered resources."""
+        ...
+```
+
+- An exception triggers **automatic fault isolation**: the host logs the error and disables the plugin while continuing to run.
+- Exceptions from command and event handlers trigger the same isolation.
+- Runtime states include `discovered` (awaiting trust), `ready`, `activating`, `active`, `blocked` (dependencies unavailable), `disabled`, and `error`. The **Permissions and source** section in plugin details shows dependencies, activation reasons, and loading and activation times.
+- Rescanning fully deactivates old instances before discovering plugins and registering contributions again. Reloading or updating a dependency first deactivates its transitive consumers, then recreates previously active consumers. Unrelated plugins continue running.
+- Disabling, reloading, or uninstalling cancels unfinished operations and removes task callbacks. The host safely commits completed file operations. `deactivate()` must still release the plugin's own timers, threads, and other resources.
+- After deactivation, business writes through the old `ctx` return failed tasks. Queries, storage, configuration, commands, events, UI, and background-task entry points reject further use. Use `deactivate()` to release your own resources; you can no longer query or modify the host at this point. Metadata and logging remain available for diagnostics.
+
+### 4.2 Plugin dependencies and public APIs
+
+A consumer declares `"dependencies": {"com.example.provider": "^1.2.0"}` in its manifest. The host validates the entire dependency graph before activating dependencies ahead of consumers. Missing, disabled, untrusted, incompatible, or cyclic dependencies prevent the consumer from being imported and show a specific reason. Dependency failures stop consumers but preserve their enabled-state preference; consumers can be used again after the dependency recovers.
+
+| Constraint | Accepted versions |
+| --- | --- |
+| `1.2.3` | The same semantic version, ignoring `+build` metadata |
+| `*` | Any stable release |
+| `^1.2.3` | `>=1.2.3 <2.0.0` |
+| `^0.2.3` / `^0.0.3` | Up to, but excluding, the next minor / patch version, respectively |
+| `~1.2.3` | `>=1.2.3 <1.3.0` |
+| `>=1.2.0 <2.0.0` | All space-separated comparisons must be satisfied |
+
+The operators `= > >= < <=` are supported. `||`, wildcard version components, and hyphen ranges are not supported. A prerelease is accepted only when the range explicitly includes a prerelease boundary with the same three-part version, such as `>=1.1.0-beta.1 <1.1.0`.
+
+A service plugin can return its API object from `activate()`. Consumers retrieve it in their own `activate()` with `ctx.extensions.get_exports("com.example.provider")`. Requesting an undeclared dependency raises `PluginError`. An exported object is valid only for the current activation cycle; consumers are recreated when the dependency reloads. Do not save API objects in persistent storage. The two plugins agree on interface signatures, and the version range expresses that agreement. Cross-plugin commands can also be composed with `ctx.commands.execute()`.
+
