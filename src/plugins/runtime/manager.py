@@ -165,3 +165,302 @@ class PluginManager:
                     continue
                 manifests[mf.id] = mf
         return manifests
+
+    def _make_record(self, mf: Manifest) -> PluginRecord:
+        """合并清单与已保存状态；权限增加或授权记录无效时撤销信任状态。"""
+        saved = self._persisted.get(mf.id, {})
+        requested = frozenset(mf.permissions) & KNOWN_PERMISSIONS
+        raw_grants = saved.get("granted_permissions", [])
+        valid_grants = isinstance(raw_grants, list) and all(isinstance(p, str) for p in raw_grants)
+        grants = frozenset(raw_grants if valid_grants else ()) & KNOWN_PERMISSIONS
+        return PluginRecord(
+            manifest=mf,
+            enabled=bool(saved.get("enabled", True)),
+            trusted=saved.get("trusted") is True and valid_grants and requested <= grants,
+            granted_permissions=grants,
+            translations=PluginLocalizer(mf),
+        )
+
+    def discover(self) -> list[PluginRecord]:
+        """重扫前完整停用旧实例，避免遗留订阅、命令和页面。"""
+        manifests = self._scan_manifests()
+        self._stop_all()
+        self._records = {pid: self._make_record(mf) for pid, mf in manifests.items()}
+        logger.info("发现 %d 个插件: %s", len(self._records), list(self._records))
+        return list(self._records.values())
+
+    # 加载 / 激活
+
+    def _build_context(self, mf: Manifest, *, translations=None) -> PluginContext:
+        """根据已知权限创建插件上下文，注入独立数据目录和宿主扩展服务。"""
+        meta = PluginMeta(
+            id=mf.id,
+            name=mf.name,
+            version=mf.version,
+            api_version=mf.api_version,
+            author=mf.author,
+            description=mf.description,
+            homepage=mf.homepage,
+            permissions=tuple(p for p in mf.permissions if p in KNOWN_PERMISSIONS),
+        )
+        data_dir = get_data_dir() / "plugins_data" / mf.id
+        record = self._records.get(mf.id)
+        if record is not None:
+            self._ensure_configuration(record)
+        return PluginContext(
+            meta=meta,
+            app_version=APP_VERSION,
+            api_version=API_VERSION,
+            plugin_dir=mf.directory,
+            data_dir=data_dir,
+            mod_manager=self._m,
+            event_bus=self._bus,
+            command_table=self._commands,
+            view_registry=self._views,
+            ui_host=self._ui_host,
+            operations=self._operations,
+            translations=translations,
+            extension_host=self,
+            storage=record.storage if record is not None else None,
+            configuration=record.configuration if record is not None else None,
+            task_runner=self._task_runner,
+        )
+
+    def _ensure_configuration(self, rec: PluginRecord) -> None:
+        """创建共享的存储和设置门面，待命界面与激活上下文使用同一实例。"""
+        if rec.storage is None:
+            rec.storage = PluginStorage(
+                get_data_dir() / "plugins_data" / rec.id, granted=frozenset(rec.manifest.permissions)
+            )
+        if rec.configuration is None:
+
+            def on_error(exc) -> None:
+                """仅将当前记录拥有的设置回调异常送入插件故障处理。"""
+                if self._records.get(rec.id) is rec:
+                    self._on_plugin_error(rec.id, "configuration", exc)
+
+            rec.configuration = ConfigurationFacade(
+                rec.storage, rec.manifest.contributes.get("settings", []), error_sink=on_error
+            )
+
+    def get_configuration(self, plugin_id: str) -> ConfigurationFacade:
+        """取得可用插件的设置，无需导入代码；不可用记录不能写入。"""
+        rec = self._records.get(plugin_id)
+        if rec is None or not self._prepare(rec):
+            raise PluginError(tr("插件设置暂不可用：{plugin_id}", plugin_id=plugin_id))
+        self._ensure_configuration(rec)
+        assert rec.configuration is not None
+        return rec.configuration
+
+    @staticmethod
+    def _compatibility_error(mf: Manifest) -> str:
+        """在导入代码前检查宿主应用和 API 版本，返回可展示的失败说明。"""
+        try:
+            ensure_compatible(mf)
+        except ManifestError as exc:
+            return str(exc)
+        return ""
+
+    def _prepare(self, rec: PluginRecord) -> bool:
+        """验证依赖并预登记声明式贡献，此过程不导入任何插件代码。"""
+        if self._shutdown or rec.id in self._tearing_down:
+            return False
+        if not rec.enabled or not rec.trusted:
+            rec.state = PluginState.DISCOVERED if rec.enabled else PluginState.DISABLED
+            return False
+        if rec.state in {PluginState.READY, PluginState.ACTIVE, PluginState.ACTIVATING}:
+            return True
+        if rec.state is PluginState.ERROR:
+            return False
+        error = self._compatibility_error(rec.manifest)
+        if error:
+            rec.error, rec.state = error, PluginState.ERROR
+            return False
+        try:
+            order = dependency_order(rec.id, self._records)
+            for plugin_id in order[:-1]:
+                dependency = self._records[plugin_id]
+                error = self._compatibility_error(dependency.manifest)
+                if error or dependency.state is PluginState.ERROR:
+                    raise DependencyError(
+                        tr("依赖插件 {plugin_id} 不可用：{error}", plugin_id=plugin_id, error=error or dependency.error)
+                    )
+        except DependencyError as exc:
+            rec.error, rec.state = str(exc), PluginState.BLOCKED
+            return False
+        try:
+            for declaration in rec.manifest.contributes.get("commands", []):
+                self._commands.declare(rec.id, declaration["id"])
+            self._contrib.add(rec.manifest)
+            if self._shortcut_host is not None:
+                self._shortcut_host.register(rec.manifest, self._commands, self.translate)
+            rec.state, rec.error = PluginState.READY, ""
+            return True
+        except Exception as exc:
+            self._on_plugin_error(rec.id, "contributions", exc)
+            return False
+
+    def _prepare_all(self) -> None:
+        """重新评估依赖受阻或尚未登记的插件，使新满足的贡献可立即使用。"""
+        for rec in list(self._records.values()):
+            self._prepare(rec)
+
+    def _load(self, rec: PluginRecord) -> bool:
+        """导入 entry 模块并实例化 Plugin（不激活）。"""
+        mf = rec.manifest
+        started = perf_counter()
+        # 加载前扫描语法树，拒绝宿主内部导入、未授权的受限模块和动态执行调用。
+        scan = scan_plugin(mf.directory, mf.permissions)
+        if not scan.ok:
+            rec.error = tr("安全扫描未通过: {details}", details=scan.summary())
+            logger.error("插件 '%s' 安全扫描拦截：%s", mf.id, scan.summary())
+            self._stop_tree(rec.id, PluginState.ERROR)
+            return False
+        if scan.gated_ok:
+            logger.info("插件 '%s' 已授权危险模块: %s", mf.id, scan.gated_ok)
+
+        try:
+            rec.loader = PluginModuleLoader(mf)
+            module = rec.loader.load()
+
+            plugin_cls = getattr(module, "Plugin", None)
+            if plugin_cls is None:
+                raise ImportError(tr("entry 模块缺少 'Plugin' 类"))
+            if not (isinstance(plugin_cls, type) and issubclass(plugin_cls, PluginBase)):
+                raise TypeError(tr("'Plugin' 未继承 src.plugin_sdk.PluginBase"))
+
+            rec.instance = plugin_cls()
+            rec.context = self._build_context(mf, translations=rec.translations)
+            rec.state = PluginState.LOADED
+            rec.error = ""
+            return True
+        except Exception as e:
+            rec.state = PluginState.ERROR
+            rec.error = tr("加载失败: {error}", error=e)
+            logger.exception("加载插件 '%s' 失败", mf.id)
+            self._stop_tree(rec.id, PluginState.ERROR)
+            return False
+        finally:
+            rec.load_duration_ms = (perf_counter() - started) * 1000
+
+    def _activate(self, rec: PluginRecord, reason: str = "manual") -> bool:
+        """加载并激活插件，登记贡献和快捷键；失败时清理资源并进入错误状态。"""
+        if self._shutdown or rec.id in self._tearing_down:
+            return False
+        if rec.state is PluginState.ACTIVE:
+            return True
+        if rec.state is PluginState.ACTIVATING:
+            raise PluginError(tr("插件激活发生重入：{plugin_id}", plugin_id=rec.id))
+        if not self._prepare(rec):
+            return False
+        for plugin_id in rec.manifest.dependencies:
+            if not self._activate(self._records[plugin_id], "dependency:" + rec.id):
+                rec.error = tr("依赖插件激活失败：{plugin_id}", plugin_id=plugin_id)
+                self._teardown(rec, state=PluginState.BLOCKED)
+                return False
+        rec.activation_reason = reason
+        if rec.instance is None or rec.context is None:
+            if not self._load(rec):
+                return False
+        assert rec.instance is not None and rec.context is not None
+        rec.state = PluginState.ACTIVATING
+        context = rec.context
+        started = perf_counter()
+        try:
+            exports = rec.instance.activate(context)
+            if (
+                self._records.get(rec.id) is not rec
+                or rec.context is not context
+                or rec.state is not PluginState.ACTIVATING
+            ):
+                return False
+            for declaration in rec.manifest.contributes.get("commands", []):
+                if not self._commands.has_handler(declaration["id"]):
+                    raise ValueError(tr("激活后未注册命令：{command_id}", command_id=declaration["id"]))
+            rec.exports = exports
+            rec.state = PluginState.ACTIVE
+            rec.error = ""
+            logger.info("插件已激活: %s v%s", rec.manifest.name, rec.manifest.version)
+            return True
+        except Exception as e:
+            if (
+                self._records.get(rec.id) is not rec
+                or rec.context is not context
+                or rec.state is not PluginState.ACTIVATING
+            ):
+                return False
+            rec.error = tr("激活失败: {error}", error=e)
+            logger.exception("激活插件 '%s' 失败", rec.id)
+            self._stop_tree(rec.id, PluginState.ERROR)
+            return False
+        finally:
+            rec.activation_duration_ms = (perf_counter() - started) * 1000
+
+    def _teardown(self, rec: PluginRecord, *, state: PluginState) -> None:
+        """先断开全部宿主回调，再关闭上下文并执行允许重入的资源清理。"""
+        if rec.id in self._tearing_down:
+            return
+        self._tearing_down.add(rec.id)
+        self._bus.unsubscribe_plugin(rec.id)
+        self._commands.unregister_plugin(rec.id)
+        self._views.unregister_plugin(rec.id)
+        if self._task_runner is not None:
+            self._task_runner.cancel_owner(rec.id)
+        if self._operations is not None and rec.context is not None:
+            try:
+                self._operations.cancel_owner(rec.id)
+            except Exception:
+                logger.exception("取消插件 '%s' 的操作失败", rec.id)
+        if self._shortcut_host is not None:
+            self._shortcut_host.unregister(rec.id)
+        if rec.context is not None:
+            rec.context._dispose()
+        if rec.configuration is not None:
+            rec.configuration._close()
+            rec.configuration = None
+        if rec.storage is not None:
+            rec.storage._close()
+            rec.storage = None
+        if rec.instance is not None:
+            try:
+                rec.instance.deactivate()
+            except Exception:
+                logger.exception("插件 '%s' deactivate 抛错", rec.id)
+        self._contrib.remove(rec.id)
+        # 移除插件注册的页面并关闭其对话框。
+        if self._ui_host is not None:
+            try:
+                self._ui_host.cleanup_plugin(rec.id)
+            except Exception:
+                logger.exception("清理插件 '%s' 的 UI 失败", rec.id)
+        rec.state = state
+        rec.instance = None
+        rec.context = None
+        rec.exports = None
+        if rec.loader is not None:
+            rec.loader.unload()
+            rec.loader = None
+        self._tearing_down.discard(rec.id)
+
+    def _stop_tree(self, plugin_id: str, state: PluginState) -> set[str]:
+        """先停止全部传递消费者，再停止目标，返回之前活动的插件身份。"""
+        active = set()
+        for current in dependent_order(plugin_id, self._records):
+            rec = self._records.get(current)
+            if rec is None:
+                continue
+            if rec.state is PluginState.ACTIVE:
+                active.add(current)
+            target_state = state
+            if current != plugin_id:
+                target_state = (
+                    PluginState.BLOCKED
+                    if rec.enabled and rec.trusted
+                    else PluginState.DISCOVERED
+                    if rec.enabled
+                    else PluginState.DISABLED
+                )
+                if target_state is PluginState.BLOCKED:
+                    rec.error = tr("依赖插件暂不可用：{plugin_id}", plugin_id=plugin_id)
+            self._teardown(rec, state=target_state)
+        return active
