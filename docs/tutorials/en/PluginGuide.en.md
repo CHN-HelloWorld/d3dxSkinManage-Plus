@@ -224,3 +224,23 @@ The operators `= > >= < <=` are supported. `||`, wildcard version components, an
 
 A service plugin can return its API object from `activate()`. Consumers retrieve it in their own `activate()` with `ctx.extensions.get_exports("com.example.provider")`. Requesting an undeclared dependency raises `PluginError`. An exported object is valid only for the current activation cycle; consumers are recreated when the dependency reloads. Do not save API objects in persistent storage. The two plugins agree on interface signatures, and the version range expresses that agreement. Cross-plugin commands can also be composed with `ctx.commands.execute()`.
 
+### 4.3 Resource scopes
+
+`ctx.events.on()`, `ctx.commands.register()`, `ctx.ui.register_view()`, and `ctx.ui.register_page()` return a `Disposable`, with ownership also registered automatically by the host. Call the handle's `dispose()` to unregister early; repeated disposal has no side effects. After replacing a command, its old handle cannot remove the new handler.
+
+Manage your own resources with `ctx.subscriptions.add(cleanup_callback)` or `add(an_object_implementing_dispose)`. The collection disposes resources in reverse order. If one cleanup fails, it logs the failure and continues with the others. `DisposableStore` supports nesting and `with`, making it suitable for subscriptions scoped to a page or operation. Background-task and configuration subscriptions also return handles that can be added to the collection.
+
+```python
+from src.plugin_sdk import DisposableStore
+from src.plugin_sdk.events import GAME_CHANGED
+
+
+def observe_game(ctx, callback):
+    """Create an independently disposable scope, with plugin cleanup as a fallback."""
+    scope = ctx.subscriptions.add(DisposableStore())
+    scope.add(ctx.events.on(GAME_CHANGED, callback))
+    return scope
+```
+
+---
+
