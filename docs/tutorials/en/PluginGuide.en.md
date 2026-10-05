@@ -299,3 +299,40 @@ External plugins still execute Python inside the application process. Static sca
 
 ---
 
+## 7. PluginContext API
+
+This reference shows return types after `->`; ellipses stand for call arguments. The index is not an executable script. See section 1 and the subsections below for working examples.
+
+```python
+ctx.logger.info(...)                 # Log with a [plugin:id] prefix
+ctx.storage.get/set/delete/all       # Isolated key-value storage (data/plugins_data/<id>/)
+ctx.storage.dir                      # Plugin-private data folder
+ctx.configuration.get/set/reset     # Declared configuration; see §11.3
+ctx.configuration.on_changed(callback)  # ConfigurationChange -> Disposable
+ctx.tasks.run(worker, title="")      # BackgroundTask; see §9
+ctx.subscriptions.add(resource)      # Manage a cleanup function or disposable object
+ctx.extensions.get_exports(id)       # Read the public API of a declared dependency
+ctx.i18n.language                    # Current host language code
+ctx.i18n.t("{count} items", count=2)  # Plugin-local translation
+
+ctx.events.on(EVENT, handler)        # Subscribe to an event -> Disposable
+ctx.commands.register(id, handler)   # Register a command -> Disposable
+ctx.commands.execute(id, *a, **k)    # Call any command, including another plugin's
+
+# UI extensions: build PySide6 widgets; the host manages theming, parenting, and deactivation cleanup.
+ctx.ui.register_view(view_id, factory)            # Embedded card widget (manifest views)
+ctx.ui.register_page(page_id, title, factory, icon="")  # Add a top-level navigation page
+ctx.ui.show_dialog(widget, title="", modal=True) -> QDialog   # Show a dialog; the returned QDialog supports close()
+ctx.ui.show_popup(widget, title="")               # Nonmodal dialog
+ctx.ui.notify(message, level="info")              # Toast notification (info/success/warning/error)
+
+ctx.mods.get_mods(node_id=None) -> list[ModInfo]
+ctx.mods.get_mod(mod_id) -> ModInfo | None
+ctx.mods.search(query) -> [ModInfo]
+ctx.mods.set_enabled(mod_id, enabled) -> OperationTask  # Requires mods:write
+ctx.mods.toggle_mod(mod_id) -> OperationTask            # Requires mods:write
+ctx.mods.disable_all(node_id=None) -> OperationTask      # Requires mods:write
+ctx.mods.delete_mod(mod_id) -> OperationTask             # Requires mods:manage
+ctx.game.current_game_id() / get_characters() / get_character(id)
+```
+
