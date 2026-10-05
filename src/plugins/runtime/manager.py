@@ -464,3 +464,183 @@ class PluginManager:
                     rec.error = tr("依赖插件暂不可用：{plugin_id}", plugin_id=plugin_id)
             self._teardown(rec, state=target_state)
         return active
+
+    def _stop_all(self) -> None:
+        """按反向依赖顺序停止全部插件，包括仅登记了声明的待命插件。"""
+        stopped = set()
+        for plugin_id in list(self._records):
+            for current in dependent_order(plugin_id, self._records):
+                if current not in stopped:
+                    self._teardown(self._records[current], state=PluginState.DISCOVERED)
+                    stopped.add(current)
+
+    # 启动
+
+    def activate_enabled(self) -> int:
+        """登记可用插件并触发启动条件，返回当前活动插件数。"""
+        self._prepare_all()
+        for rec in self._records.values():
+            if not rec.enabled:
+                rec.state = PluginState.DISABLED
+                continue
+            if not rec.trusted:
+                logger.info("插件 '%s' 未信任，跳过激活（待用户确认）", rec.id)
+                continue
+            if "onStartup" in rec.manifest.activation_events and rec.state is PluginState.READY:
+                self._activate(rec, "onStartup")
+        ok = sum(rec.state is PluginState.ACTIVE for rec in self._records.values())
+        logger.info("插件启动激活: %d 个", ok)
+        return ok
+
+    def load_all(self) -> int:
+        """发现 + 激活，一步到位（宿主启动入口）。"""
+        self.discover()
+        n = self.activate_enabled()
+        self._notify_changed()
+        return n
+
+    # 用户操作（供管理 UI）
+
+    def enable(self, plugin_id: str) -> bool:
+        """持久化启用意愿，插件已获信任时尝试激活，并通知管理界面刷新。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        rec.enabled = True
+        if rec.state is PluginState.ERROR:
+            rec.state, rec.error = PluginState.DISCOVERED, ""
+        self._persist_record(rec)
+        self.activate_enabled()
+        ok = not rec.trusted or rec.state in {PluginState.READY, PluginState.ACTIVE}
+        self._notify_changed()
+        return ok
+
+    def disable(self, plugin_id: str) -> bool:
+        """保存停用意愿，释放插件运行资源并通知状态变更。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        rec.enabled = False
+        self._persist_record(rec)
+        self._stop_tree(plugin_id, PluginState.DISABLED)
+        self._notify_changed()
+        return True
+
+    def trust(self, plugin_id: str) -> bool:
+        """用户信任插件（首次启用确认弹窗调用）。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        rec.trusted = True
+        rec.granted_permissions = frozenset(rec.manifest.permissions) & KNOWN_PERMISSIONS
+        self._persist_record(rec)
+        return True
+
+    def reload(self, plugin_id: str) -> bool:
+        """释放现有实例后重读清单，仅对仍存在且启用并受信任的插件重新激活。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        active = self._stop_tree(plugin_id, PluginState.DISCOVERED)
+        mf = self._scan_manifests().get(plugin_id)
+        if mf is None:
+            self._records.pop(plugin_id, None)
+            self._prepare_all()
+            self._notify_changed()
+            return False
+        rec = self._make_record(mf)
+        self._records[plugin_id] = rec
+        self.activate_enabled()
+        for current in reversed(dependent_order(plugin_id, self._records)):
+            if current in active:
+                self._activate(self._records[current], "reload:" + plugin_id)
+        ok = not rec.enabled or not rec.trusted or rec.state in {PluginState.READY, PluginState.ACTIVE}
+        self._notify_changed()
+        return ok
+
+    def install_archive(self, archive_path) -> InstallResult:
+        """从 ZIP、7z、RAR 安装/更新插件并登记。返回 InstallResult；失败抛 InstallError。
+
+        首次安装或新增权限等待信任；已启用且授权仍满足的更新自动激活。
+        """
+        from src.plugins.runtime.installer import install_from_archive
+
+        active = set()
+
+        def before_replace(plugin_id: str) -> None:
+            """验证包之后、替换源码之前停止旧实例及其全部消费者。"""
+            active.update(self._stop_tree(plugin_id, PluginState.DISCOVERED))
+
+        try:
+            result = install_from_archive(archive_path, before_replace=before_replace)
+        except Exception:
+            self._prepare_all()
+            for plugin_id in active:
+                self._activate(self._records[plugin_id], "install-rollback")
+            self._notify_changed()
+            raise
+        rec = self._make_record(parse_manifest(result.directory))
+        self._records[result.plugin_id] = rec
+        self.activate_enabled()
+        for current in reversed(dependent_order(rec.id, self._records)):
+            if current in active:
+                self._activate(self._records[current], "update:" + rec.id)
+        self._notify_changed()
+        return result
+
+    def uninstall(self, plugin_id: str) -> bool:
+        """停用并删除插件目录。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        self._stop_tree(plugin_id, PluginState.DISABLED)
+        directory = rec.manifest.directory.resolve()
+        try:
+            if directory.parent != get_plugins_dir().resolve() or rec.manifest.directory.is_symlink():
+                raise ValueError(tr("插件目录越出安装根目录"))
+            if directory.exists():
+                shutil.rmtree(directory)
+        except (OSError, ValueError) as exc:
+            rec.state, rec.error = PluginState.ERROR, tr("卸载插件失败：{error}", error=exc)
+            self._notify_changed()
+            return False
+        self._records.pop(plugin_id, None)
+        self._persisted.pop(plugin_id, None)
+        self._save_state()
+        self._prepare_all()
+        self._notify_changed()
+        return True
+
+    def shutdown(self) -> None:
+        """宿主退出时停用全部插件。"""
+        if self._shutdown:
+            return
+        self._shutdown = True
+        self._stop_all()
+        if self._task_runner is not None:
+            self._task_runner.shutdown()
+        remove_listener = getattr(self._m, "remove_event_listener", None)
+        if remove_listener is not None:
+            remove_listener(self.on_host_event)
+        self._change_listeners.clear()
+
+    # 事件派发 / 熔断
+
+    def on_host_event(self, event: str, **payload) -> None:
+        """ModManager 观察者回调入口：转发到事件总线。"""
+        self.emit(event, **payload)
+
+    def emit(self, event: str, **payload) -> None:
+        """供宿主其它子系统（如 preset 信号桥接）直接发事件。"""
+        if self._shutdown:
+            return
+        if get_ident() != self._thread_id:
+            if self._post_event is not None:
+                self._post_event(partial(self.emit, event, **deepcopy(payload)))
+            else:
+                logger.warning("插件事件缺少主线程投递入口，已跳过：%s", event)
+            return
+        for rec in list(self._records.values()):
+            if rec.state is PluginState.READY and "onEvent:" + event in rec.manifest.activation_events:
+                self.activate(rec.id, "onEvent:" + event)
+        self._bus.emit(event, **payload)
