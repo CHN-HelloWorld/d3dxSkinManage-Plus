@@ -412,3 +412,49 @@ Import constants from `src.plugin_sdk.events` and subscribe with `ctx.events.on(
 
 Mod data-change events are emitted after their corresponding business operations commit. Editing tags can also change Mod metadata and emit both event types; do not count different notifications as repeated operations. `VARIANT_RESTORED` means variant restoration has run, possibly before the entire preset commits. For restoration at preset scope, `mod_id` can be empty; observe `PRESET_APPLIED` for overall completion. `VARIANT_STATE_CHANGED` signals that you should query the Mod's variant snapshot again. `VARIANT_REFERENCES_MISSING` reports missing variant references when a combination commits: `mod_ids` contains persistent Mod IDs, and `names` is for display. Rebuilding the index invalidates snapshots only; continue resolving persistent references through `mod_id`.
 
+### 7.4 Combination presets and named variants
+
+```python
+ctx.presets.get_presets() -> list[PresetInfo]  # Current game
+ctx.presets.get_preset(preset_id) -> PresetInfo | None
+ctx.presets.get_current() -> PresetInfo | None
+ctx.presets.create(name, description="") -> OperationTask
+ctx.presets.duplicate(preset_id, name=None) -> OperationTask
+ctx.presets.rename(preset_id, name) -> OperationTask
+ctx.presets.update_description(preset_id, description) -> OperationTask
+ctx.presets.apply(preset_id) -> OperationTask
+ctx.presets.delete(preset_id) -> OperationTask  # mods:manage; rejects default/current presets
+
+ctx.variants.get_variants(mod_id) -> list[VariantInfo]
+ctx.variants.get_state(mod_id) -> VariantStateInfo
+ctx.variants.save(mod_id, name, use_defaults=False) -> OperationTask
+ctx.variants.update(mod_id, variant_id, use_defaults=False) -> OperationTask
+ctx.variants.apply(mod_id, variant_id=None) -> OperationTask
+ctx.variants.rename(mod_id, variant_id, name) -> OperationTask
+ctx.variants.duplicate(mod_id, variant_id, name=None) -> OperationTask
+ctx.variants.delete(mod_id, variant_id) -> OperationTask  # mods:manage
+```
+
+The `description` argument to `create()`, the `name` argument when duplicating, and `use_defaults` are keyword-only. `create()` creates an empty combination, while `duplicate()` copies an existing combination and its variant references. Variant `save()` saves the current state; `update()` replaces its contents while keeping its identity and name. `use_defaults=True` explicitly uses default values. `apply(mod_id, None)` clears the named variant selection and restores default configuration; passing a named variant ID applies that variant. Variant capabilities remain subject to host conditions, including whether the Mod supports persistent variables and whether a transaction is active.
+
+`PresetInfo` contains `preset_id, game_id, name, description, is_default, enabled_mod_ids, node_mods, mod_variants, unresolved_mod_ids`. Both mappings are read-only, and their internal lists are copied as tuples. `unresolved_mod_ids` returns saved Mod identities that the current index cannot resolve; `enabled_mod_ids` and `node_mods` represent resolved members. Query again when the index recovers, and do not treat an unresolved reference as proof of permanent deletion. `VariantInfo` contains `variant_id, mod_id, game_id, name, variables, created_at, updated_at, source_content_hash, declaration_fingerprint`. `variables` is a tuple of `VariantVariableInfo` objects with fields `ini_path, variable, namespace_mode, value, namespace`. INI paths identify variant variables relatively; they are not an entry point for accessing host files.
+
+`VariantStateInfo` contains `mod_id, game_id, enabled, selected_variant_id, status, can_save, reason, captured_at, variable_count, confirmed_count, source_changed`. Query again after a state event. Do not modify internal containers, INI files, or databases. Import the snapshot types from `src.plugin_sdk.presets` and `src.plugin_sdk.variants`, respectively.
+
+```python
+from src.plugin_sdk import OperationResult
+
+
+def saved(result: OperationResult) -> None:
+    """Query the created preset using the stable ID returned on completion."""
+    if result.ok:
+        preset = ctx.presets.get_preset(result.preset_id)
+        if preset is not None:
+            ctx.logger.info("New preset: %s", preset.name)
+    else:
+        ctx.logger.warning("Preset was not created: %s", result.error)
+
+
+ctx.presets.create("Plugin-created combination", description="Empty combination").on_finished(saved)
+```
+
