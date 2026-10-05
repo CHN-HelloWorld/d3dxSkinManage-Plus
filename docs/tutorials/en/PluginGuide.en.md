@@ -148,3 +148,24 @@ To build on a practical example, copy its folder and change the `id`, name, and 
 
 ---
 
+## 3. plugin.json fields
+
+| Field | Required | Description |
+|------|------|------|
+| `id` | ✓ | Globally unique, reverse-domain style, 2–64 characters; only letters, digits, `.`, `_`, and `-` |
+| `name` `version` | ✓ | Display name / semantic version |
+| `apiVersion` | ✓ | Required SDK version, currently `"2.0"`; the major version must match and the required minor version must not exceed the host's |
+| `entry` | ✓ | Relative `.py` path inside the plugin folder, exporting the `Plugin` class; absolute paths, `..`, and links outside the folder are prohibited |
+| `minAppVersion` | | Minimum application version, such as `"0.1.0"`; checked before importing code, with loading rejected if unmet |
+| `author` `description` `homepage` | | Metadata |
+| `permissions` | | See §6 |
+| `contributes` | | See §5 |
+| `activationEvents` | | Explicit activation conditions, defaulting to an empty array; command and view conditions are inferred automatically; see §4 |
+| `dependencies` | | Mapping from plugin IDs to version ranges; see §4.2; dependencies are not installed or authorized automatically |
+| `files` | | Relative files or folders to package; explicit declarations are required by the packaging tool; no wildcards |
+| `$schema` | | Editor validation location; repository plugins can use `../../docs/plugin.schema.json` |
+
+The [JSON Schema](../../plugin.schema.json) provides editor completion. The host also validates command namespaces, duplicate declarations, menu and shortcut references, setting defaults, entry paths, and dependency ranges. Unknown fields, unknown permissions, and invalid declarations cause errors instead of being silently ignored.
+
+---
+
