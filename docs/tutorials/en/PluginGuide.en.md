@@ -274,3 +274,28 @@ Command IDs must start with the complete plugin ID followed by `.`, such as `com
 
 ---
 
+## 6. Permissions (permissions)
+
+Declare permissions in `plugin.json`. Users confirm trust and requested permissions when first enabling a plugin. The host saves confirmed permissions; new permissions discovered during an update or rescan require confirmation again. Unknown permissions fail manifest validation. An SDK method raises `PermissionDenied` if its required permission is missing.
+
+| Permission | Capability |
+|------|----------|
+| `mods:read` | Query games, Mods, categories, presets, and variants; checked before each query |
+| `mods:write` | Enable or disable Mods, and create, apply, copy, or modify presets and variants |
+| `mods:manage` | `ctx.mods.delete_mod`, `ctx.presets.delete`, and `ctx.variants.delete` |
+| `storage` | Access private key-value storage, the data folder, and declared configuration; checked at runtime |
+| `ui:tools-page` / `ui:menus` / `ui:settings` | Declare the corresponding contributions; checked in the manifest; settings also require `storage` |
+| `ui:views` | Views, dynamic pages, and dialogs; checked in both manifests and SDK methods |
+| `ui:shortcuts` | Register plugin shortcuts with the host's settings and dispatcher; checked during manifest parsing and activation |
+| `network` | Import `socket/httpx/requests/urllib/...` |
+| `process` | Import `subprocess/multiprocessing` |
+| `native` | Import `ctypes/cffi/winreg` |
+| `fs:read` / `fs:write` | File reading and writing by convention |
+| `background` | Use `ctx.tasks.run()`; does not make other SDK methods thread-safe |
+
+The **security scan** checks the AST before loading. It prohibits importing host internals, requires the corresponding permissions for the sensitive modules listed above, and blocks `eval/exec/compile/__import__/os.system/os.popen`.
+
+External plugins still execute Python inside the application process. Static scanning and SDK permission checks provide validation and authorization, not a complete sandbox against malicious code. Install plugins only from trusted sources. See section 9 for background execution and cleanup rules.
+
+---
+
