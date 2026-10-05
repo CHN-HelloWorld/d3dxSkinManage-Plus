@@ -134,3 +134,17 @@ Use the following coding conventions when writing plugins. The three bundled exa
 
 To build on a practical example, copy its folder and change the `id`, name, and all contribution IDs in `plugin.json`. The three examples construct command or page IDs with `ctx.plugin_id` in code; you must still change the corresponding prefixes in their manifests. Reload after editing and follow section 12 to verify the result.
 
+## 2. Directory and loading contract
+
+- The only loading location is `plugins/` under the application root: the repository root when running from source or the folder containing the executable when running a distribution. A Nuitka one-file build uses the outer launcher's folder.
+- **Open plugins folder**, archive installation, rescanning, and reloading all use this location. The list does not invent missing plugins from source packages or saved enabled-state records.
+- All plugins, including bundled examples, follow the same trust, permission, and uninstall rules. Initial activation requires trust confirmation. Removing a folder and rescanning disables the plugin and removes its record.
+- If the application folder is not writable, the host uses its standard data-folder fallback. Use the actual location shown by **Open plugins folder**.
+- One plugin occupies one folder, which **must** contain `plugin.json`.
+- The manifest's `entry` points to a `.py` file that **must export a class named `Plugin`** inheriting from `src.plugin_sdk.PluginBase`.
+- When accessing host code, **import only** `src.plugin_sdk` and its submodules. The security scan blocks imports from internal modules such as `src.core` and `src.ui`. The Python standard library, third-party libraries already available in the host, and PySide6 widgets remain usable with the required permissions.
+- The host creates an isolated package namespace for each load, supporting relative imports such as `from .commands import show_summary`, nested packages, and package resources. Do not import a neighboring file with `import helper` or modify global `sys.path`.
+- Reloading reads current source and clears all plugin submodules and import finders. Even edits with unchanged file size and timestamps do not reuse stale bytecode. Reloading a plugin does not remove shared third-party dependencies.
+
+---
+
