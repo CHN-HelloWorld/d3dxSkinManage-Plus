@@ -336,3 +336,57 @@ ctx.mods.delete_mod(mod_id) -> OperationTask             # Requires mods:manage
 ctx.game.current_game_id() / get_characters() / get_character(id)
 ```
 
+### 7.1 Read-only views and identity
+
+`ModInfo` is an immutable snapshot containing `mod_id`, `name`, `author`, `enabled`, `node_id`, `game_id`, `rating`, and `tags`. Author, rating, and tags come from saved Mod metadata. `rating` is `G/P/R/X`, and `tags` is a tuple. Snapshots do not update automatically when the host changes; query again after receiving an event.
+
+`mod_id` is a persistent identity that you can save directly in plugin storage and look up later with `get_mod(mod_id)`. Rebuilding the index does not change this identity; after deletion, the query returns `None`. `get_mod()` can read across games, and `game_id` always identifies the Mod's actual owner game. `get_mods()`, `search()`, and character queries target the current game. Reading an object from another game does not authorize writes across games.
+
+`CharacterInfo` contains `id`, `name`, `name_en`, `parent_id`, `game_id`, and `node_type`. `parent_id` identifies the parent node; `node_type` is `category` or `character`. `get_mods(node_id)` returns Mods directly associated with that node without expanding the whole subtree.
+
+### 7.2 Operation tasks
+
+A write operation returns a task, not a success result. Read its state through `task.done` / `task.result`, or receive an `OperationResult` with `task.on_finished(callback)`. Registering a callback on an already completed task invokes it immediately, so do not assume the callback always waits until the next event-loop iteration.
+
+```python
+from src.plugin_sdk import OperationResult, OperationTask
+
+
+def enable_mod(self, mod_id: str) -> OperationTask:
+    """Submit an enable request and observe the actual result through a completion callback."""
+    task = self._ctx.mods.set_enabled(mod_id, True)
+    task.on_finished(self._enabled)
+    return task
+
+
+def _enabled(self, result: OperationResult) -> None:
+    """Distinguish successful operations from incomplete results."""
+    if result.ok:
+        self._ctx.logger.info("Completed %d items", len(result.succeeded_ids))
+    else:
+        self._ctx.logger.warning("Operation did not fully complete: %s", result.error)
+```
+
+`OperationResult` contains:
+
+| Field | Meaning |
+|------|------|
+| `game_id` | Game selected when the request was submitted |
+| `succeeded_ids` | Tuple of persistent Mod IDs that successfully reached the target state |
+| `failed_ids` | Tuple of failed IDs |
+| `cancelled_ids` | Tuple of cancelled, unfinished IDs |
+| `error` | Failure or cancellation reason, or a diagnostic from post-commit cleanup; empty on normal completion |
+| `preset_id` | Combination preset ID for the request; the new ID after successful creation or duplication, or an empty string when no preset is involved |
+| `variant_id` | Named variant ID for the request; the new ID after successful saving or duplication, or `None` for working state or when no variant is involved |
+| `ok` | `True` when there are no failures, cancellations, or errors; an empty batch can also succeed |
+
+Requests remain bound to the game selected at submission. A changed game, a target outside the current game, a missing deployment folder, or a conflicting host task is reported as a failure in the result. Do not count submitted calls as successes. Batch operations may succeed partially; check all three ID groups and `error`.
+
+A committed variant operation remains in `succeeded_ids` and returns its `variant_id` even if a subsequent list read fails. The read error appears in `error`, making `ok` false. Do not assume successful items were never executed or resubmit them solely because a diagnostic is present.
+
+`set_enabled(id, True/False)` specifies the target state and reports success immediately if the Mod is already in that state. `toggle_mod(id)` reads and reverses the current state when the task executes. `disable_all()` disables enabled Mods in the current game; passing `node_id` restricts it to that node's Mods. Disabling uses the host's variant capture, INI synchronization, deployment staging, deployment records, and preset handling. Only successful items are removed from the current preset. `delete_mod()` follows the application's permanent-deletion or Recycle Bin setting.
+
+Call `task.cancel()` to request stopping at a safe boundary. Mod operations and completed variant transactions may still commit and count as successful items. Cancelling a combination preset application before commit attempts a transaction rollback; after commit, cleanup continues. Always inspect the final `OperationResult`. Operations that change only preset metadata may have no affected Mod IDs; still check `ok` and `error`. When the plugin is disabled, the host removes completion callbacks that have not yet run.
+
+SDK reads and writes, events, commands, completion callbacks, and Qt widget access must run on the host's main thread. The host performs file I/O for archive deployment and batch disabling in the background. Do not poll `done` in a GUI callback, call `sleep`, or access SQLite yourself. Chain multistep operations through completion callbacks: for example, confirm that `disable_all()` succeeded before enabling a replacement Mod. The preset cycling example in section 10.3 demonstrates busy state, immediate completion callbacks, and cancellation on deactivation. Deletion does not guarantee that all file I/O runs in the background.
+
