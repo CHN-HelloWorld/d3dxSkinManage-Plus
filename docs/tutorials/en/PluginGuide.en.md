@@ -495,3 +495,20 @@ List the files or folders to release in `files`, including the entry point and i
 
 Open the archive and check that `plugin.json` and `entry.py` are at its root. Alternatively, it can contain one top-level plugin folder with the manifest inside. Do not add another enclosing release folder, include multiple plugins, or package only the entry file without its manifest. The installer accepts `.zip`, `.7z`, and `.rar`. ZIP is easy to create with system tools.
 
+### 8.2 Check installation and updates
+
+1. In an application copy used for verification, open **Plugins → Install plugin…** and select the archive.
+2. Find the installed plugin, confirm its name and version, turn it on, and read the initial trust and permission prompt.
+3. Follow section 12 to check commands, context menus, settings, and cleanup after deactivation. Using a copy outside the source environment helps reveal missing files and dependencies on your development setup.
+4. Install a new package with the same ID. Check that settings survive, old commands are removed, and the new version can be enabled again. Confirm authorization again if it requests additional permissions.
+
+The installer replaces the existing folder based on the plugin `id`, and the interface shows both version numbers. It does not block installation of the same version or an older version. Publishers should label versions clearly, and users should check the selected archive before installing. Updating replaces the plugin's code folder; extra files from the old folder are not merged into the new package.
+
+If extraction, manifest validation, host-version validation, or static source scanning fails, the old folder and active instance are kept. Only after validation succeeds does the installer stop the target plugin and its consumers and replace the files. If replacement fails, it attempts to restore the old folder and instances; if restoration also fails, it reports the backup location. Dynamic loading or activation errors after installation do not automatically restore the previous code package, so actual execution tests are still required before publishing.
+
+An enabled plugin whose authorization still satisfies the requirements resumes its previous active state or returns to ready after an update. A first installation or additional permissions require trust confirmation. Uninstalling preserves private data for the same ID so that it remains available after reinstallation. The manifest supplies setting defaults; invalid saved values fall back to those defaults with diagnostics logged.
+
+Bundled plugins and user-installed plugins follow the same loading rules. The application build script copies only the explicitly listed example files. Placing your own plugin in a local folder does not automatically include it in application releases.
+
+---
+
