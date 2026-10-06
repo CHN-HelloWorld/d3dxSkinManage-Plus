@@ -592,3 +592,15 @@ The host preserves persistent references for resources whose index entries are t
 
 Practice: create a preset that references a named variant, then use an isolated test library to verify missing references and their recovery. Old batches must stop publishing results when you switch games, leave the page, or disable the plugin. Creating, deleting, and renaming presets have no separate SDK events; revisit the page or click **Check again** to refresh. For reproducible missing-reference fixtures, read the [save-and-reload tests](../../../tests/plugins/test_preset_references.py) instead of modifying preset files in your everyday library.
 
+### 10.3 Preset cycling: asynchronous writes
+
+Open [entry.py](../../../plugins/example.preset-cycle/entry.py) and [plugin.json](../../../plugins/example.preset-cycle/plugin.json). Read `select_preset()`, `_switch()`, `_on_finished()`, and `deactivate()` in that order.
+
+The example cycles through presets in the host's list order, skipping the default preset unless `settings.include_default` is enabled in plugin details. If the current preset is not among the candidates, moving forward selects the first candidate and moving backward selects the last. If there is no other candidate, it displays a message instead of reapplying the current, sole candidate.
+
+The `.previous` and `.next` commands serve the Tools buttons, command panel, and shortcuts. Their defaults are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the application. The plugin requests `mods:write` and submits switching through `ctx.presets.apply()`. Repeated clicks return the running task instead of queuing multiple switches.
+
+Practice: prepare two different combinations, switch forward and backward, and watch the host task panel. Then verify failure feedback using a test game without a deployment folder. Disable the plugin while a task is unfinished and confirm that the host handles cancellation and old callbacks no longer show notifications. Notice that `_switch()` stores the task before registering its completion callback, because an already completed task invokes the callback immediately.
+
+All three examples can be packaged independently. The application build script copies only the explicitly listed manifests, entry files, language packs, and READMEs. It does not include locally installed plugins, exported CSV files, or runtime settings in the release package.
+
