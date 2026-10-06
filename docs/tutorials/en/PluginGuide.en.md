@@ -639,3 +639,17 @@ def show_report(ctx: PluginContext, text: str) -> None:
 
 Add **Audit report** to the plugin's language pack. `show_dialog()` returns a host-created QDialog, or `None` when no graphical host is available. The caller still needs a QApplication to construct the Qt widgets above. A dialog's `close()` normally only hides it; the host forces it closed and disposes of it when the plugin is disabled. Keep and reuse a window that will be shown repeatedly, avoiding an accumulation of newly created, hidden windows.
 
+### 11.3 Two ways to manage settings
+
+Declared settings require `storage` and `ui:settings`. Use `ctx.configuration.get(key)`, `set(key, value)`, `reset(key)`, and `on_changed(callback)`. Users can edit settings on the management page while the plugin is ready, and writes from plugin code also update the interface. Boolean and integer controls save immediately; text and decimal values are validated and saved when editing finishes. Each setting can be reset to its default.
+
+```json
+{"key": "mode", "type": "str", "default": "brief", "enum": ["brief", "full"], "enumTitles": ["Brief", "Full"]}
+```
+
+Supported types are `bool/int/float/str`, and `default` must have the matching type. Numbers support `minimum/maximum`, strings support `minLength/maxLength`, and all types support `enum` with corresponding `enumTitles`. Booleans are not treated as integers. Enum labels are translated through the plugin's language pack while persistent values remain unchanged. Invalid keys, wrong types, and out-of-range values raise exceptions before writing. Configuration events carry `ConfigurationChange(key, value, previous)` and are emitted only after a successful save changes the effective value.
+
+Configuration uses `settings.<key>` underneath. Plugins should access declared settings through the configuration facade to preserve validation and notifications. General `ctx.storage` remains suitable for counters, persistent identities, and page-private state. Values are copied on both reads and writes; a failed write does not update the in-memory cache. Corrupt JSON storage produces an explicit error and preserves the original file.
+
+Options closely tied to page operations can be placed directly on the page and saved with `ctx.storage.get()/set()`. The preset audit example saves **Include default preset** as `include_default`. Display text is translated with `ctx.i18n.t()`, while the persistent value remains a boolean. Dropdowns should likewise put a stable value in `userData` instead of saving translated text. Provide a clear message if saving fails.
+
