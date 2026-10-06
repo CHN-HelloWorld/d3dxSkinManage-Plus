@@ -458,3 +458,18 @@ def saved(result: OperationResult) -> None:
 ctx.presets.create("Plugin-created combination", description="Empty combination").on_finished(saved)
 ```
 
+### 7.5 Plugin language packs
+
+`ctx.i18n.t(source, **values)` reads translations from `languages/<locale>/strings.json` inside the plugin folder. `ctx.i18n.language` follows the host's current language. Each plugin resolves its own language packs without overriding host text or other plugins' text, and cannot change the host language through this API.
+
+```json
+{
+  "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
+  "messages": {"共 {count} 项": "{count} items", "扫描": "Scan"}
+}
+```
+
+Placeholder names must match the source text. Missing or invalid translations fall back to the declared fallback language and then the source text, with diagnostics logged. Display names, descriptions, and contribution titles use the same language pack. Command IDs, setting keys, and values retain their original identities. Set widget text with `ctx.i18n.t()`. For dropdowns, use translated display text and put the stable value in `userData`. Already constructed interfaces follow the host's restart requirement for language changes. Reload the plugin after editing a language pack so it is read again.
+
+---
+
