@@ -604,3 +604,5 @@ Practice: prepare two different combinations, switch forward and backward, and w
 
 All three examples can be packaged independently. The application build script copies only the explicitly listed manifests, entry files, language packs, and READMEs. It does not include locally installed plugins, exported CSV files, or runtime settings in the release package.
 
+## 11. Custom interfaces
+
