@@ -473,3 +473,25 @@ Placeholder names must match the source text. Missing or invalid translations fa
 
 ---
 
+## 8. Packaging and distribution
+
+### 8.1 Prepare release files
+
+Include `plugin.json`, the entry `.py` file, resources actually used by the plugin, `languages/`, and usage instructions. The instructions should explain the plugin's features, minimum host version, reasons for its permissions, command entry points, and contact information. Leave out virtual environments, `__pycache__`, development logs, test libraries, and personal settings. Runtime plugin data lives in `ctx.storage.dir` and is not part of the release code.
+
+When releasing a new version of the same plugin, keep its `id`, change `version`, and describe the changes in the documentation. Increase `minAppVersion` or `apiVersion` only when the plugin actually requires a newer host or SDK. Changing `id` creates a different plugin; settings associated with the original ID do not migrate automatically.
+
+Using the skeleton folder from section 1, run these PowerShell commands at the repository root to produce a ZIP containing only the necessary files:
+
+```powershell
+$pluginSource = "plugins/com.example.mod-summary"
+$pluginReleaseDir = Join-Path $env:TEMP "d3dx-plugin-release"
+New-Item -ItemType Directory -Path $pluginReleaseDir -Force
+& ".venv/Scripts/python.exe" scripts/plugins/plugin_tool.py check $pluginSource --json
+& ".venv/Scripts/python.exe" scripts/plugins/plugin_tool.py pack $pluginSource --output (Join-Path $pluginReleaseDir "mod-summary-0.1.0.zip")
+```
+
+List the files or folders to release in `files`, including the entry point and its dependencies inside the package. `plugin.json` is always included. The tool excludes bytecode and tool caches, and rejects links, paths outside the source folder, and filename conflicts. Before packaging, it validates the actual release contents in a temporary folder. Fixed file order, timestamps, and permissions make identical contents produce identical ZIP files. The output must be outside the source folder. `check` does not execute code; it returns 0 on success and 2 on failure. Use `--json` for automated checks.
+
+Open the archive and check that `plugin.json` and `entry.py` are at its root. Alternatively, it can contain one top-level plugin folder with the manifest inside. Do not add another enclosing release folder, include multiple plugins, or package only the entry file without its manifest. The installer accepts `.zip`, `.7z`, and `.rar`. ZIP is easy to create with system tools.
+
