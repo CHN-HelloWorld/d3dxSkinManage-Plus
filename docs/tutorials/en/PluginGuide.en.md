@@ -558,3 +558,13 @@ Observe `BackgroundTask.done/result` only on the host thread; `result` is `None`
 
 By default, the global limits are 2 worker threads and 32 queued or running tasks. Submitting at capacity raises `PluginError`. `cancel()` removes tasks that have not started; running tasks stop through cooperative cancellation checks. Disabling, reloading, or exiting disconnects observers before cancelling tasks. An uncooperative Python function cannot be forcibly stopped and may continue its own file or network operations. Daemon threads do not prevent application exit, and cancellation does not promise to roll back side effects. Deployment operations must still use the `OperationTask` API in §7.2; do not operate directly on the host from this executor.
 
+### 9.2 Thread and data boundaries
+
+Do not pass `ctx`, Qt widgets, or host database connections into workers. Business queries, configuration, storage, and registration entry points check their owning thread and context lifetime. Your own threads or subprocesses still require appropriate permissions and cleanup; prefer the task service above.
+
+Batch read-only queries may also read files. The preset audit example uses a parented `QTimer` to process queries in batches, stops when its page is hidden, and keeps expensive queries out of activation. A timer is not a background thread, so each batch must still be small enough.
+
+`ctx.storage` is suitable for settings, counters, persistent IDs, and other JSON-serializable values. Use `ctx.storage.dir` for the plugin's own data files and `ctx.plugin_dir` to locate resources distributed with the plugin. Do not use the application root or plugin code folder for runtime data. Declaring permissions in the manifest does not install third-party dependencies.
+
+---
+
