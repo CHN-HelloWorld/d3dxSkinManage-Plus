@@ -582,3 +582,13 @@ The CSV always contains `game_id, mod_id, category, name, author, enabled, ratin
 
 Practice: create a parent category and child character, each with a Mod. Export from the parent category's menu and confirm that the child character is included. Then enable **Export enabled mods only** in plugin details and verify that `settings.enabled_only` takes effect. Finally, cancel saving or choose an unwritable location; confirm that no success notification appears and that existing files remain intact. The exported inventory contains text metadata only, not Mod packages or restorable preset files.
 
+### 10.2 Preset audit: pages, events, and batched queries
+
+Open [entry.py](../../../plugins/example.preset-audit/entry.py). Read `audit_presets()` first, followed by `PresetAuditPage` and `Plugin`. The example checks for Mods missing from the current game and selected named variants that no longer exist. `None` means default configuration and does not count as missing.
+
+The host preserves persistent references for resources whose index entries are temporarily unavailable. `unresolved_mod_ids` lets a plugin inspect those identities even after presets reload. Iterating only over `enabled_mod_ids` is insufficient, and the keys of `mod_variants` are not a complete membership list. Audit results show only whether references can be resolved in the current snapshot. They do not prove that resources are permanently lost or check file integrity or in-game visual conflicts.
+
+`register_page()` adds a navigation page whose widget parenting and theme are managed by the host. **Include default preset** is saved as a boolean through `ctx.storage`. Relevant events invalidate the old batch. When the page is hidden, it does not read variant files; once visible, it queries one Mod per event-loop iteration. Progress and final results are displayed separately, and each Mod's variant list is read only once even if multiple presets reference it.
+
+Practice: create a preset that references a named variant, then use an isolated test library to verify missing references and their recovery. Old batches must stop publishing results when you switch games, leave the page, or disable the plugin. Creating, deleting, and renaming presets have no separate SDK events; revisit the page or click **Check again** to refresh. For reproducible missing-reference fixtures, read the [save-and-reload tests](../../../tests/plugins/test_preset_references.py) instead of modifying preset files in your everyday library.
+
