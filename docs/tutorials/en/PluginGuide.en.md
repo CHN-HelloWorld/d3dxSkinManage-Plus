@@ -519,3 +519,42 @@ it does not provide an operating-system sandbox. Enable plugins only from truste
 
 `activate()`, commands, event handlers, and UI factories should return promptly. When enabling Mods, switching combinations, or applying variants, submit the work through the `OperationTask` API in section 7.2. Do not use loops, sleeps, or blocking waits to wait for completion.
 
+### 9.1 General background tasks
+
+Declare `background`, then use `ctx.tasks.run(worker, title="...")`. The worker receives a `TaskContext` with `cancelled`, `raise_if_cancelled()`, and `report_progress(fraction, message="")`; it contains no host services. Read snapshots on the host thread first, then pass plain data to the worker with `functools.partial`.
+
+```python
+from functools import partial
+
+from src.plugin_sdk import TaskContext, TaskResult
+
+
+def compute(task: TaskContext, *, values: tuple[int, ...]) -> int:
+    """Compute incrementally and respond to cancellation on each iteration."""
+    total = 0
+    for index, value in enumerate(values):
+        task.raise_if_cancelled()
+        total += value
+        task.report_progress((index + 1) / len(values))
+    return total
+
+
+def start_sum(ctx, values: tuple[int, ...]):
+    """Submit a plain-data task and manage its observer in the plugin scope."""
+
+    def finished(result: TaskResult[int]) -> None:
+        """Receive the final result on the host thread."""
+        if result.ok:
+            ctx.logger.info("Computation completed: %s", result.value)
+        elif not result.cancelled:
+            ctx.logger.warning("Computation failed: %s", result.error)
+
+    task = ctx.tasks.run(partial(compute, values=values))
+    ctx.subscriptions.add(task.on_finished(finished))
+    return task
+```
+
+Observe `BackgroundTask.done/result` only on the host thread; `result` is `None` until completion. `TaskResult` contains `value`, `error`, `cancelled`, and `ok`. `on_finished()` and `on_progress()` return disposable subscription handles. Completion callbacks registered after completion run immediately, and progress updates are coalesced to the latest value. Computation exceptions are delivered as failed results; an unhandled exception in a callback itself triggers plugin fault isolation.
+
+By default, the global limits are 2 worker threads and 32 queued or running tasks. Submitting at capacity raises `PluginError`. `cancel()` removes tasks that have not started; running tasks stop through cooperative cancellation checks. Disabling, reloading, or exiting disconnects observers before cancelling tasks. An uncooperative Python function cannot be forcibly stopped and may continue its own file or network operations. Daemon threads do not prevent application exit, and cancellation does not promise to roll back side effects. Deployment operations must still use the `OperationTask` API in §7.2; do not operate directly on the host from this executor.
+
