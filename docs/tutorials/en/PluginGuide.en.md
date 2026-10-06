@@ -653,3 +653,5 @@ Configuration uses `settings.<key>` underneath. Plugins should access declared s
 
 Options closely tied to page operations can be placed directly on the page and saved with `ctx.storage.get()/set()`. The preset audit example saves **Include default preset** as `include_default`. Display text is translated with `ctx.i18n.t()`, while the persistent value remains a boolean. Dropdowns should likewise put a stable value in `userData` instead of saving translated text. Provide a clear message if saving fails.
 
+## 12. Development checks
+
