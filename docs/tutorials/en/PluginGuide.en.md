@@ -568,3 +568,17 @@ Batch read-only queries may also read files. The preset audit example uses a par
 
 ---
 
+## 10. Learning with the three practical examples
+
+The source code provides complete, runnable implementations. This section explains what to read and how to verify behavior; you do not need to assemble scattered snippets into a plugin. The `example.` prefix only identifies an example. Initial trust, permissions, disabling, and uninstalling follow the same rules as other plugins.
+
+### 10.1 Mod inventory export: from queries to files
+
+Open [entry.py](../../../plugins/example.mod-inventory/entry.py), [inventory.py](../../../plugins/example.mod-inventory/inventory.py), and [plugin.json](../../../plugins/example.mod-inventory/plugin.json). The entry module handles snapshots, configuration, and the file dialog, while `inventory.py` handles independent computation and atomic saving. Relative imports connect the modules. The `.export` command returns a `BackgroundTask[str]` whose successful value is the saved path.
+
+The same `.export` command exports the entire current game when run from Tools and receives `node_id` when run from a category menu. Because `get_mods(node_id)` returns only direct members, the example first reads current-game snapshots, then follows `CharacterInfo.parent_id` to identify the category subtree. Categories with identical names remain distinct by ID, and missing or cyclic parent references cannot cause an infinite loop.
+
+The CSV always contains `game_id, mod_id, category, name, author, enabled, rating, tags`, sorted by category path, name, and ID. `csv.writer` handles commas, quotes, and line breaks. In the background, the plugin writes a temporary file in the destination folder and atomically replaces the destination only after completing the write and checking cancellation. The output uses UTF-8 with a BOM, and cells that might be interpreted as formulas receive a text prefix. Repeated requests reuse the unfinished task, and old callbacks do not show notifications after deactivation.
+
+Practice: create a parent category and child character, each with a Mod. Export from the parent category's menu and confirm that the child character is included. Then enable **Export enabled mods only** in plugin details and verify that `settings.enabled_only` takes effect. Finally, cancel saving or choose an unwritable location; confirm that no success notification appears and that existing files remain intact. The exported inventory contains text metadata only, not Mod packages or restorable preset files.
+
