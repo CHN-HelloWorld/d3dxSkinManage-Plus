@@ -512,3 +512,10 @@ Bundled plugins and user-installed plugins follow the same loading rules. The ap
 
 ---
 
+## 9. Execution boundaries
+
+Plugins run inside the host process. The static scan before loading checks imports, permission declarations, and prohibited calls;
+it does not provide an operating-system sandbox. Enable plugins only from trusted sources. Use the host's asynchronous task API for time-consuming operations.
+
+`activate()`, commands, event handlers, and UI factories should return promptly. When enabling Mods, switching combinations, or applying variants, submit the work through the `OperationTask` API in section 7.2. Do not use loops, sleeps, or blocking waits to wait for completion.
+
