@@ -606,3 +606,36 @@ All three examples can be packaged independently. The application build script c
 
 ## 11. Custom interfaces
 
+### 11.1 Page and widget ownership
+
+The preset audit example demonstrates a full navigation page: its factory returns a new `QWidget`, added to the host with `ctx.ui.register_page()`. Navigation pages do not need a second declaration in `contributes.views`. That contribution is for embedded views in plugin details, which also require `ctx.ui.register_view(view_id, factory)` and matching manifest and registered IDs.
+
+A factory returns a new widget each time; do not hand the same QWidget to multiple containers. Plugins use the host's existing `QApplication`. Import all Qt types from PySide6, using `Signal`, `Slot`, and `Property` for signals and properties. The public SDK itself does not import Qt.
+
+Standard widgets inherit the host's global QSS. When the light/dark theme or background changes, the host refreshes page wrappers and managed dialogs in place while preserving plugin input state. Hard-coded custom colors are not rewritten automatically. Parent your own timers to their owning widgets and stop them on deactivation. A Python reference to a widget cannot prevent its Qt parent from destroying it.
+
+### 11.2 Display a report users can copy
+
+Call `ctx.ui.notify()` for brief feedback. For longer text, use a dialog managed by the host. The following helper can be added to an existing plugin whose manifest declares `ui:views`:
+
+```python
+from PySide6.QtWidgets import QPlainTextEdit, QVBoxLayout, QWidget
+
+from src.plugin_sdk import PluginContext
+
+
+def show_report(ctx: PluginContext, text: str) -> None:
+    """Create a copyable, read-only report and let the host manage its window lifetime."""
+    body = QWidget()
+    layout = QVBoxLayout(body)
+    report = QPlainTextEdit(body)
+    report.setReadOnly(True)
+    report.setPlainText(text)
+    layout.addWidget(report)
+    dialog = ctx.ui.show_dialog(body, title=ctx.i18n.t("Audit report"), modal=False)
+    if dialog is None:
+        body.deleteLater()
+```
+
+Add **Audit report** to the plugin's language pack. `show_dialog()` returns a host-created QDialog, or `None` when no graphical host is available. The caller still needs a QApplication to construct the Qt widgets above. A dialog's `close()` normally only hides it; the host forces it closed and disposes of it when the plugin is disabled. Keep and reuse a window that will be shown repeatedly, avoiding an accumulation of newly created, hidden windows.
+
