@@ -655,3 +655,13 @@ Options closely tied to page operations can be placed directly on the page and s
 
 ## 12. Development checks
 
+### 12.1 Everyday editing workflow
+
+1. Edit plugin code, the manifest, or a language pack, save, and click **Reload** on the plugin card. Use **Rescan** when adding a plugin or changing its folder layout.
+2. Check that the plugin remains enabled. New permissions require confirmation. If parsing, scanning, or activation fails, inspect the error before reloading.
+3. Run commands from their actual entry points: check the Tools button, global command panel, Mod context menu, and shortcut separately. Context-menu commands also appear in the global panel, so handle missing `mod_id` / `node_id` arguments.
+4. Open **Tools → View Logs** and locate records by plugin ID and error time. Use `ctx.logger.info()` for entry and completion information, and `warning()` for recoverable problems. Do not log personal file contents or access credentials.
+5. Disable and enable the plugin again. Check for duplicate menus, events, pages, and leftover windows. Change a setting and reload to confirm that its value can still be read.
+
+For expected conditions such as no selection, an empty list, insufficient permissions, or a failed task, explain the issue to the user and return. Unhandled command or event exceptions automatically disable the plugin. Logging does not replace error handling.
+
