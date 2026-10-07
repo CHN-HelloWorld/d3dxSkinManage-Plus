@@ -1,0 +1,24 @@
+{
+  "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
+  "messages": {
+    "预设检查": "Preset check",
+    "集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。": "Check the current game's presets for missing mod and appearance variant references.",
+    "检查当前游戏预设中失效的 Mod 和外观变体引用。请在主界面调整对应预设。": "Check the current game's presets for missing mod and appearance variant references. Edit affected presets in the main interface.",
+    "包含默认预设": "Include default preset",
+    "重新检查": "Check again",
+    "尚未检查。": "Not checked yet.",
+    "正在检查预设引用…": "Checking preset references…",
+    "正在检查变体：{done}/{total}": "Checking variants: {done}/{total}",
+    "预设": "Preset",
+    "Mod": "Mod",
+    "待处理项": "Issue",
+    "无法保存检查设置：{error}": "Could not save check settings: {error}",
+    "请先选择一个游戏。": "Select a game first.",
+    "检查未完成：{error}": "Check incomplete: {error}",
+    "Mod 不在当前游戏中": "Mod is missing from the current game",
+    "已保存的外观变体不存在": "Saved appearance variant is missing",
+    "默认": "Default",
+    "预设 ID：{preset_id}\nMod ID：{mod_id}": "Preset ID: {preset_id}\nMod ID: {mod_id}",
+    "已检查 {presets} 个预设，发现 {issues} 项失效引用。": "Checked {presets} presets and found {issues} missing references."
+  }
+}

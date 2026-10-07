@@ -1,0 +1,18 @@
+{
+  "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
+  "messages": {
+    "预设轮换": "Preset cycle",
+    "通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。": "Use shortcuts or tool buttons to switch to the previous or next preset in the current game's list.",
+    "插件": "Plugins",
+    "切换到上一个预设": "Switch to previous preset",
+    "切换到下一个预设": "Switch to next preset",
+    "轮换时包含默认预设": "Include default preset when cycling",
+    "预设正在切换，请稍候。": "A preset switch is in progress. Please wait.",
+    "请先选择一个游戏。": "Select a game first.",
+    "没有其他可切换的预设。请先在主界面创建组合预设。": "No other preset is available. Create a preset in the main interface first.",
+    "默认": "Default",
+    "已切换到预设：{name}": "Switched to preset: {name}",
+    "操作未完成，请查看宿主任务结果。": "The operation did not complete. Check the task result in the app.",
+    "预设切换未完成：{error}": "Preset switch incomplete: {error}"
+  }
+}

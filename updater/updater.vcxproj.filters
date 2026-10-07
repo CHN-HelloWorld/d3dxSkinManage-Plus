@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup>
+    <Filter Include="Source Files"><UniqueIdentifier>{6B8645AE-5301-479A-92DB-B05795522E27}</UniqueIdentifier></Filter>
+    <Filter Include="Header Files"><UniqueIdentifier>{72FA6B91-C432-4C8B-B5BB-AD4DAC3B32FA}</UniqueIdentifier></Filter>
+    <Filter Include="Resources"><UniqueIdentifier>{B5F1AA20-BBD9-4C6F-A32D-8A5B1FBC5419}</UniqueIdentifier></Filter>
+  </ItemGroup>
+  <ItemGroup>
+    <ClCompile Include="src\main.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\util.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\paths.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\token.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\logger.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\manifest.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\sync.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\proc.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ui.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\ui_render.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\workflow.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\self_update.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\json.cpp"><Filter>Source Files</Filter></ClCompile>
+    <ClCompile Include="src\language.cpp"><Filter>Source Files</Filter></ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="resource.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\util.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\paths.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\token.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\logger.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\manifest.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\sync.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\proc.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ui.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\ui_render.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\workflow.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\self_update.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\json.h"><Filter>Header Files</Filter></ClInclude>
+    <ClInclude Include="src\language.h"><Filter>Header Files</Filter></ClInclude>
+  </ItemGroup>
+  <ItemGroup><ResourceCompile Include="updater.rc"><Filter>Resources</Filter></ResourceCompile></ItemGroup>
+  <ItemGroup><Image Include="..\resources\app.ico"><Filter>Resources</Filter></Image></ItemGroup>
+  <ItemGroup>
+    <None Include="updater.manifest"><Filter>Resources</Filter></None>
+    <None Include="updater.common.props" />
+    <None Include="README.md" />
+    <None Include="docs\2026-11-11-cpp-design.md" />
+    <None Include="docs\2026-11-11-cpp-plan.md" />
+  </ItemGroup>
+</Project>
