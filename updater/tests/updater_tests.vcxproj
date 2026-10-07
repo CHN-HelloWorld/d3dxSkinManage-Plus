@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup Label="ProjectConfigurations">
+    <ProjectConfiguration Include="Debug|x64"><Configuration>Debug</Configuration><Platform>x64</Platform></ProjectConfiguration>
+    <ProjectConfiguration Include="Release|x64"><Configuration>Release</Configuration><Platform>x64</Platform></ProjectConfiguration>
+  </ItemGroup>
+  <PropertyGroup Label="Globals">
+    <VCProjectVersion>17.0</VCProjectVersion>
+    <ProjectGuid>{BF88B3CB-3876-44C2-9A42-99D4B812E3DC}</ProjectGuid>
+    <RootNamespace>UpdaterTests</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <PropertyGroup Label="Configuration">
+    <ConfigurationType>Application</ConfigurationType>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Debug'">true</UseDebugLibraries>
+    <UseDebugLibraries Condition="'$(Configuration)'=='Release'">false</UseDebugLibraries>
+    <PlatformToolset>v143</PlatformToolset>
+    <WholeProgramOptimization Condition="'$(Configuration)'=='Release'">true</WholeProgramOptimization>
+    <CharacterSet>Unicode</CharacterSet>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="PropertySheets"><Import Project="..\updater.common.props" /></ImportGroup>
+  <ItemDefinitionGroup><Link><SubSystem>Console</SubSystem></Link></ItemDefinitionGroup>
+  <ItemGroup>
+    <ClCompile Include="test_main.cpp" />
+    <ClCompile Include="test_core.cpp" />
+    <ClCompile Include="test_sync.cpp" />
+    <ClCompile Include="test_process.cpp" />
+    <ClCompile Include="test_port.cpp" />
+    <ClCompile Include="test_language.cpp" />
+    <ClCompile Include="test_ui.cpp" />
+    <ClCompile Include="test_self_update.cpp" />
+    <ClCompile Include="..\src\self_update.cpp" />
+    <ClCompile Include="..\src\ui_render.cpp" />
+    <ClCompile Include="..\src\util.cpp" />
+    <ClCompile Include="..\src\paths.cpp" />
+    <ClCompile Include="..\src\json.cpp" />
+    <ClCompile Include="..\src\language.cpp" />
+    <ClCompile Include="..\src\workflow.cpp" />
+    <ClCompile Include="..\src\token.cpp" />
+    <ClCompile Include="..\src\logger.cpp" />
+    <ClCompile Include="..\src\manifest.cpp" />
+    <ClCompile Include="..\src\sync.cpp" />
+    <ClCompile Include="..\src\proc.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="test_support.h" />
+    <ClInclude Include="..\src\util.h" />
+    <ClInclude Include="..\src\paths.h" />
+    <ClInclude Include="..\src\json.h" />
+    <ClInclude Include="..\src\language.h" />
+    <ClInclude Include="..\src\workflow.h" />
+    <ClInclude Include="..\src\token.h" />
+    <ClInclude Include="..\src\logger.h" />
+    <ClInclude Include="..\src\manifest.h" />
+    <ClInclude Include="..\src\sync.h" />
+    <ClInclude Include="..\src\proc.h" />
+  </ItemGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+</Project>
