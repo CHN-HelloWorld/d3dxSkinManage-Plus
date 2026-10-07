@@ -644,3 +644,98 @@ class PluginManager:
             if rec.state is PluginState.READY and "onEvent:" + event in rec.manifest.activation_events:
                 self.activate(rec.id, "onEvent:" + event)
         self._bus.emit(event, **payload)
+
+    def activate(self, plugin_id: str, reason: str = "manual") -> bool:
+        """按需激活插件及其依赖；不隐式授予信任或更改启用意愿。"""
+        rec = self._records.get(plugin_id)
+        if rec is None:
+            return False
+        previous = rec.state
+        result = self._activate(rec, reason)
+        if rec.state is not previous:
+            self._notify_changed()
+        return result
+
+    def get_exports(self, requester: str, plugin_id: str):
+        """只向声明了依赖的插件提供已激活依赖的公开返回值。"""
+        rec = self._records.get(requester)
+        if rec is None or plugin_id not in rec.manifest.dependencies:
+            raise PluginError(tr("未声明插件依赖：{plugin_id}", plugin_id=plugin_id))
+        if not self.activate(plugin_id, "dependency:" + requester):
+            raise PluginError(tr("依赖插件激活失败：{plugin_id}", plugin_id=plugin_id))
+        return self._records[plugin_id].exports
+
+    def create_view(self, plugin_id: str, view_id: str):
+        """激活视图所属插件并隔离工厂异常，返回由图形宿主验证的控件。"""
+        rec = self._records.get(plugin_id)
+        if rec is None or view_id not in {item["id"] for item in rec.manifest.contributes.get("views", [])}:
+            raise PluginError(tr("未声明的插件视图：{view_id}", view_id=view_id))
+        if not self.activate(plugin_id, "onView:" + view_id):
+            return None
+        rec = self._records.get(plugin_id)
+        if rec is None or rec.state is not PluginState.ACTIVE:
+            return None
+        context = rec.context
+        factory = self._views.get(plugin_id, view_id)
+        try:
+            if factory is None:
+                raise PluginError(tr("激活后未注册视图：{view_id}", view_id=view_id))
+            return factory()
+        except Exception as exc:
+            if self._records.get(plugin_id) is rec and rec.context is context and rec.state is PluginState.ACTIVE:
+                self._on_plugin_error(plugin_id, "view:" + view_id, exc)
+            return None
+
+    def execute_command(self, command_id: str, *args, **kwargs):
+        """通过统一命令表执行插件命令，并返回处理器结果。"""
+        return self._commands.execute(command_id, *args, **kwargs)
+
+    def translate(self, plugin_id: str, source: str, /, **values) -> str:
+        """使用指定插件的翻译服务；未发现插件时按原文格式化规则处理。"""
+        record = self._records.get(plugin_id)
+        if record is not None:
+            return record.translate(source, **values)
+        from src.plugin_sdk.i18n import TranslationFacade
+
+        return TranslationFacade().t(source, **values)
+
+    def _on_plugin_error(self, plugin_id: str, source: str, exc: BaseException) -> None:
+        """停用发生事件或命令异常的插件并记录错误，隔离异常对宿主的影响。"""
+        rec = self._records.get(plugin_id)
+        if rec is None or plugin_id in self._tearing_down:
+            return
+        rec.error = tr("运行时熔断（{source}）: {error}", source=source, error=exc)
+        self._stop_tree(rec.id, PluginState.ERROR)
+        logger.error("插件 '%s' 已被熔断停用：%s", plugin_id, rec.error)
+        self._notify_changed()
+
+    # 查询（供 UI）
+
+    @property
+    def records(self) -> list[PluginRecord]:
+        """返回当前插件记录列表的副本，记录对象仍由管理器持有。"""
+        return list(self._records.values())
+
+    @property
+    def discovery_errors(self) -> dict[str, str]:
+        """返回未进入运行时注册表的目录及清单错误，供管理界面诊断。"""
+        return dict(self._discovery_errors)
+
+    def get(self, plugin_id: str) -> PluginRecord | None:
+        """按插件 ID 查询运行记录，不存在时返回 None。"""
+        return self._records.get(plugin_id)
+
+    @property
+    def contributions(self) -> ContributionRegistry:
+        """返回用于界面构建的贡献注册表。"""
+        return self._contrib
+
+    @property
+    def views(self) -> ViewRegistry:
+        """返回插件视图工厂注册表。"""
+        return self._views
+
+    @property
+    def commands(self) -> CommandTable:
+        """返回宿主共用的插件命令表。"""
+        return self._commands
