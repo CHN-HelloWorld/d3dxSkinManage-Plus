@@ -665,3 +665,43 @@ Options closely tied to page operations can be placed directly on the page and s
 
 For expected conditions such as no selection, an empty list, insufficient permissions, or a failed task, explain the issue to the user and return. Unhandled command or event exceptions automatically disable the plugin. Logging does not replace error handling.
 
+### 12.2 Common problems
+
+| Symptom | What to check and do |
+| --- | --- |
+| No plugin appears after rescanning | Confirm the actual path with **Open plugins folder**; check for an extra enclosing folder and a valid `plugin.json` |
+| Manifest parsing fails | Use standard JSON saved as UTF-8, remove comments and trailing commas, and check the ID, required fields, entry path, and commands referenced by shortcuts |
+| The security scan fails | Inspect the imports at the file and line reported by the error; use the public SDK for host capabilities and declare permissions for restricted standard-library modules as appropriate |
+| The application or API version is incompatible | Compare the host version with the manifest requirements; update the host or use a plugin package that matches the host application and SDK versions |
+| Reloading does not enable the plugin after adding permissions | Turn the plugin on again and confirm its permissions; previous authorization does not automatically include new items |
+| Clicking a command disables the plugin | Inspect the exception log at that time; check callback parameters, missing-value handling before returning, and the SDK calls being made |
+| A command runs but no dialog appears | Return values are not displayed automatically; use `notify()` or `show_dialog()` |
+| A Tools button or menu item is missing | Check manifest validity, plugin trust, and dependencies; ready plugins should also display their declared entry points |
+| A context-menu command works but fails in the global panel | Global calls have no selected-object arguments; use optional handler arguments and prompt the user to open the relevant object's menu |
+| A shortcut does not respond | In **Settings → Shortcuts**, check for an unbound command or conflict; verify the context and move focus out of text inputs |
+| A page or embedded view is empty | The factory must return a valid QWidget; embedded views also require a matching manifest ID. Do not return a destroyed widget or one already assigned to another container |
+| Settings reset after reloading | Save values through `ctx.storage`; the actual key for a declarative setting is `settings.<key>` |
+| An `OperationTask` was returned, but the Mod did not change | Inspect `ok`, all three ID groups, and `error` in the completion callback; check the current game, deployment folder, permissions, and conflicting host tasks |
+| `ModuleNotFoundError` | Use relative imports within the package and check that `files` includes the required modules; third-party libraries are not installed automatically |
+| The status reports blocked dependencies | Install, enable, and trust the dependencies identified in details, and check version ranges; reload or enable again after fixing them |
+| An SDK call from a background task raises an error | Read snapshots on the host thread, process only snapshots in the worker, and access the host again from completion callbacks |
+
+### 12.3 Automated checks and release acceptance
+
+In the source environment, run formatting checks and plugin tests to verify the SDK, tasks, lifecycle, events, bundled examples, and UI integration. Run these commands at the repository root:
+
+```powershell
+& ".venv/Scripts/python.exe" -m ruff check plugins scripts/plugins/new_plugin.py
+& ".venv/Scripts/python.exe" -m ruff format --check plugins scripts/plugins/new_plugin.py
+& ".venv/Scripts/python.exe" -m pytest -q -p no:cacheprovider tests/plugins
+& ".venv/Scripts/python.exe" scripts/plugins/plugin_tool.py check plugins/example.mod-inventory --json
+```
+
+For a test environment without a display, set `$env:QT_QPA_PLATFORM = "offscreen"` before running the tests. The test command checks the host's existing plugin contracts; it does not automatically discover custom tests inside arbitrary plugin folders. Your own command logic still needs focused tests or verification using the steps above.
+
+The tests use separate temporary folders to verify SDK reads and writes, event dispatch, asynchronous tasks, permissions, and resource lifecycles.
+They do not access your everyday Mods, plugin trust records, or application settings.
+
+Before release, cover at least an empty library and a populated library, no selected object, one activation followed by two reloads, settings persistence, Chinese and any other languages you provide, light and dark themes, and archive installation in a separate application copy. Plugins requesting write permissions must also check failed and cancelled task results, ensuring that partial completion is never reported as complete success.
+
+Architecture references: [extension manifests](https://code.visualstudio.com/api/references/extension-manifest), [activation on demand](https://code.visualstudio.com/api/references/activation-events), and an [official package manifest and dependency example](https://github.com/Unity-Technologies/InputSystem/blob/develop/Packages/com.unity.inputsystem/package.json). This project uses execution inside the host process for native PySide6 extensions. This guide defines its actual interfaces and boundaries.
