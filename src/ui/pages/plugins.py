@@ -390,3 +390,118 @@ class PluginCard(QFrame):
         layout.addLayout(head)
         root.addWidget(panel)
         return layout
+
+    def _build_views(self, root: QVBoxLayout) -> None:
+        """仅为已激活插件调用注册的视图工厂，将有效 Qt 控件纳入详情布局。"""
+        pm = self._page.manager
+        if pm is None or self._rec.state.value != "active":
+            return
+        view_contribs = pm.contributions.views(self._rec.id)
+        if not view_contribs:
+            return
+        for c in view_contribs:
+            view_id = str(c.data.get("id", ""))
+            title = str(c.data.get("title", view_id))
+            section = self._section(root, title, "navigation/plugins")
+            widget = pm.create_view(self._rec.id, view_id)
+            if isinstance(widget, QWidget) and shiboken6.isValid(widget):
+                section.addWidget(widget)
+
+    def _build_settings(self, root: QVBoxLayout) -> None:
+        """为已就绪的插件创建共享配置表单，无需为了修改设置执行插件代码。"""
+        pm = self._page.manager
+        if pm is None or self._rec.state.value not in {"ready", "active"}:
+            return
+        items = pm.contributions.settings(self._rec.id)
+        if not items:
+            return
+        section = self._section(root, tr("设置"), "settings/settings")
+        try:
+            form = PluginSettingsForm(pm.get_configuration(self._rec.id), items, self)
+        except (OSError, ValueError, RuntimeError, PluginError) as exc:
+            error = QLabel(tr("读取插件设置失败：{error}", error=exc))
+            error.setWordWrap(True)
+            self._style_label(error, "danger", "font-size: 13px;")
+            section.addWidget(error)
+            return
+        self._settings_form = form
+        self._setting_rows.extend(form.rows)
+        section.addWidget(form)
+
+    def resizeEvent(self, event):
+        """详情宽度不足时将设置说明和控件纵向排列，宽度恢复后改回同行布局。"""
+        super().resizeEvent(event)
+        direction = QBoxLayout.Direction.TopToBottom if self.width() < 520 else QBoxLayout.Direction.LeftToRight
+        for row in self._setting_rows:
+            row.setDirection(direction)
+
+    def _on_toggled(self, checked: bool) -> None:
+        """启用前确认未受信插件的来源与权限，拒绝时恢复开关；其他操作转交插件管理器。"""
+        pm = self._page.manager
+        if pm is None:
+            return
+        if checked:
+            if not self._rec.trusted:
+                if not self._confirm_trust():
+                    self._toggle.blockSignals(True)
+                    self._toggle.setChecked(False)
+                    self._toggle.blockSignals(False)
+                    return
+                pm.trust(self._rec.id)
+            pm.enable(self._rec.id)
+        else:
+            pm.disable(self._rec.id)
+
+    def _confirm_trust(self) -> bool:
+        """以默认拒绝的确认框展示插件来源和权限，未知权限保留原始标识供检查。"""
+        mf = self._rec.manifest
+        perms = "\n".join(f"  · {_permission_label(p)}" for p in mf.permissions) or tr("  （无）")
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("信任并启用插件？"))
+        box.setTextFormat(Qt.TextFormat.PlainText)
+        box.setText(
+            tr(
+                "插件「{name}」由 {author} 提供，将在本程序内执行代码。\n\n"
+                "申请权限：\n{perms}\n\n仅在你信任来源时启用。",
+                name=self._rec.name,
+                author=mf.author,
+                perms=perms,
+            )
+        )
+        unknown = [permission for permission in mf.permissions if permission not in _PERMISSION_LABELS]
+        if unknown:
+            box.setDetailedText(tr("未识别的权限标识：\n") + "\n".join(unknown))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        return box.exec() == QMessageBox.StandardButton.Yes
+
+
+class PluginsPage(QWidget):
+    """插件管理页面。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """初始化插件记录、列表与详情缓存，以及惰性构建保护、选择和筛选状态。"""
+        super().__init__(parent)
+        self._manager: PluginManager | None = None
+        self._records = {}
+        self._entries = {}
+        self._detail_cards = {}
+        self._detail_scrolls = {}
+        self._building_details = set()
+        self._selected_id = None
+        self._filter = "all"
+        self._compact = None
+        self._setup_ui()
+        self.retheme()
+
+    @property
+    def manager(self) -> PluginManager | None:
+        """返回宿主绑定的插件管理器，尚未绑定时返回空值。"""
+        return self._manager
+
+    def set_manager(self, manager: PluginManager) -> None:
+        """注入 PluginManager 并订阅变更（由 MainWindow 调用一次）。"""
+        self._manager = manager
+        manager.add_change_listener(self.refresh)
+        self.refresh()
