@@ -505,3 +505,265 @@ class PluginsPage(QWidget):
         self._manager = manager
         manager.add_change_listener(self.refresh)
         self.refresh()
+
+    def _setup_ui(self) -> None:
+        """构建安装操作栏、可搜索筛选的插件列表和惰性详情区域，启用两侧平滑滚动。"""
+        self.setObjectName("pluginsPage")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        header = QHBoxLayout()
+        header.addStretch()
+
+        install_btn = _action_button(tr("安装插件"), "actions/import")
+        install_btn.clicked.connect(self._install_from_archive)
+        header.addWidget(install_btn)
+
+        rescan_btn = _action_button(tr("重新扫描"), "actions/refresh")
+        rescan_btn.clicked.connect(self._rescan)
+        header.addWidget(rescan_btn)
+
+        open_dir_btn = _action_button(tr("打开插件目录"), "actions/folder")
+        open_dir_btn.clicked.connect(self._open_dir)
+        header.addWidget(open_dir_btn)
+        layout.addLayout(header)
+
+        self._discovery_notice = QLabel()
+        self._discovery_notice.setWordWrap(True)
+        self._discovery_notice.setTextFormat(Qt.TextFormat.PlainText)
+        self._discovery_notice.hide()
+        layout.addWidget(self._discovery_notice)
+
+        workspace = QFrame()
+        workspace.setObjectName("pluginsWorkspace")
+        workspace.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(1, 1, 1, 1)
+        self._splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._splitter.setObjectName("pluginWorkspaceSplit")
+        self._splitter.setChildrenCollapsible(False)
+        self._splitter.setHandleWidth(1)
+        workspace_layout.addWidget(self._splitter)
+        layout.addWidget(workspace, 1)
+
+        self._library = _plain_widget()
+        self._library.setMinimumWidth(250)
+        self._library.setMaximumWidth(420)
+        library = QVBoxLayout(self._library)
+        library.setContentsMargins(14, 17, 14, 14)
+        library.setSpacing(12)
+        library_header = QHBoxLayout()
+        library_title = QLabel(tr("我的插件"))
+        library_title.setStyleSheet("background: transparent; font-size: 15px; font-weight: 600;")
+        library_header.addWidget(library_title)
+        library_header.addStretch()
+        self._library_count = QLabel("0")
+        library_header.addWidget(self._library_count)
+        library.addLayout(library_header)
+        self._search = QLineEdit()
+        self._search.setObjectName("pluginSearch")
+        self._search.setAccessibleName(tr("搜索插件"))
+        self._search.setPlaceholderText(tr("搜索插件名称、作者或描述"))
+        self._search.setClearButtonEnabled(True)
+        search_action = self._search.addAction(
+            icons.get_icon("actions/search"), QLineEdit.ActionPosition.LeadingPosition
+        )
+        icons.apply_icon(search_action, "actions/search", "text.secondary")
+        self._search.textChanged.connect(self._filter_rows)
+        library.addWidget(self._search)
+        filters = QHBoxLayout()
+        filters.setSpacing(4)
+        self._filter_buttons = {}
+        self._filter_group = QButtonGroup(self)
+        for key, label in (("all", tr("全部")), ("enabled", tr("已启用")), ("disabled", tr("已停用"))):
+            button = QPushButton(label)
+            button.setObjectName(f"pluginFilter-{key}")
+            button.setProperty("pluginFilter", True)
+            button.setCheckable(True)
+            button.setChecked(key == "all")
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.clicked.connect(lambda _checked, value=key: self._set_filter(value))
+            self._filter_group.addButton(button)
+            self._filter_buttons[key] = button
+            filters.addWidget(button)
+        library.addLayout(filters)
+        self._scroll = QScrollArea()
+        self._scroll.setObjectName("pluginLibraryScroll")
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.viewport().setAutoFillBackground(False)
+        self._content = _plain_widget()
+        self._list_layout = QVBoxLayout(self._content)
+        self._list_layout.setContentsMargins(0, 0, 0, 0)
+        self._list_layout.setSpacing(7)
+        self._list_layout.addStretch()
+        self._scroll.setWidget(self._content)
+        SmoothScroller.attach(self._scroll)
+        library.addWidget(self._scroll, 1)
+        self._list_empty = QLabel(tr("没有匹配的插件"))
+        self._list_empty.setWordWrap(True)
+        self._list_empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._list_empty.hide()
+        library.addWidget(self._list_empty)
+        self._library_note = QLabel(tr("插件可从压缩包安装，或放入插件目录后重新扫描。首次启用需确认信任。"))
+        self._library_note.setWordWrap(True)
+        library.addWidget(self._library_note)
+        self._splitter.addWidget(self._library)
+        self._details = QStackedWidget()
+        self._details.setObjectName("pluginDetails")
+        self._details.setMinimumWidth(0)
+        self._empty = QLabel(tr("选择插件以查看详情与设置。"))
+        self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._empty.setWordWrap(True)
+        self._details.addWidget(self._empty)
+        self._splitter.addWidget(self._details)
+        self._splitter.setStretchFactor(1, 1)
+        self._splitter.setSizes([300, 750])
+
+    # 刷新
+
+    def retheme(self) -> None:
+        """更换表面时保留选择、设置和插件控件。"""
+        c = settings_style.color
+        workspace = theme.surface_color("bg.layer", "nav") if theme.is_background_active() else c("canvas")
+        self.setStyleSheet(f"""
+            QWidget#pluginsPage {{ background: transparent; }}
+            QFrame#pluginsWorkspace {{ background: {workspace}; border: 1px solid {settings_style.stroke()};
+                border-radius: 10px; }}
+            QStackedWidget#pluginDetails, QScrollArea#pluginLibraryScroll,
+            QScrollArea#pluginDetailScroll {{ background: transparent; border: none; }}
+            QScrollArea#pluginLibraryScroll > QWidget, QScrollArea#pluginDetailScroll > QWidget {{
+                background: transparent; border: none; }}
+            QSplitter#pluginWorkspaceSplit::handle {{ background: {settings_style.stroke()}; }}
+            QPushButton[pluginFilter="true"] {{ background: transparent; border: 1px solid transparent;
+                border-radius: 5px; padding: 4px 5px; font-size: 12px; color: {c("secondary")}; }}
+            QPushButton[pluginFilter="true"]:checked {{ background: {settings_style.surface(over="nav")};
+                border-color: {settings_style.stroke()}; color: {c("text")}; }}
+            QPushButton[pluginFilter="true"]:hover {{ background: {theme.rgba("text.primary", 0.06)}; }}
+            QLineEdit#pluginSearch {{ font-size: 13px; padding: 6px; min-height: 24px; }}
+        """)
+        for label in (self._empty, self._library_count, self._list_empty, self._library_note):
+            label.setStyleSheet(f"background: transparent; color: {c('secondary')}; font-size: 13px;")
+        self._discovery_notice.setStyleSheet(f"color: {theme.color('danger')}; background: transparent;")
+        for row in self._entries.values():
+            row.retheme()
+        for card in self._detail_cards.values():
+            card.retheme()
+        icons.retheme_icons(self)
+
+    def refresh(self) -> None:
+        """对账插件记录，仅替换或停止的运行时释放详情控件。"""
+        recs = self._manager.records if self._manager else []
+        errors = self._manager.discovery_errors if self._manager else {}
+        self._discovery_notice.setVisible(bool(errors))
+        self._discovery_notice.setText(tr("有 {count} 个插件未通过清单检查，悬停可查看详情。", count=len(errors)))
+        self._discovery_notice.setToolTip("\n\n".join(errors.values()))
+        recs = sorted(recs, key=lambda r: r.name)
+        self._records = {rec.id: rec for rec in recs}
+        for pid in list(self._entries):
+            if pid not in self._records:
+                row = self._entries.pop(pid)
+                self._list_layout.removeWidget(row)
+                row.hide()
+                row.deleteLater()
+        for pid, card in list(self._detail_cards.items()):
+            rec = self._records.get(pid)
+            if rec is None or not card.matches_record(rec):
+                self._discard_detail(pid)
+            else:
+                card.retheme()
+        for index, rec in enumerate(recs):
+            row = self._entries.get(rec.id)
+            if row is None:
+                row = _PluginEntry(rec)
+                row.clicked.connect(lambda _checked, pid=rec.id: self._select_plugin(pid))
+                self._entries[rec.id] = row
+            else:
+                row.update_record(rec)
+            self._list_layout.insertWidget(index, row)
+        self._library_count.setText(str(len(recs)))
+        enabled = sum(bool(rec.enabled and rec.trusted) for rec in recs)
+        for key, label, count in (
+            ("all", tr("全部"), len(recs)),
+            ("enabled", tr("已启用"), enabled),
+            ("disabled", tr("已停用"), len(recs) - enabled),
+        ):
+            self._filter_buttons[key].setText(f"{label} {count}")
+        self._filter_rows()
+        if self._selected_id not in self._records:
+            self._selected_id = next(
+                (rec.id for rec in recs if self._matches_filter(rec)), recs[0].id if recs else None
+            )
+        self._select_plugin(self._selected_id)
+
+    def _discard_detail(self, plugin_id):
+        """取消可能引用旧控件的淡出快照，再从缓存和页面栈移除插件详情并延后释放。"""
+        # 释放插件控件前清理仍可能引用它们的淡出快照。
+        if getattr(self._details, "_cross_fade_overlay", None) is not None:
+            anim.cross_fade(self._details, None)
+        card = self._detail_cards.pop(plugin_id)
+        scroll = self._detail_scrolls.pop(plugin_id)
+        card.hide()
+        scroll.hide()
+        self._details.removeWidget(scroll)
+        scroll.deleteLater()
+
+    def _select_plugin(self, plugin_id):
+        """按需构建所选插件详情，构造后重验运行时身份，丢弃插件自行停用期间生成的旧视图。"""
+        if plugin_id not in self._records:
+            self._selected_id = None
+            self._details.setCurrentWidget(self._empty)
+            self._empty.setText(tr("未发现任何插件。可安装插件或打开插件目录。"))
+            return
+        self._selected_id = plugin_id
+        for pid, row in self._entries.items():
+            row.setChecked(pid == plugin_id)
+        if plugin_id not in self._detail_cards:
+            rec = self._records[plugin_id]
+            views = rec.manifest.contributes.get("views", [])
+            # 隐藏页面只同步选择和元数据，避免启动刷新触发插件入口或视图工厂。
+            if views and not self.isVisible():
+                return
+            if plugin_id in self._building_details:
+                return
+            self._building_details.add(plugin_id)
+            try:
+                if rec.state.value == "ready" and views:
+                    self.manager.activate(plugin_id, "onView:" + views[0]["id"])
+                card = PluginCard(self, self._records[plugin_id])
+            finally:
+                self._building_details.discard(plugin_id)
+            # 视图构造期间插件可能停止自身并同步刷新页面。
+            current = self._records.get(plugin_id)
+            if current is None or not card.matches_record(current):
+                card.hide()
+                card.deleteLater()
+                self._select_plugin(self._selected_id)
+                return
+            scroll = QScrollArea()
+            scroll.setObjectName("pluginDetailScroll")
+            scroll.setWidgetResizable(True)
+            scroll.setFrameShape(QFrame.Shape.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+            scroll.viewport().setAutoFillBackground(False)
+            scroll.setWidget(card)
+            SmoothScroller.attach(scroll)
+            self._detail_cards[plugin_id] = card
+            self._detail_scrolls[plugin_id] = scroll
+            self._details.addWidget(scroll)
+        if self._selected_id == plugin_id:
+            target = self._detail_scrolls[plugin_id]
+            if self._details.currentWidget() is not target:
+                anim.cross_fade(self._details, lambda: self._details.setCurrentWidget(target))
+
+    def showEvent(self, event) -> None:
+        """实际显示时补建选中详情，已缓存视图继续保留原控件和输入状态。"""
+        super().showEvent(event)
+        self._select_plugin(self._selected_id)
+
+    def _set_filter(self, value):
+        """保存插件启用状态筛选条件，并立即更新列表可见性。"""
+        self._filter = value
+        self._filter_rows()
