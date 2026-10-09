@@ -154,3 +154,239 @@ class _PluginEntry(QPushButton):
                 self._record.name, Qt.TextElideMode.ElideRight, max(0, self._name.contentsRect().width())
             )
         )
+
+    def eventFilter(self, watched, event):
+        """名称标签尺寸或字体变化时重新计算省略文本，兼顾子布局延后分配的几何。"""
+        # 子布局可能晚于行尺寸事件分配几何。
+        if event.type() in (QEvent.Type.Resize, QEvent.Type.FontChange) and hasattr(self, "_record"):
+            self._elide()
+        return super().eventFilter(watched, event)
+
+
+class PluginCard(QFrame):
+    """持续保留插件详情、设置和活动控件。"""
+
+    def __init__(self, page: PluginsPage, rec: PluginRecord, parent=None) -> None:
+        """捕获插件运行时身份和状态，构建详情控件并登记需要随主题调整的标签与设置行。"""
+        super().__init__(parent)
+        self._page = page
+        self._rec = rec
+        # 插件记录可变，构造时保存对应运行时身份。
+        self._context = rec.context
+        self._instance = rec.instance
+        self._state = rec.state
+        self._error = rec.error
+        self._themed_labels: list[tuple[QLabel, str, str]] = []
+        self._setting_rows = []
+        self._settings_form = None
+        self.setObjectName("pluginCard")
+        # 详情面板使用样式背景；背景图模式下采用半透明表面，否则使用不透明卡片色。
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._build()
+        self.retheme()
+
+    def matches_record(self, rec) -> bool:
+        """同时核对记录对象、上下文、实例及运行状态，判断现有详情卡是否仍可复用。"""
+        return (
+            self._rec is rec
+            and self._context is rec.context
+            and self._instance is rec.instance
+            and self._state == rec.state
+            and self._error == rec.error
+        )
+
+    def _style_label(self, label: QLabel, token: str, extra: str) -> None:
+        """将标签设为纯文本并登记颜色令牌及附加样式，供主题变化时统一重绘。"""
+        self._themed_labels.append((label, token, extra))
+        label.setTextFormat(Qt.TextFormat.PlainText)
+        label.setStyleSheet(f"background: transparent; color: {theme.color(token)}; {extra}")
+
+    def retheme(self) -> None:
+        """更新宿主样式，不重新创建插件视图或设置控件。"""
+        self.setStyleSheet(f"""
+            QFrame#pluginCard {{ background-color: {settings_style.surface(over="nav")}; border: none; }}
+            QFrame#pluginSection {{ background: transparent; border: 1px solid {settings_style.stroke()};
+                border-radius: 8px; }}
+            QPushButton#pluginPermissions {{ background: transparent; border: none;
+                border-top: 1px solid {settings_style.stroke()}; border-radius: 0;
+                padding: 14px 0; text-align: left; color: {settings_style.color("secondary")}; font-size: 13px; }}
+            QLabel#pluginPermissionChip {{ background: {settings_style.surface("soft", over="panel")};
+                border: 1px solid {settings_style.stroke()}; border-radius: 4px; padding: 3px 8px;
+                color: {settings_style.color("secondary")}; font-size: 12px; }}
+        """)
+        for label, token, extra in self._themed_labels:
+            label.setStyleSheet(f"background: transparent; color: {theme.color(token)}; {extra}")
+        self._toggle.blockSignals(True)
+        self._toggle.setChecked(self._rec.enabled and self._rec.trusted)
+        self._toggle.blockSignals(False)
+        self._toggle.update()
+        icons.retheme_icons(self)
+        if self._settings_form is not None:
+            self._settings_form.retheme()
+
+    def _build(self) -> None:
+        """构建插件身份、状态、启用开关、操作、设置与视图，并提供可展开的权限和来源说明。"""
+        mf = self._rec.manifest
+        root = QVBoxLayout(self)
+        root.setContentsMargins(24, 24, 24, 24)
+        root.setSpacing(16)
+
+        # 头部：名称 + 版本 + 状态 + 开关
+        head = QHBoxLayout()
+        symbol = QLabel()
+        symbol.setFixedSize(44, 44)
+        symbol.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        symbol.setStyleSheet("background: transparent;")
+        icons.apply_pixmap(symbol, "navigation/plugins", 32, "settings.accent")
+        head.addWidget(symbol, 0, Qt.AlignmentFlag.AlignTop)
+        identity = QVBoxLayout()
+        identity.setSpacing(5)
+        name = QLabel(self._rec.name)
+        name.setWordWrap(True)
+        name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self._style_label(name, "text.primary", "font-weight: 600; font-size: 19px;")
+        identity.addWidget(name)
+
+        byline = QHBoxLayout()
+        ver = QLabel(f"v{mf.version}")
+        self._style_label(ver, "text.tertiary", f"font-size: {theme.font('size_secondary')}px;")
+        byline.addWidget(ver)
+
+        byline.addStretch()
+        identity.addLayout(byline)
+        head.addLayout(identity, 1)
+
+        txt, tok = _STATE_TEXT.get(self._rec.state.value, (self._rec.state.value, "text.secondary"))
+        self._state_lbl = QLabel(tr(txt))
+        self._style_label(self._state_lbl, tok, f"font-size: {theme.font('size_secondary')}px;")
+        head.addWidget(self._state_lbl)
+
+        self._toggle = ToggleSwitch()
+        self._toggle.setAccessibleName(tr("启用 {name}", name=self._rec.name))
+        self._toggle.blockSignals(True)
+        self._toggle.setChecked(self._rec.enabled and self._rec.trusted)
+        self._toggle.blockSignals(False)
+        self._toggle.toggled.connect(self._on_toggled)
+        head.addWidget(self._toggle)
+        root.addLayout(head)
+
+        # 作者 + 描述
+        author = QLabel(mf.author)
+        self._style_label(author, "text.tertiary", "font-size: 13px;")
+        root.addWidget(author)
+        meta = QLabel(self._rec.description)
+        meta.setWordWrap(True)
+        self._style_label(meta, "text.secondary", f"font-size: {theme.font('size_secondary')}px;")
+        root.addWidget(meta)
+
+        # 错误
+        if self._rec.error:
+            err = QLabel("⚠ " + self._rec.error)
+            err.setWordWrap(True)
+            self._style_label(err, "danger", f"font-size: {theme.font('size_secondary')}px;")
+            root.addWidget(err)
+
+        # 操作行
+        actions = QHBoxLayout()
+        reload_btn = _action_button(tr("重载"), "actions/refresh")
+        reload_btn.setMinimumWidth(88)
+        reload_btn.clicked.connect(lambda: self._page._reload(self._rec.id))
+        actions.addWidget(reload_btn)
+        uninstall_btn = _action_button(tr("卸载"), "actions/remove")
+        uninstall_btn.setMinimumWidth(88)
+        uninstall_btn.clicked.connect(lambda: self._page._uninstall(self._rec))
+        actions.addWidget(uninstall_btn)
+        actions.addStretch()
+        root.addLayout(actions)
+
+        self._build_settings(root)
+        self._build_views(root)
+        if self._rec.state.value != "active":
+            note = QLabel(
+                tr("插件已就绪，首次使用命令或视图时自动启动。")
+                if self._rec.state.value == "ready"
+                else tr("启用并满足依赖后可使用插件设置与功能。")
+            )
+            note.setWordWrap(True)
+            self._style_label(note, "text.secondary", "font-size: 13px; padding: 16px 0;")
+            root.addWidget(note)
+
+        permissions = _action_button(
+            tr("权限与来源 · {count} 项权限", count=len(mf.permissions)), "actions/chevron-down"
+        )
+        permissions.setObjectName("pluginPermissions")
+        permissions.setCheckable(True)
+        self._permissions = permissions
+        root.addWidget(permissions)
+        details = _plain_widget()
+        permission_layout = QVBoxLayout(details)
+        permission_layout.setContentsMargins(0, 0, 0, 0)
+        permission_layout.setSpacing(11)
+        if mf.permissions:
+            chips = _plain_widget()
+            flow = TagFlowLayout(chips, spacing=7)
+            for permission in mf.permissions:
+                chip = QLabel(_permission_label(permission))
+                chip.setObjectName("pluginPermissionChip")
+                chip.setTextFormat(Qt.TextFormat.PlainText)
+                chip.setToolTip(permission)
+                flow.addWidget(chip)
+            permission_layout.addWidget(chips)
+        else:
+            no_permissions = QLabel(tr("此插件未申请额外权限。"))
+            no_permissions.setWordWrap(True)
+            self._style_label(no_permissions, "text.secondary", "font-size: 13px;")
+            permission_layout.addWidget(no_permissions)
+        source = QLabel(tr("插件目录：{path}", path=mf.directory))
+        source.setObjectName("pluginSource")
+        source.setWordWrap(True)
+        source.setToolTip(str(mf.directory))
+        source.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._style_label(source, "text.tertiary", "font-size: 12px;")
+        permission_layout.addWidget(source)
+        diagnostics = tr("API：{api}", api=mf.api_version)
+        if mf.dependencies:
+            diagnostics += "\n" + tr(
+                "依赖：{dependencies}",
+                dependencies=", ".join(f"{pid} {constraint}" for pid, constraint in mf.dependencies.items()),
+            )
+        if self._rec.activation_reason:
+            diagnostics += "\n" + tr(
+                "激活原因：{reason}；加载 {load_ms:.1f} ms，激活 {activate_ms:.1f} ms",
+                reason=self._rec.activation_reason,
+                load_ms=self._rec.load_duration_ms,
+                activate_ms=self._rec.activation_duration_ms,
+            )
+        runtime_info = QLabel(diagnostics)
+        runtime_info.setWordWrap(True)
+        runtime_info.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self._style_label(runtime_info, "text.secondary", "font-size: 12px;")
+        permission_layout.addWidget(runtime_info)
+        details.hide()
+        permissions.toggled.connect(details.setVisible)
+        permissions.toggled.connect(
+            lambda opened: icons.apply_icon(permissions, "actions/chevron-up" if opened else "actions/chevron-down")
+        )
+        root.addWidget(details)
+        root.addStretch(1)
+
+    def _section(self, root, title, icon):
+        """向详情卡追加带图标和标题的面板，返回供调用方填充内容的布局。"""
+        panel = QFrame()
+        panel.setObjectName("pluginSection")
+        panel.setAttribute(Qt.WidgetAttribute.WA_StyledBackground)
+        layout = QVBoxLayout(panel)
+        layout.setContentsMargins(17, 14, 17, 17)
+        layout.setSpacing(16)
+        head = QHBoxLayout()
+        symbol = QLabel()
+        symbol.setFixedSize(20, 20)
+        symbol.setStyleSheet("background: transparent;")
+        icons.apply_pixmap(symbol, icon, 19, "text.secondary")
+        head.addWidget(symbol)
+        text = QLabel(title)
+        self._style_label(text, "text.primary", "font-size: 15px; font-weight: 600;")
+        head.addWidget(text, 1)
+        layout.addLayout(head)
+        root.addWidget(panel)
+        return layout
