@@ -767,3 +767,103 @@ class PluginsPage(QWidget):
         """保存插件启用状态筛选条件，并立即更新列表可见性。"""
         self._filter = value
         self._filter_rows()
+
+    def _matches_filter(self, record):
+        """结合受信启用状态与分词搜索判断记录是否匹配，搜索覆盖名称、作者、描述和标识。"""
+        enabled = bool(record.enabled and record.trusted)
+        if self._filter == "enabled" and not enabled or self._filter == "disabled" and enabled:
+            return False
+        mf = record.manifest
+        haystack = f"{mf.name} {mf.author} {mf.description} {mf.id} {record.name} {record.description}".casefold()
+        return all(term in haystack for term in self._search.text().casefold().split())
+
+    def _filter_rows(self, _query=None):
+        """按当前筛选条件更新列表行，并区分没有匹配项与尚未安装插件的空状态。"""
+        visible = 0
+        for pid, row in self._entries.items():
+            show = self._matches_filter(self._records[pid])
+            row.setVisible(show)
+            visible += show
+        self._list_empty.setVisible(not visible)
+        self._list_empty.setText(tr("没有匹配的插件") if self._records else tr("还没有安装插件"))
+
+    def resizeEvent(self, event):
+        """跨越窄屏阈值时切换列表与详情的横纵布局，并调整列表约束和说明可见性。"""
+        super().resizeEvent(event)
+        compact = self.width() < 800
+        if compact == self._compact:
+            return
+        self._compact = compact
+        self._splitter.setOrientation(Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal)
+        self._library.setMaximumWidth(16777215 if compact else 420)
+        self._library.setMaximumHeight(270 if compact else 16777215)
+        self._library_note.setVisible(not compact)
+        self._splitter.setSizes(
+            [250, max(300, self.height() - 250)] if compact else [300, max(300, self.width() - 300)]
+        )
+
+    def _reload(self, plugin_id: str) -> None:
+        """将指定插件的重载请求转交已绑定的管理器。"""
+        if self._manager:
+            self._manager.reload(plugin_id)
+
+    def _uninstall(self, rec) -> None:
+        """确认删除插件目录后请求卸载，未绑定管理器时忽略操作。"""
+        if self._manager is None:
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(tr("卸载插件？"))
+        box.setText(tr("将停用并删除插件「{name}」及其目录，此操作不可撤销。", name=rec.name))
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.No)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self._manager.uninstall(rec.id)
+
+    def _rescan(self) -> None:
+        """请求管理器重新扫描并加载插件目录中的插件记录。"""
+        if self._manager:
+            self._manager.load_all()
+
+    def _install_from_archive(self) -> None:
+        """选择受支持归档后交由管理器安装或更新，显示结果并刷新插件列表。"""
+        if self._manager is None:
+            return
+        from PySide6.QtWidgets import QFileDialog
+
+        path, _ = QFileDialog.getOpenFileName(self, tr("选择插件压缩包"), "", tr("插件压缩包 (*.zip *.7z *.rar)"))
+        if not path:
+            return
+        from src.plugins.runtime.installer import InstallError
+
+        try:
+            result = self._manager.install_archive(path)
+        except InstallError as e:
+            QMessageBox.warning(self, tr("安装失败"), tr("无法安装该插件：\n{e}", e=e))
+            return
+        except Exception as e:
+            QMessageBox.warning(self, tr("安装失败"), tr("安装出错：\n{e}", e=e))
+            return
+
+        verb = (
+            tr("更新（{previous_version}→{version}）", previous_version=result.previous_version, version=result.version)
+            if result.was_update
+            else tr("安装")
+        )
+        QMessageBox.information(
+            self, tr("安装成功"), tr("插件「{name}」{verb}成功。可在列表中管理启用状态。", name=result.name, verb=verb)
+        )
+        self.refresh()
+
+    def _open_dir(self) -> None:
+        """请求系统文件管理器打开插件目录，无法打开时显示目录路径。"""
+        path = str(get_plugins_dir())
+        try:
+            if sys.platform == "win32":
+                os.startfile(path)
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", path])
+            else:
+                subprocess.Popen(["xdg-open", path])
+        except Exception:
+            QMessageBox.information(self, tr("插件目录"), path)
