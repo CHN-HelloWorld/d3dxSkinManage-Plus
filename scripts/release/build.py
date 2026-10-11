@@ -340,3 +340,93 @@ def stage_plugins(product_dir: Path) -> Path:
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(PLUGINS / plugin_id / relative, target)
     return directory
+
+
+def _validate_documentation_output(directory: Path, product_dir: Path) -> None:
+    """删除文档产物前确认目标位于指定输出目录内，且不与仓库文档源码重叠。"""
+    target, product, source = directory.resolve(), product_dir.resolve(), (ROOT / "docs").resolve()
+    if (
+        target == product
+        or not target.is_relative_to(product)
+        or target.is_relative_to(source)
+        or source.is_relative_to(target)
+    ):
+        raise ValueError(f"教程输出目录无效：{directory}")
+
+
+def build_documentation() -> Path:
+    """在编译前从当前教程源码重新生成四份独立 HTML，禁止旧产物补齐缺失输出。"""
+    builder = ROOT / "scripts" / "tutorials" / "build.py"
+    if not builder.is_file():
+        raise FileNotFoundError(f"教程构建工具缺失：{builder}")
+    directory = PROJECT_BUILD / "tutorials"
+    _validate_documentation_output(directory, PROJECT_BUILD)
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    subprocess.run(
+        [sys.executable, "-X", "utf8", str(builder), "--output-dir", str(directory)],
+        cwd=str(ROOT),
+        check=True,
+    )
+    for name in SHIPPED_DOCUMENT_FILES:
+        if not (directory / name).is_file():
+            raise FileNotFoundError(f"教程构建产物缺失：{directory / name}")
+    return directory
+
+
+def stage_documentation(product_dir: Path, generated_dir: Path) -> Path:
+    """替换成品中的教程目录，仅复制四份已生成文档，排除源码、构建指南和草稿。"""
+    directory = product_dir / "docs"
+    _validate_documentation_output(directory, product_dir)
+    target, source = directory.resolve(), generated_dir.resolve()
+    if target.is_relative_to(source) or source.is_relative_to(target):
+        raise ValueError(f"教程成品目录与生成目录重叠：{directory}")
+    for name in SHIPPED_DOCUMENT_FILES:
+        if not (generated_dir / name).is_file():
+            raise FileNotFoundError(f"教程构建产物缺失：{generated_dir / name}")
+    if directory.exists():
+        shutil.rmtree(directory)
+    directory.mkdir(parents=True)
+    for name in SHIPPED_DOCUMENT_FILES:
+        shutil.copy2(generated_dir / name, directory / name)
+    return directory
+
+
+def stage_legal_notices(product_dir: Path) -> tuple[Path, ...]:
+    """复制项目声明，并收集运行依赖和 Python 运行时的许可原文。"""
+    from scripts.release.release_licenses import stage_runtime_licenses
+
+    product_dir.mkdir(parents=True, exist_ok=True)
+    targets = []
+    for name in LEGAL_NOTICES:
+        target = product_dir / name
+        shutil.copy2(ROOT / name, target)
+        targets.append(target)
+    targets.append(stage_runtime_licenses(product_dir, APP_NAME, ROOT / "resources" / "licenses"))
+    return tuple(targets)
+
+
+def _is_release_file(relative: Path) -> bool:
+    """判断相对路径是否应进入发行包，过滤运行产物并限定更新器目录只包含目标可执行文件。"""
+    if relative.parts[0].casefold() == "docs":
+        return (Path("docs") / Path(*relative.parts[1:])).as_posix() in DOCUMENT_ARCHIVE_PATHS
+    if relative.parts[0].casefold() == UPDATER_SUBDIR.casefold():
+        return relative.as_posix().casefold() == f"{UPDATER_SUBDIR}/{UPDATER_EXE_NAME}".casefold()
+    return relative.suffix.lower() not in (".log", ".stackdump") and (
+        relative.parts[0] not in RUNTIME_ARTIFACTS
+        or relative.as_posix() in LANGUAGE_ARCHIVE_PATHS
+        or relative.as_posix() in PLUGIN_ARCHIVE_PATHS
+    )
+
+
+def release_files(entries: list[tuple[Path, str]]):
+    """枚举实际纳入发行包的文件。"""
+    for source, prefix in entries:
+        candidates = sorted(source.rglob("*")) if source.is_dir() else [source]
+        for path in candidates:
+            if not path.is_file():
+                continue
+            relative = Path(prefix) / (path.relative_to(source) if source.is_dir() else path.name)
+            if _is_release_file(relative):
+                yield path, relative
