@@ -544,3 +544,76 @@ class RebuildSession:
             self.sync_work.run()
             self.finish()
         return self.report
+
+    def finish(self):
+        """提交后的工作线程结束后，由所有者发出通知。"""
+        self._end_sync_busy()
+        if not self._notified:
+            self._notified = True
+            self.mm._emit("index_rebuilt", game_id=self.gid)
+
+    def _end_sync_busy(self):
+        """结束重建后的同步修改占用，并在锁内更新资料库版本和活动计数。"""
+        if self._sync_busy:
+            with self.mm._library_epoch_lock:
+                self.mm._library_epoch += 1
+                self.mm._library_mutations -= 1
+            self._sync_busy = False
+
+    def _assert_version(self):
+        # 逐对象基线比较保护新事件；切换到其他游戏时终止当前重建会话。
+        """确认当前游戏与会话开始时一致，切换游戏时拒绝继续发布。"""
+        if self.mm.current_game_id != self._initial_active_game:
+            raise RuntimeError("Active game changed during rebuild")
+
+    def _publish(self):
+        """附加暂存数据库，在主索引事务中发布重建投影，并保证解除附加及修改计数。"""
+        db = self.mm._index._db()
+        db.execute("ATTACH DATABASE ? AS rebuild_stage", (str(self.stage_path),))
+        mutation_started = False
+        try:
+            with self.mm._index.transaction():
+                # 获取写锁后再次检查，覆盖初次检查与锁获取之间的并发变化。
+                self._assert_version()
+                self._check_pending()
+                with self.mm._library_epoch_lock:
+                    self.mm._library_epoch += 1
+                    self.mm._library_mutations += 1
+                mutation_started = True
+                self.published_ids = publish_rebuild_projection(db, self.gid)
+
+        finally:
+            try:
+                db.execute("DETACH DATABASE rebuild_stage")
+            finally:
+                if mutation_started:
+                    with self.mm._library_epoch_lock:
+                        self.mm._library_epoch += 1
+                        self.mm._library_mutations -= 1
+
+    def close(self):
+        """结束同步占用并关闭暂存资源；未发布时仅恢复仍与本次写入一致的修复标记。"""
+        try:
+            self._end_sync_busy()
+            if not self._published:
+                for marker, original, written in reversed(self._repaired_markers):
+                    try:
+                        current = marker.read_bytes()
+                    except FileNotFoundError:
+                        continue
+                    if current == written:
+                        ModIntakeService._restore_marker(marker.parent, original)
+        finally:
+            try:
+                if self.stage is not None:
+                    self.stage._conn.close()
+                    self.stage = None
+            finally:
+                try:
+                    if self._temp is not None:
+                        self._temp.cleanup()
+                        self._temp = None
+                finally:
+                    if getattr(self.mm, "_active_rebuild_session", None) is self:
+                        self.mm._release_rebuild_inflight_ids()
+                        self.mm._active_rebuild_session = None
