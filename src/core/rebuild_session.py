@@ -349,3 +349,198 @@ class RebuildSession:
         self.locations = scan_deployment_identities(self.roots)
         self.check_cancel()
         progress(N_("准备暂存索引"), 0, 0)
+
+    def validate(self, progress=lambda phase, done, total: None):
+        """暂存完成后在工作线程重新核对文件输入。"""
+        changed = set()
+        for i, item in enumerate(self.enriched):
+            self.check_cancel()
+            try:
+                matches = (
+                    read_source_mod_id(item["path"]) == item["mod_id"]
+                    and capture_source_version(item["path"]) == item["source_version"]
+                    and _description(item["path"]) == item.get("sidecar")
+                )
+            except (OSError, IdentityConflict):
+                matches = False
+            if not matches:
+                changed.add(item["mod_id"])
+            progress(N_("提交前校验"), i + 1, len(self.enriched))
+        latest_locations = scan_deployment_identities(self.roots)
+        changed.update(
+            identity
+            for identity in set(latest_locations) | set(self.locations)
+            if latest_locations.get(identity) != self.locations.get(identity)
+        )
+        self.check_cancel()
+        # 所有者暂存已完成，工作线程只访问独立连接。
+        stage = sqlite3.connect(self.stage_path)
+        register_connection(stage)
+        try:
+            with stage:
+                stage.executemany(
+                    "DELETE FROM rebuild_candidates WHERE mod_id=?", ((identity,) for identity in changed)
+                )
+                columns = [row[1] for row in stage.execute("PRAGMA table_info(mods)")]
+                same = " AND ".join(f's."{c}" IS b."{c}"' for c in columns)
+                stage.execute(f"""DELETE FROM rebuild_candidates WHERE mod_id IN (
+                    SELECT s.mod_id FROM mods s JOIN rebuild_baseline_mods b ON b.mod_id=s.mod_id
+                    LEFT JOIN deployment_records d ON d.mod_id=s.mod_id
+                    LEFT JOIN rebuild_baseline_deployment_records old ON old.mod_id=s.mod_id
+                    WHERE {same} AND d.state IS old.state AND d.actual_path IS old.actual_path)""")
+        finally:
+            stage.close()
+
+    def _prepare_stage(self):
+        """采集独立基线，重建不清除持久关系。"""
+
+        self.check_cancel()
+        self._temp = tempfile.TemporaryDirectory(prefix="d3dx-rebuild-")
+        self.stage_path = Path(self._temp.name) / "stage.db"
+        source = sqlite3.connect(self._source_db_path.as_uri() + "?mode=ro", uri=True)
+        try:
+            target = sqlite3.connect(self.stage_path)
+            try:
+                source.backup(target, pages=128, progress=lambda *args: self.check_cancel())
+                self.check_cancel()
+                register_connection(target)
+                target.set_progress_handler(lambda: int(self.cancel.is_set()), 1000)
+                with target:
+                    for table in ("mods", "deployment_records", "nodes"):
+                        target.execute(f"CREATE TABLE rebuild_baseline_{table} AS SELECT * FROM {table}")
+                    target.execute("CREATE UNIQUE INDEX rebuild_baseline_mod_id ON rebuild_baseline_mods(mod_id)")
+                    target.execute(
+                        "CREATE UNIQUE INDEX rebuild_baseline_deployment_id ON "
+                        "rebuild_baseline_deployment_records(mod_id)"
+                    )
+                    target.execute("CREATE TABLE rebuild_candidates (mod_id TEXT PRIMARY KEY)")
+                self.check_cancel()
+            finally:
+                target.close()
+        except sqlite3.Error:
+            self.check_cancel()
+            raise
+        finally:
+            source.close()
+        self._stage_ready = True
+
+    def _open_stage(self):
+        """在暂存数据库准备完成后建立独立连接与路径服务，生成仅用于暂存写入的代理。"""
+        if not self._stage_ready:
+            raise RuntimeError(tr("重建暂存数据库尚未准备完成"))
+        self.stage = copy.copy(self.mm._index)
+        self.stage._conn = sqlite3.connect(self.stage_path)
+        self.stage._conn.row_factory = sqlite3.Row
+        self.stage.game_id = self.gid
+        self.stage._library_rows_cache = None
+        register_connection(self.stage._conn)
+        from src.core.library_paths import LibraryPaths
+
+        self.stage.paths = LibraryPaths(
+            self.stage._conn, self.mm._index.paths.roots, self.mm._index.paths.preview_roots
+        )
+        self.proxy = SimpleNamespace(_index=self.stage, _storage=self.mm._storage, current_game_id=self.gid)
+
+    def stage_batch(self, size=32):
+        """在短事务内批量写入重建成员及部署投影，更新统计并按数量或时间预算让出执行。"""
+        self.check_cancel()
+        if self.stage is None:
+            self._open_stage()
+        start = time.monotonic()
+        with self.stage.transaction():
+            for item in self.enriched[self.position : self.position + size]:
+                self.check_cancel()
+                identity = item["mod_id"]
+                sc = item.get("sidecar") or {}
+                location = self.locations.get(identity)
+                node_id = item.get("node_id", "")
+                mod = Mod(
+                    mod_id=identity,
+                    game_id=self.gid,
+                    name=sc.get("name") or item["folder_name"],
+                    folder_name=item["folder_name"],
+                    path=item["path"],
+                    content_hash=item["content_hash"],
+                    node_id=node_id,
+                    preview_images=self.mm._order_previews(item.get("preview_images", []), sc),
+                    imported_at=item["imported_at"],
+                )
+                self.mm._apply_sidecar_info(mod, sc)
+                mod.preview_images = restore_preview_references(
+                    sc,
+                    mod.preview_images,
+                    container=Path(mod.path).parent,
+                    preview_cache=Path(self.stage.paths.preview_roots[self.gid]) / identity,
+                    node=self.stage.paths.node_path(node_id) if node_id else None,
+                )
+                if self.stage.get_mod(identity) is None:
+                    if not self.stage.add_mod(mod, commit=False):
+                        raise RuntimeError(f"Rebuild staging insert failed: {mod.name}")
+                else:
+                    if not self.stage.update_mod(mod, commit=False):
+                        raise RuntimeError(f"Rebuild staging update failed: {mod.name}")
+                self.stage.upsert_deployment(
+                    DeploymentRecord(
+                        mod_id=identity,
+                        state=DeploymentState.ACTIVE
+                        if location and location.active
+                        else DeploymentState.DISABLED
+                        if location
+                        else DeploymentState.ABSENT,
+                        actual_path=str(location.path) if location else "",
+                    ),
+                    commit=False,
+                )
+                self.stage._db().execute("INSERT OR IGNORE INTO rebuild_candidates VALUES (?)", (identity,))
+                self.report.registered += 1
+                self.report.classified += bool(node_id)
+                self.report.unclassified += not bool(node_id)
+                self.position += 1
+                if time.monotonic() - start >= 0.008:
+                    break
+        return self.position == len(self.enriched)
+
+    def commit(self, *, defer_sync=False):
+        """核对重建完成状态后发布索引，刷新预设引用并组织活动成员的 INI 同步恢复。
+
+        可将同步工作交给调用方延后执行；发布完成后返回包含无效元数据的重建报告。"""
+        self.check_cancel()
+        self._check_pending()
+        if self.mm.library_probe_busy():
+            raise RuntimeError(tr("文件库操作正在进行，原索引已保留"))
+        self._assert_version()
+        if self.position != len(self.enriched) or self.stage is None:
+            raise RuntimeError(tr("重建暂存尚未完成"))
+        self._publish()
+        self._published = True
+        self.mm._preset_manager.refresh_references(self.gid, self.published_ids)
+        self.report.invalid_metadata.extend(self.invalid)
+        self.sync_work = _SyncRestore(None, None, (), self.root, self.deploy_root)
+        if self.gid == self.mm.current_game_id:
+            from src.core.ini_sync import IniSyncManager
+
+            entries = []
+            for identity in self.published_ids:
+                mod = self.mm._index.get_mod(identity)
+                record = self.mm._index.get_deployment(identity)
+                if mod is not None and record is not None and record.state == DeploymentState.ACTIVE:
+                    entries.append((identity, mod.path, record.actual_path))
+                elif self.mm._ini_sync is not None:
+                    self.mm._ini_sync.unregister_mod(identity)
+                    self.mm._ini_sync_refs.pop(identity, None)
+            sync = self.mm._ini_sync
+            if sync is None and entries:
+                sync = IniSyncManager()
+                sync.on_synced = self.mm._on_deployment_ini_synced
+                self.mm._ini_sync = sync
+            for identity, _, _ in entries:
+                self.mm._ini_sync_refs[identity] = (identity,)
+            self.sync_work = _SyncRestore(None, sync, entries, self.root, self.deploy_root)
+            with self.mm._library_epoch_lock:
+                self.mm._library_epoch += 1
+                self.mm._library_mutations += 1
+            self._sync_busy = True
+        if not defer_sync:
+            self.sync_work.run()
+            self.finish()
+        return self.report
