@@ -938,3 +938,99 @@ class AboutPage(QWidget):
         self._story_card.hide()
         self._story_player.start()
         call_later(0, self, self._reveal_story)
+
+    def _reveal_story(self) -> None:
+        """滚动关于页以显示仍存在的内联故事播放器。"""
+        if self._story_player is not None:
+            self._scroll.ensureWidgetVisible(self._story_player, 0, 20)
+
+    def _close_story(self) -> None:
+        """释放媒体资源并恢复故事卡片，先转移播放器焦点再隐藏和延后销毁控件。"""
+        player, self._story_player = self._story_player, None
+        if player is None:
+            return
+        focus = QApplication.focusWidget()
+        restore_focus = self.isVisible() and focus is not None and (focus is player or player.isAncestorOf(focus))
+        player.release_media()
+        self._story_card.reload()
+        self._story_card.show()
+        # 先转移播放器焦点再隐藏，避免导航列表自动选中首项并离开关于页。
+        if restore_focus:
+            self._story_card.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._story_layout.removeWidget(player)
+        player.hide()
+        player.deleteLater()
+
+    def hideEvent(self, event) -> None:
+        """离开关于页时关闭故事播放器，呈现方式切换中的临时隐藏除外。"""
+        if self._story_player is not None and not self._story_player.changing_presentation:
+            self._close_story()
+        super().hideEvent(event)
+
+    def showEvent(self, event) -> None:
+        """页面显示时重新读取故事卡片配置，反映最新媒体资源。"""
+        self._story_card.reload()
+        super().showEvent(event)
+
+    def retheme(self) -> None:
+        """主题切换后整页按新调色板重建（内容静态、成本低）。"""
+        self._close_story()
+        self._build()
+        self.update()
+
+    def play_intro(self) -> None:
+        """进场动画：各区块交错淡入 + 时间线拖动提示回弹。"""
+        anim.stagger_reveal(list(self._reveal_targets), step=70)
+        call_later(140, self, self._timeline_bounce)
+
+    def _timeline_bounce(self) -> None:
+        """时间线可水平滚动且动画已启用时短暂往返移动，提示可滚动方向。"""
+        area = self._timeline_area
+        if area is None or not anim.is_enabled():
+            return
+        bar = area.horizontalScrollBar()
+        if bar.maximum() <= 0:
+            return
+        nudge = min(64, bar.maximum())
+        a = QPropertyAnimation(bar, b"value", self)
+        a.setDuration(720)
+        a.setKeyValueAt(0.0, 0)
+        a.setKeyValueAt(0.5, nudge)
+        a.setKeyValueAt(1.0, 0)
+        a.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        a.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._bounce_anim = a  # 保活
+
+    # 通用
+    def _kicker(self, text: str, gold: bool = False) -> QWidget:
+        """创建由短线和强调色文字组成的分区引导标题。"""
+        col = _gold() if gold else _accent()
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        line = QFrame()
+        line.setFixedSize(22, 2)
+        line.setStyleSheet(f"background: {col}; border: none; border-radius: 1px;")
+        lay.addWidget(line)
+        lbl = _label(text.upper(), 12.5, "accent", weight=QFont.Weight.Bold)
+        lbl.setStyleSheet(f"color: {col}; background: transparent; {_font_css(12.5, QFont.Weight.Bold)}")
+        lf = lbl.font()
+        lf.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 1.5)
+        lbl.setFont(lf)
+        lay.addWidget(lbl)
+        lay.addStretch(1)
+        return w
+
+    def _section_head(self, kicker: str, title: str, sub: str, gold: bool = False) -> QWidget:
+        """组合分区引导标题、主标题和可换行的说明文字。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(8)
+        lay.addWidget(self._kicker(kicker, gold))
+        lay.addWidget(_label(title, 26, "text.primary", weight=QFont.Weight.Bold))
+        lay.addWidget(_label(sub, 14.5, "text.tertiary", wrap=True, max_w=720))
+        return w
