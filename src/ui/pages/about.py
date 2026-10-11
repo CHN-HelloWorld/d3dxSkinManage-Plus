@@ -385,3 +385,129 @@ class _HoverCard(QFrame):
     def _lift_offset(self) -> int:
         """按当前悬停进度计算上浮像素数，未启用上浮时返回零。"""
         return round(3 * self._t) if self._lift else 0
+
+    def _apply_lift(self) -> None:
+        """把卡片移到「基准位 − 当前上浮量」。带防递归（move 会再触发 moveEvent）。"""
+        if self._home_y is None:
+            return
+        target = self._home_y - self._lift_offset()
+        if self.y() != target:
+            self._reapplying = True
+            try:
+                self.move(self.x(), target)
+            except RuntimeError:
+                pass
+            self._reapplying = False
+
+    def _set_t(self, v: float) -> None:
+        """限制并应用悬停过渡进度，重绘描边并同步可选上浮位移。"""
+        self._t = max(0.0, min(1.0, v))
+        self.update()  # 重绘插值描边（仅 paintEvent，不 setStyleSheet、不触发布局）
+        if self._lift:
+            self._apply_lift()
+
+    def moveEvent(self, event) -> None:
+        """父布局调整卡片位置后，立即恢复悬停上浮偏移。
+
+        上浮通过 ``move`` 实现，父布局重排会将卡片恢复到布局位置。悬停状态下将该位置
+        作为新基准，并在同一事件内重新应用偏移，避免布局调整与动画交替改变位置。
+        """
+        super().moveEvent(event)
+        if self._reapplying or not self._lift or self._t <= 0.0 or self._home_y is None:
+            return
+        if self.y() != self._home_y - self._lift_offset():
+            self._home_y = self.y()  # 布局给的即未上浮基准
+            self._apply_lift()
+
+    hoverT = Property(float, fget=_get_t, fset=_set_t)
+
+    def _animate_t(self, target: float) -> None:
+        """停止未结束的悬停过渡再动画至目标进度，禁用动画时直接应用。"""
+        if not anim.is_enabled():
+            self._set_t(target)
+            return
+        # 停掉上一条未完成的过渡，避免快速反复进出时两条动画同写 hoverT/位置而抖动。
+        if self._t_anim is not None:
+            try:
+                self._t_anim.stop()
+            except RuntimeError:
+                pass
+        a = QPropertyAnimation(self, b"hoverT", self)
+        a.setDuration(anim.DURATION["slow"])
+        a.setStartValue(self._t)
+        a.setEndValue(target)
+        a.setEasingCurve(QEasingCurve.Type.InOutCubic)
+        a.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._t_anim = a
+
+    def enterEvent(self, event) -> None:
+        """进入卡片时按需记录上浮基线、启动悬停过渡，并通知回调。"""
+        if self._interactive:
+            if self._lift:
+                # 由「当前位置 + 已上浮量」反推布局真实基准：静止时即布局位，半途进出时还原不跳变。
+                self._home_y = self.y() + round(3 * self._t)
+            self._animate_t(1.0)
+        if self._on_hover:
+            self._on_hover(True)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """离开卡片时启动恢复过渡，并通知悬停回调。"""
+        if self._interactive:
+            self._animate_t(0.0)
+        if self._on_hover:
+            self._on_hover(False)
+        super().leaveEvent(event)
+
+
+class _FadeButton(QPushButton):
+    """通过悬停属性动画平滑更新链接按钮的背景、描边、文本和图标颜色。"""
+
+    def __init__(
+        self,
+        text: str,
+        url: str,
+        *,
+        bg0: QColor,
+        bg1: QColor,
+        br0: QColor,
+        br1: QColor,
+        fg0: QColor,
+        fg1: QColor,
+        icon_name: str = "brand/github",
+        icon_px: int = 15,
+        text_px: float = 13,
+    ) -> None:
+        """创建外部链接按钮，保存背景、描边与文字的颜色端点及图标配置。"""
+        super().__init__(text)
+        self._bg0, self._bg1 = bg0, bg1
+        self._br0, self._br1 = br0, br1
+        self._fg0, self._fg1 = fg0, fg1
+        self._icon_name = icon_name
+        self._icon_px = icon_px
+        self._t = 0.0
+        self._t_anim = None
+        self._text_px = text_px
+        self.setFont(_font(text_px, QFont.Weight.DemiBold))
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setIconSize(QSize(icon_px, icon_px))
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        self.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(url)))
+        self._apply()
+
+    def _apply(self) -> None:
+        """按当前过渡进度插值按钮背景、描边和文字颜色，并同步图标着色。"""
+        t = self._t
+        bg = _lerp_color(self._bg0, self._bg1, t)
+        br = _lerp_color(self._br0, self._br1, t)
+        fg = _lerp_color(self._fg0, self._fg1, t)
+        self.setStyleSheet(
+            f"QPushButton {{ color: {_qss_rgba(fg)}; background: {_qss_rgba(bg)};"
+            f" border: 1px solid {_qss_rgba(br)}; border-radius: 13px;"
+            f" padding: 5px 14px; text-align: left; {_font_css(self._text_px, QFont.Weight.DemiBold)} }}"
+        )
+        self.setIcon(QIcon(icons.colored_pixmap_from(self._icon_name, self._icon_px, fg.name())))
+
+    def _get_t(self) -> float:
+        """返回链接按钮当前的悬停颜色过渡进度。"""
+        return self._t
