@@ -137,3 +137,215 @@ class _SyncRestore:
                 # 索引已经提交，后续 INI 注册失败不改变发布结果。
                 logger.warning("重建后登记 INI 同步失败 (%s): %s", identity, error)
             progress(i + 1, len(self.entries))
+
+
+class RebuildSession:
+    """隔离索引重建的扫描、暂存、事务发布和同步恢复状态。"""
+
+    def __init__(self, manager, game_id):
+        """在锁内独占管理器的重建会话，初始化失败时撤销活动会话登记。"""
+        with manager._library_epoch_lock:
+            if getattr(manager, "_active_rebuild_session", None) is not None:
+                raise RuntimeError(tr("索引重建正在进行，请等待完成"))
+            manager._active_rebuild_session = self
+        try:
+            self._initialize(manager, game_id)
+        except BaseException:
+            manager._active_rebuild_session = None
+            raise
+
+    def _initialize(self, manager, game_id):
+        """采集游戏、分类、已索引身份和部署根，拒绝未完成事务或活动文件库操作。"""
+        from src.core.mod_manager import RebuildReport
+
+        self.mm, self.gid = manager, game_id
+        self._initial_active_game = manager.current_game_id
+        self.cancel = threading.Event()
+        self.invalid = []
+        self.enriched = []
+        self.position = 0
+        self.report = RebuildReport()
+        self._temp = None
+        self.stage = None
+        self._stage_ready = False
+        self._published = False
+        self._sync_busy = False
+        self._notified = False
+        self._repaired_markers = []
+        self._check_pending()
+        if manager.library_probe_busy():
+            raise RuntimeError(tr("文件库操作正在进行，请等待完成后重建"))
+        db = manager._index._db()
+        self._source_db_path = Path(manager._index._db_path)
+        if db.in_transaction:
+            raise RuntimeError(tr("索引事务尚未完成，暂不能重建"))
+        self.version = (db.total_changes, db.execute("PRAGMA data_version").fetchone()[0])
+        self.chars = copy.deepcopy(manager.get_characters(game_id))
+        self.root = manager._get_library_root(game_id)
+        self.paths = {c.id: manager._index.paths.node_path(c.id) for c in self.chars}
+        rows = db.execute("SELECT mod_id,game_id FROM mods").fetchall()
+        self.existing_ids = {r[0] for r in rows if r[1] == game_id}
+        self.owners = {r[0]: r[1] for r in rows}
+        self.registered_paths = {}
+        for identity in self.existing_ids:
+            body = manager._index.paths.body_path(identity)
+            self.registered_paths[str(body).casefold()] = identity
+            self.registered_paths[str(body.parent).casefold()] = identity
+        deployed = db.execute(
+            "SELECT d.actual_path FROM deployment_records d "
+            "JOIN mods m ON m.mod_id=d.mod_id "
+            "WHERE m.game_id=? AND d.actual_path<>?",
+            (game_id, ""),
+        ).fetchall()
+        self.roots = [Path(r[0]).parent for r in deployed]
+        game = manager._game_service.get_game(game_id)
+        root = (
+            manager._storage.get_deploy_dir()
+            if game_id == manager.current_game_id
+            else Path(game.mods_path)
+            if game and game.mods_path
+            else None
+        )
+        if root is not None:
+            self.roots.append(root)
+        self.deploy_root = root
+        self.resource_dir = manager._res_dir(game_id)
+        manager._release_rebuild_inflight_ids()
+        self.context_stamp = manager.library_probe_stamp
+
+    def _check_pending(self):
+        """检查游戏是否有未完成预设应用，存在时拒绝开始或发布重建。"""
+        if self.mm._preset_manager.has_pending_apply(self.gid):
+            raise RuntimeError(tr("预设事务尚未完成，暂不能重建索引"))
+
+    def check_cancel(self):
+        """检查取消事件并抛出中断异常，使调用方保留原索引。"""
+        if self.cancel.is_set():
+            raise InterruptedError(tr("重建已取消，原索引已保留"))
+
+    def prepare(self, progress=lambda phase, done, total: None):
+        """在工作线程准备，不访问活动索引连接。"""
+        from src.core.mod_manager import ModManager
+
+        self.check_cancel()
+
+        def characters(_gid):
+            """返回重建开始时冻结的分类集合，并在访问前检查取消。"""
+            self.check_cancel()
+            return self.chars
+
+        def character_path(cid, _gid, create=False):
+            """按冻结的分类编号返回源路径，访问前检查取消。"""
+            self.check_cancel()
+            return self.paths[cid]
+
+        adapter = SimpleNamespace(
+            current_game_id=self.gid,
+            get_characters=characters,
+            _get_character_library=character_path,
+            _get_library_root=lambda _gid: self.root,
+            _storage=SimpleNamespace(
+                scan_library_directory=lambda *args, **kwargs: ModStorage.scan_library_directory(None, *args, **kwargs)
+            ),
+        )
+        self.adapter = adapter
+        self._prepare_stage()
+        progress(N_("发现文件"), 0, 0)
+        descriptors = ModManager._discover_library_mods(
+            adapter, self.gid, invalid_metadata=self.invalid, cancel_cb=self.check_cancel
+        )
+        self.discovered_paths = {item["path"] for item in descriptors}
+        self.report.discovered_paths = []
+        managed = []
+        seen = set()
+        for i, item in enumerate(descriptors):
+            self.check_cancel()
+            container = Path(item["path"]).parent
+            marker = read_container_marker(container)
+            if marker is None:
+                if str(Path(item["path"])).casefold() in self.registered_paths:
+                    self.invalid.append(f"Registered source requires marker recovery: {item['path']}")
+                else:
+                    self.report.discovered_paths.append(item["path"])
+                continue
+            try:
+                os.lstat(fs.native_path(container / ".d3dxmeta" / "variants"))
+            except FileNotFoundError:
+                variants_present = False
+            except OSError as error:
+                # 无法确认存在性时保留原有身份凭据。
+                variants_present = True
+                self.invalid.append(
+                    tr("无法检查变体元数据，原文件已保留：{value}：{error}", value=item["path"], error=error)
+                )
+            else:
+                variants_present = True
+                try:
+                    ModVariantStore(item["path"]).list()
+                except (OSError, ValueError) as error:
+                    self.invalid.append(
+                        tr("变体元数据损坏，原文件已保留：{value}：{error}", value=item["path"], error=error)
+                    )
+            expected_parent = self.paths.get(item.get("node_id"), self.root)
+            if Path(item["path"]).parent.parent != expected_parent:
+                self.invalid.append(f"Source lies below an unregistered node: {item['path']}")
+                continue
+            identity_marker = marker
+            try:
+                validate_mod_id(marker.get("mod_id"))
+            except IdentityConflict:
+                indexed_identity = self.registered_paths.get(str(Path(item["path"])).casefold())
+                if indexed_identity:
+                    identity_marker = dict(marker, mod_id=indexed_identity)
+                elif variants_present:
+                    self.invalid.append(
+                        tr("含已保存变体的 Mod 身份无法确认，原文件及 ID 已保留：{value}", value=item["path"])
+                    )
+                    continue
+            identity, imported_at = intake_identity("rediscovery", identity_marker, used=set(self.owners) | seen)
+            if identity in seen or self.owners.get(identity, self.gid) != self.gid:
+                raise IdentityConflict(tr("重建遇到重复身份：{value}", value=item["path"]))
+            seen.add(identity)
+            item["mod_id"] = identity
+            item["imported_at"] = imported_at
+            if marker.get("mod_id") != identity or marker.get("imported_at") != imported_at:
+                marker_path = Path(item["path"]).parent / ".d3dxmod"
+                original = marker_path.read_bytes()
+                write_container_marker(
+                    Path(item["path"]).parent,
+                    Path(item["path"]).name,
+                    marker["content_hash"],
+                    mod_id=identity,
+                    imported_at=imported_at,
+                )
+                self._repaired_markers.append((marker_path, original, marker_path.read_bytes()))
+            item["sidecar"] = _description(item["path"])
+            managed.append(item)
+            if i % 32 == 0:
+                progress(N_("校验身份"), i, len(descriptors))
+        self.enriched = self.mm._hash_rebuild_descriptors(
+            managed,
+            progress_cb=lambda d, t: progress(N_("计算哈希"), d, t),
+            unreadable=self.invalid,
+            resource_dir=self.resource_dir,
+            cancel_cb=self.check_cancel,
+        )
+        for item in self.enriched:
+            self.check_cancel()
+            marker_path = Path(item["path"]).parent / ".d3dxmod"
+            marker = read_container_marker(marker_path.parent)
+            if marker["content_hash"] != item["content_hash"]:
+                original = marker_path.read_bytes()
+                write_container_marker(
+                    marker_path.parent,
+                    Path(item["path"]).name,
+                    item["content_hash"],
+                    mod_id=item["mod_id"],
+                    imported_at=item["imported_at"],
+                )
+                self._repaired_markers.append((marker_path, original, marker_path.read_bytes()))
+        self.check_cancel()
+        progress(N_("扫描部署"), 0, 0)
+        self.locations = scan_deployment_identities(self.roots)
+        self.check_cancel()
+        progress(N_("准备暂存索引"), 0, 0)
