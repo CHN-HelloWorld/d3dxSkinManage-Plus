@@ -511,3 +511,104 @@ class _FadeButton(QPushButton):
     def _get_t(self) -> float:
         """返回链接按钮当前的悬停颜色过渡进度。"""
         return self._t
+
+    def _set_t(self, v: float) -> None:
+        """保存属性动画传入的过渡进度，并重新应用按钮颜色。"""
+        self._t = v
+        self._apply()
+
+    hoverT = Property(float, fget=_get_t, fset=_set_t)
+
+    def _animate_to(self, target: float) -> None:
+        """将按钮悬停颜色过渡到目标进度，禁用动画时直接设置。"""
+        if not anim.is_enabled():
+            self._set_t(target)
+            return
+        a = QPropertyAnimation(self, b"hoverT", self)
+        a.setDuration(anim.DURATION["slow"])
+        a.setStartValue(self._t)
+        a.setEndValue(target)
+        a.setEasingCurve(QEasingCurve.Type.OutCubic)
+        a.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._t_anim = a
+
+    def enterEvent(self, event) -> None:
+        """鼠标进入链接按钮时过渡到悬停颜色。"""
+        self._animate_to(1.0)
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        """鼠标离开链接按钮时恢复静止颜色。"""
+        self._animate_to(0.0)
+        super().leaveEvent(event)
+
+
+class _GlowDot(QWidget):
+    """徽标中的强调色辉光点，通过多段渐变绘制中心和柔和外缘。"""
+
+    def __init__(self, color: str, d: int = 7) -> None:
+        """为发光状态点保存颜色和直径，并让鼠标事件穿透到所在控件。"""
+        super().__init__()
+        self._c = QColor(color)
+        self._d = d
+        self.setFixedSize(d + 14, d + 14)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def paintEvent(self, _event) -> None:
+        """绘制径向渐变光晕及中心实色圆点。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        c = QPointF(self.width() / 2, self.height() / 2)
+        r = self.width() / 2.0
+        glow = QRadialGradient(c, r)
+        g0 = QColor(self._c)
+        g0.setAlphaF(0.95)
+        gm = QColor(self._c)
+        gm.setAlphaF(0.45)
+        g1 = QColor(self._c)
+        g1.setAlphaF(0.0)
+        glow.setColorAt(0.0, g0)
+        glow.setColorAt(0.42, gm)
+        glow.setColorAt(1.0, g1)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(glow))
+        p.drawEllipse(c, r, r)
+        p.setBrush(self._c)
+        p.drawEllipse(c, self._d / 2.0, self._d / 2.0)
+        p.end()
+
+
+class _Connector(QFrame):
+    """连接里程碑卡片与时间线中轴的竖线。"""
+
+    def __init__(self, color: str) -> None:
+        """创建固定尺寸的竖向连接线，并使鼠标事件穿透到所在卡片。"""
+        super().__init__()
+        self.setFixedSize(2, 16)
+        self.setStyleSheet(f"background: {color}; border: none;")
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+
+class _AxisNode(QWidget):
+    """时间线中轴分段，包含水平线和节点；关联卡片悬停时放大节点。"""
+
+    HEIGHT = 40
+
+    def __init__(self, node_color: str, line_color: str) -> None:
+        """保存时间线节点和轴线颜色，初始化节点缩放状态与固定高度。"""
+        super().__init__()
+        self._node = QColor(node_color)
+        self._line = QColor(line_color)
+        self._scale = 1.0
+        self._scale_anim = None
+        self.setFixedHeight(self.HEIGHT)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def _get_scale(self) -> float:
+        """返回 Qt 属性动画读取的时间线节点缩放比例。"""
+        return self._scale
+
+    def _set_scale(self, v: float) -> None:
+        """更新节点缩放比例并请求重绘。"""
+        self._scale = v
+        self.update()
