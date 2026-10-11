@@ -1034,3 +1034,310 @@ class AboutPage(QWidget):
         lay.addWidget(_label(title, 26, "text.primary", weight=QFont.Weight.Bold))
         lay.addWidget(_label(sub, 14.5, "text.tertiary", wrap=True, max_w=720))
         return w
+
+    def _pill(self, text: str, gold: bool = False) -> QLabel:
+        """创建按文本宽度收缩的强调色标签，可选择金色配色。"""
+        col = _gold() if gold else _accent()
+        lbl = QLabel(text)
+        lbl.setFont(_font(11, QFont.Weight.Bold))
+        lbl.setStyleSheet(
+            f"color: {col}; background: {_rgba_hex(col, 0.14)};"
+            f" padding: 2px 8px; border-radius: 5px; {_font_css(11, QFont.Weight.Bold)}"
+        )
+        lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        return lbl
+
+    def _author_link(self, url: str) -> _FadeButton:
+        """作者链接按钮，悬停时平滑过渡背景和文字颜色。"""
+        g = _gold()
+        return _FadeButton(
+            "github.com/numlinka",
+            url,
+            bg0=_qc(g, 0.14),
+            bg1=_qc(g, 1.0),
+            br0=_qc(g, 0.35),
+            br1=_qc(g, 1.0),
+            fg0=_qc(theme.color("text.primary"), 1.0),
+            fg1=_qc("#2a1e00", 1.0),
+        )
+
+    def _person_link(self, url: str) -> _FadeButton:
+        """贡献者链接按钮，悬停时同步过渡描边、文字和图标颜色。"""
+        accent = _accent()
+        sub = theme.color("bg.subtle")
+        return _FadeButton(
+            "GitHub",
+            url,
+            bg0=_qc(sub, 1.0),
+            bg1=_qc(sub, 1.0),
+            br0=_qc(theme.color("stroke.control"), 1.0),
+            br1=_qc(accent, 1.0),
+            fg0=_qc(theme.color("text.secondary"), 1.0),
+            fg1=_qc(accent, 1.0),
+            text_px=12,
+        )
+
+    # 页面主介绍。
+    def _hero(self) -> QWidget:
+        """构建项目徽标、可缩放标题、简介与版本入口。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 8, 0, 0)
+        lay.setSpacing(16)
+
+        # 由辉光点和文字组成的徽标。
+        accent = _accent()
+        badge = QFrame()
+        badge.setObjectName("heroBadge")
+        badge.setStyleSheet(
+            f"QFrame#heroBadge {{ background: {_rgba_hex(accent, 0.14)};"
+            f" border: 1px solid {_rgba_hex(accent, 0.22)}; border-radius: 13px; }}"
+        )
+        badge.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        bl = QHBoxLayout(badge)
+        bl.setContentsMargins(12, 4, 15, 4)
+        bl.setSpacing(6)
+        bl.addWidget(_GlowDot(accent), alignment=Qt.AlignmentFlag.AlignVCenter)
+        bl.addWidget(_label(tr("关于本项目"), 13, "accent", weight=QFont.Weight.DemiBold))
+        lay.addWidget(badge, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        title = _HeroTitle("d3dxSkinManage-", "Plus", 52)
+        lay.addWidget(title)  # 铺满宽度、自绘居中（窄窗自适应缩放，不撑宽页面）
+
+        lead = _label(
+            tr("一款面向社区的现代化 Mod 管理工具 —— 站在前人对社区贡献的肩膀上，以全新的代码与设计重新出发。"),
+            17,
+            "text.secondary",
+            wrap=True,
+            max_w=620,
+            align=Qt.AlignmentFlag.AlignHCenter,
+        )
+        lead.setMinimumWidth(520)  # 居中换行标签给足宽度，避免被压窄成多行（高度由 _WrapLabel 保证不裁）
+        lay.addWidget(lead, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        lay.addWidget(self._hero_version(), alignment=Qt.AlignmentFlag.AlignHCenter)
+        return w
+
+    def _hero_version(self) -> QWidget:
+        """显示项目版本状态和创建日期。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QHBoxLayout(w)
+        lay.setContentsMargins(0, 6, 0, 0)
+        lay.setSpacing(10)
+        lay.addWidget(_label(tr("当前状态"), 13.5, "text.tertiary"))
+        code = QLabel(tr("开发中 · 未发布"))
+        code.setFont(_font(13))
+        code.setStyleSheet(
+            f"color: {theme.color('text.secondary')}; background: {theme.color('bg.subtle')};"
+            f" border: 1px solid {theme.color('stroke.control')};"
+            f" border-radius: 6px; padding: 3px 10px; {_font_css(13)}"
+        )
+        lay.addWidget(code)
+        lay.addWidget(_label("·", 13.5, "text.tertiary"))
+        lay.addWidget(_label(tr("立项 2026-03-09"), 13.5, "text.tertiary"))
+        return w
+
+    # 致谢内容。
+    def _tribute_section(self) -> QWidget:
+        """组合社区贡献致谢、作者信息和时间线展示区域。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(20)
+        lay.addWidget(
+            self._section_head(
+                tr("Tribute · 致敬"),
+                tr("向原 d3dxSkinManage 作者致敬"),
+                tr(
+                    "每一个繁荣的社区背后，都有一位最早点亮火种的人。本项目与原 "
+                    "d3dxSkinManage 没有任何代码或工程上的关联，但那份对社区的开创性贡献，"
+                    "值得被郑重记住。"
+                ),
+                gold=True,
+            )
+        )
+        lay.addWidget(self._tribute_banner())
+        lay.addWidget(self._author_card())
+        lay.addWidget(self._timeline())
+        return w
+
+    def _tribute_banner(self) -> QFrame:
+        """创建带金色渐变的致谢横幅，并展示项目独立性说明。"""
+        gold = _gold()
+        f = _HoverCard(left_accent=gold, tint=gold)
+        outer = QHBoxLayout(f)
+        outer.setContentsMargins(26, 22, 26, 22)
+        outer.setSpacing(18)
+
+        # 使用 SVG 火苗图标保持外观一致，并配以金色圆角背景。
+        seal = QLabel()
+        seal.setPixmap(icons.colored_pixmap_from("meta/spark", 28, gold))
+        seal.setFixedSize(56, 56)
+        seal.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        seal.setStyleSheet(
+            f"background: {_rgba_hex(gold, 0.12)}; border: 1px solid {_rgba_hex(gold, 0.30)}; border-radius: 14px;"
+        )
+        outer.addWidget(seal, alignment=Qt.AlignmentFlag.AlignTop)
+
+        col = QVBoxLayout()
+        col.setSpacing(10)
+        col.addWidget(_label(tr("开创者的火种"), 19, "text.primary", weight=QFont.Weight.Bold))
+        col.addWidget(
+            _label(
+                tr(
+                    "原 d3dxSkinManage 作者以一己之力，为社区构建了最初的 Mod 管理范式，"
+                    "降低了无数创作者与玩家的Mod管理门槛，"
+                    "让「换装/改模」这件事第一次变得触手可及。这种从 0 到 1 的开创，"
+                    "是后来所有同类工具共同的精神起点。"
+                ),
+                14.5,
+                "text.secondary",
+                wrap=True,
+            )
+        )
+        disclaim = _label(
+            tr(
+                "※ 声明：d3dxSkinManage-Plus 为独立项目，代码完全重写，与原 d3dxSkinManage "
+                "项目无任何引用、衍生或隶属关系。此处致谢仅为表彰其对社区的历史贡献。"
+            ),
+            12.5,
+            "text.disabled",
+            wrap=True,
+        )
+        disclaim.setStyleSheet(
+            f"color: {theme.color('text.disabled')}; background: transparent;"
+            f" padding-top: 10px; border-top: 1px dashed {theme.color('stroke.control')};"
+            f" {_font_css(12.5)}"
+        )
+        col.addWidget(disclaim)
+        outer.addLayout(col, 1)
+        return f
+
+    def _author_card(self) -> QFrame:
+        """创建社区原项目作者的头像、身份说明和外部主页链接卡片。"""
+        gold = _gold()
+        f = _HoverCard(left_accent=gold)
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(24, 18, 24, 18)
+        lay.setSpacing(18)
+
+        avatar = QLabel()
+        avatar.setPixmap(_circular_avatar("numlinka.png", 72, gold))
+        avatar.setFixedSize(72, 72)
+        avatar.setStyleSheet("background: transparent;")
+        lay.addWidget(avatar)
+
+        info = QVBoxLayout()
+        info.setSpacing(6)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(10)
+        name_row.addWidget(_label("numLinka", 20, "text.primary", weight=QFont.Weight.Bold))
+        name_row.addWidget(self._pill(tr("原 d3dxSkinManage 作者"), gold=True))
+        name_row.addStretch(1)
+        info.addLayout(name_row)
+        info.addWidget(_label(tr("d3dxSkinManage 系列的开创者与长期维护者（2022 – 2026）"), 13.5, "text.tertiary"))
+        links = QHBoxLayout()
+        links.setContentsMargins(0, 6, 0, 0)
+        links.addWidget(self._author_link("https://github.com/numlinka"))
+        links.addStretch(1)
+        info.addLayout(links)
+        lay.addLayout(info, 1)
+        return f
+
+    # 项目时间轴。
+    def _milestone_card(self, tag: str, title: str, desc: str, gold: bool) -> _HoverCard:
+        """构建可悬停上浮的里程碑卡片，并在进入布局前按文本宽度预估换行高度。"""
+        tag, title, desc = tr(tag), tr(title), tr(desc)
+        col = _gold() if gold else _accent()
+        f = _HoverCard(radius=10, hover_border=col, lift=True)
+        f.setFixedWidth(214)
+        lay = QVBoxLayout(f)
+        lay.setContentsMargins(14, 12, 14, 12)
+        lay.setSpacing(6)
+
+        tag_lbl = QLabel(tag)
+        tag_lbl.setFont(_font(11, QFont.Weight.Bold))
+        tag_lbl.setStyleSheet(
+            f"color: {col}; background: {_rgba_hex(col, 0.14)};"
+            f" padding: 1px 7px; border-radius: 5px; {_font_css(11, QFont.Weight.Bold)}"
+        )
+        tag_lbl.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+        lay.addWidget(tag_lbl)
+
+        title_lbl = _label(title, 15, "text.primary", weight=QFont.Weight.DemiBold, wrap=True)
+        desc_lbl = _label(desc, 12.5, "text.tertiary", wrap=True)
+        # 加入布局前按可用文本宽度确定换行高度，避免首次尺寸提示低估卡片高度。
+        # 显示后再根据真实宽度校准。
+        inner_w = 214 - 14 - 14 - 4
+        for _lbl in (title_lbl, desc_lbl):
+            _hh = _lbl.heightForWidth(inner_w)
+            if _hh > 0:
+                _lbl.setMinimumHeight(_hh)
+        lay.addWidget(title_lbl)
+        lay.addWidget(desc_lbl)
+        return f
+
+    def _timeline(self) -> QWidget:
+        """统一里程碑卡片槽位高度，组合可拖动时间线、联动节点、边缘渐隐和滚动进度。"""
+        # 统一计算卡片及连接线所需槽位高度，使各列节点纵向对齐。
+        cards = [self._milestone_card(tag, title, desc, gold) for (_y, tag, title, desc, gold) in _TIMELINE]
+        for c in cards:
+            c.adjustSize()
+        # 顶部余量包含连接线及悬停上浮距离，避免卡片边框被槽位或视口裁切。
+        slot_h = max(c.sizeHint().height() for c in cards) + 30
+
+        track = QWidget()
+        track.setStyleSheet("background: transparent;")
+        h = QHBoxLayout(track)
+        # 首尾留白与淡出带等宽，使边界卡片避开透明度遮罩。
+        h.setContentsMargins(_TIMELINE_EDGE_FADE, 0, _TIMELINE_EDGE_FADE, 0)
+        h.setSpacing(0)
+        for i, (year, _tag, _title, _desc, gold) in enumerate(_TIMELINE):
+            col = _gold() if gold else _accent()
+            node = _AxisNode(col, theme.color("stroke.control"))
+            cards[i].set_hover_callback(node.set_hovered)  # 悬浮卡片 → 对应节点放大
+            h.addWidget(self._milestone_column(i, year, gold, cards[i], slot_h, node))
+        track.adjustSize()
+
+        area = QScrollArea()
+        area.setWidget(track)
+        area.setWidgetResizable(False)
+        area.setFrameShape(QFrame.Shape.NoFrame)
+        area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        area.setFixedHeight(track.sizeHint().height() + 6)
+        area.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        area.viewport().setStyleSheet("background: transparent;")
+        area.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
+        QScroller.grabGesture(area.viewport(), QScroller.ScrollerGestureType.LeftMouseButtonGesture)
+        self._timeline_area = area
+
+        # 进度条：随横向滚动填充
+        progress = _TimelineProgress()
+        self._progress = progress
+        sb = area.horizontalScrollBar()
+
+        # 遮罩附加到滚动内容，并随滚动量换算视口两端的位置。
+        track.setGraphicsEffect(_EdgeFadeEffect(area.viewport(), sb))
+
+        def _upd(*_args) -> None:
+            """按水平滚动位置更新进度条，并重绘依赖视口位置的渐隐区域。"""
+            m = sb.maximum()
+            progress.set_ratio(sb.value() / m if m > 0 else 0.0)
+            track.update()  # 滚动 / 视口变宽（rangeChanged）→ 重算淡出带位置
+
+        sb.valueChanged.connect(_upd)
+        sb.rangeChanged.connect(_upd)
+        call_later(0, track, _upd)
+
+        wrap = QWidget()
+        wrap.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(wrap)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(8)
+        v.addWidget(area)
+        v.addWidget(progress, alignment=Qt.AlignmentFlag.AlignHCenter)
+        return wrap
