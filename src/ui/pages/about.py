@@ -765,3 +765,176 @@ class _HeroTitle(QWidget):
     def sizeHint(self) -> QSize:
         """返回标题按原定字体绘制时的自然布局尺寸。"""
         return QSize(self._nat_w, self._h)
+
+    def minimumSizeHint(self) -> QSize:
+        """提供较小的标题布局下限，文字由绘制阶段按可用宽度缩放。"""
+        # 较小的宽度下限允许窄窗口缩放标题，而不由文本自然宽度撑开页面。
+        return QSize(120, self._h)
+
+    def resizeEvent(self, event) -> None:
+        """可用宽度变化时请求重绘标题，以重新计算字号和居中位置。"""
+        super().resizeEvent(event)
+        self.update()
+
+    def _scaled_font(self, avail_w: int) -> QFont:
+        """标题宽度不足时按比例缩小字号，同时保留最小可读字号。"""
+        px = self._px
+        if avail_w > 0 and self._nat_w > avail_w:
+            px = max(20, int(px * avail_w / self._nat_w))
+        return _font(px, QFont.Weight.ExtraBold)
+
+    def paintEvent(self, _event) -> None:
+        """按可用宽度居中绘制普通标题和渐变标题，使两部分共享文字基线。"""
+        p = QPainter(self)
+        p.setRenderHints(QPainter.RenderHint.Antialiasing | QPainter.RenderHint.TextAntialiasing, True)
+        f = self._scaled_font(self.width())
+        p.setFont(f)
+        fm = QFontMetrics(f)
+        wp = fm.horizontalAdvance(self._plain)
+        wg = fm.horizontalAdvance(self._grad)
+        x0 = max(0, (self.width() - (wp + wg)) // 2)
+        y = (self.height() - fm.height()) // 2 + fm.ascent()
+        p.setPen(QColor(theme.color("text.primary")))
+        p.drawText(x0, y, self._plain)
+        g = QLinearGradient(x0 + wp, 0, x0 + wp + wg, 0)
+        g.setColorAt(0.0, QColor(_accent()))
+        g.setColorAt(0.5, QColor("#9aa8ff"))
+        g.setColorAt(1.0, QColor(_gold()))
+        p.setPen(QPen(QBrush(g), 0))
+        p.drawText(x0 + wp, y, self._grad)
+        p.end()
+
+
+# 关于页
+
+
+class AboutPage(QWidget):
+    """关于页：产品介绍、项目短片、致敬、团队与许可，致敬区含可拖动时间线。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        """创建纵向滚动的关于页，初始化时间线、渐入目标和按需创建的故事播放器。"""
+        super().__init__(parent)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        # 页面仅纵向滚动，标题自行适配可用宽度。
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self._scroll.viewport().setStyleSheet("background: transparent;")
+        self._scroll.viewport().setAutoFillBackground(False)
+        SmoothScroller.attach(self._scroll)
+        root.addWidget(self._scroll)
+        self._timeline_area: QScrollArea | None = None
+        self._progress: _TimelineProgress | None = None
+        self._reveal_targets: list[QWidget] = []
+        self._story_player = None
+        self._build()
+
+    # 泛光背景
+    def paintEvent(self, _event) -> None:
+        """绘制固定的页面底色及强调渐变，不随内容滚动。
+
+        不透明模式使用三层渐变，背景图模式使用半透明底层和两层强调渐变。
+        """
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        rect = self.rect()
+        bg_active = theme.is_background_active()
+        if bg_active:
+            p.fillRect(rect, _qc(theme.color("bg.layer"), theme.ACRYLIC["nav"]))
+        else:
+            p.fillRect(rect, QColor(theme.color("bg.base")))
+        glows = _GLOWS.get(theme.current_theme(), _GLOWS["dark"])
+        for i, glow in enumerate(glows):
+            if bg_active and i == 2:
+                continue  # 背景图模式跳过中心景深，仅留两抹强调辉光
+            self._paint_glow(p, rect, *glow)
+        p.end()
+
+    @staticmethod
+    def _paint_glow(
+        p: QPainter,
+        rect,
+        cxf: float,
+        cyf: float,
+        rx: int,
+        ry: int,
+        rgb: tuple[int, int, int],
+        alpha: float,
+        stop: float,
+    ) -> None:
+        """在指定相对位置绘制椭圆径向辉光，结束后恢复调用方的画笔坐标与状态。"""
+        if rx <= 0 or ry <= 0:
+            return
+        cx = rect.width() * cxf
+        cy = rect.height() * cyf
+        p.save()
+        p.translate(cx, cy)
+        p.scale(1.0, ry / rx)  # 将圆形径向渐变沿纵向压缩为椭圆辉光。
+        grad = QRadialGradient(0.0, 0.0, float(rx))
+        center = QColor(rgb[0], rgb[1], rgb[2])
+        center.setAlphaF(alpha)
+        edge = QColor(rgb[0], rgb[1], rgb[2])
+        edge.setAlphaF(0.0)
+        grad.setColorAt(0.0, center)
+        grad.setColorAt(stop, edge)
+        grad.setColorAt(1.0, edge)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QBrush(grad))
+        p.drawEllipse(QPointF(0.0, 0.0), float(rx), float(rx))
+        p.restore()
+
+    # 构建页面。
+    def _build(self) -> None:
+        """按顺序组装项目介绍、故事、致谢、团队、许可与页脚，并登记可渐入的分区。"""
+        self._reveal_targets = []
+        content = QWidget()
+        content.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(content)
+        v.setContentsMargins(40, 36, 40, 40)
+        v.setSpacing(56)
+
+        for section in (
+            self._hero(),
+            self._project_story(),
+            self._tribute_section(),
+            self._team_section(),
+            self._license_section(),
+        ):
+            v.addWidget(section)
+            self._reveal_targets.append(section)
+        v.addWidget(self._footer())
+        v.addStretch(1)
+
+        self._scroll.setWidget(content)
+
+    def _project_story(self) -> QWidget:
+        """创建故事卡片及其内联播放器容器，点击时才启动媒体资源。"""
+        self._story_section = QWidget()
+        self._story_layout = QVBoxLayout(self._story_section)
+        self._story_layout.setContentsMargins(0, 0, 0, 0)
+        self._story_layout.setSpacing(0)
+        self._story_card = ProjectStoryCard()
+        self._story_card.clicked.connect(self._open_story)
+        self._story_layout.addWidget(self._story_card)
+        return self._story_section
+
+    def _open_story(self) -> None:
+        """复用现有播放器或重新读取媒体配置后创建内联播放器，转移焦点并开始播放。"""
+        if self._story_player is not None:
+            self._story_player.setFocus()
+            return
+        # 静态页面不创建解码器或音频输出，打开前重新读取配置以获取最新媒体。
+        from src.ui.widgets.project_story_player import ProjectStoryPlayer
+
+        self._story_card.reload()
+        self._story_player = ProjectStoryPlayer(self._story_card.story, self._story_section)
+        self._story_player.close_requested.connect(self._close_story)
+        self._story_layout.addWidget(self._story_player)
+        self._story_player.show()
+        self._story_player.setFocus(Qt.FocusReason.OtherFocusReason)
+        self._story_card.hide()
+        self._story_player.start()
+        call_later(0, self, self._reveal_story)
