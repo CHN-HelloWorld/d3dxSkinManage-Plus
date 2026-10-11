@@ -430,3 +430,267 @@ def release_files(entries: list[tuple[Path, str]]):
             relative = Path(prefix) / (path.relative_to(source) if source.is_dir() else path.name)
             if _is_release_file(relative):
                 yield path, relative
+
+
+def generate_release_manifest(entries: list[tuple[Path, str]], product_dir: Path) -> Path:
+    """根据实际发行文件生成原生更新器使用的基线清单。"""
+    preserve = [f"{name}/" for name in (*RUNTIME_ARTIFACTS, UPDATER_SUBDIR)]
+    protected = {name.casefold() for name in (*RUNTIME_ARTIFACTS, UPDATER_SUBDIR)}
+    managed = sorted(
+        {
+            relative.as_posix()
+            for _path, relative in release_files(entries)
+            if relative.as_posix().casefold() != "files.manifest" and relative.parts[0].casefold() not in protected
+        }
+    )
+    manifest = product_dir / "files.manifest"
+    manifest.write_text(
+        "\n".join(["[managed]", *managed, "", "[preserve]", *preserve, ""]),
+        encoding="utf-8",
+    )
+    return manifest
+
+
+def make_zip(entries: list[tuple[Path, str]]) -> Path:
+    """使用与清单一致的文件列表生成带版本号的发行 ZIP。"""
+    stem = f"{APP_NAME}-v{APP_VERSION}-win64"
+    zip_path = PROJECT_BUILD / f"{stem}.zip"
+    _remove(zip_path)
+    count = 0
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as archive:
+        for path, relative in release_files(entries):
+            archive.write(path, (Path(stem) / relative).as_posix())
+            count += 1
+    print(f"   打包 {count} 个文件，{zip_path.stat().st_size / 1048576:.1f} MB")
+    return zip_path
+
+
+def purge_runtime_artifacts(dist_dir: Path) -> None:
+    """清理成品目录中由程序运行生成的用户数据。"""
+    for name in RUNTIME_ARTIFACTS:
+        if _remove(dist_dir / name):
+            print(f"   [OK] 已清掉试运行痕迹 {dist_dir.name}\\{name}")
+
+
+def check_env() -> bool:
+    """报告当前解释器、构建工具及运行依赖的可用性，任一必需依赖缺失时返回 False。"""
+    print(f"== 构建解释器 : {sys.executable}")
+    print(f"== Python     : {sys.version.split()[0]}")
+    ok = True
+
+    if not have("nuitka"):
+        print("[X] Nuitka      : 未安装  -> pip install nuitka")
+        ok = False
+    else:
+        v = nuitka_version()
+        print(f"[OK] Nuitka      : {'.'.join(map(str, v)) if v else '已安装(版本未知)'}")
+    if not have("packaging"):
+        print("[X] packaging   : 未安装，无法解析运行依赖的许可材料；请安装项目的 build 依赖")
+        ok = False
+
+    print("-- 运行期依赖（必需）:")
+    missing = []
+    for mod, pip in REQUIRED:
+        present = have(mod)
+        print(f"   {'[OK]' if present else '[X]'} {pip} ({mod})")
+        if not present:
+            missing.append(pip)
+    if missing:
+        ok = False
+        print("   缺失 -> pip install " + " ".join(missing))
+        print("   或   -> pip install -r requirements.txt")
+
+    return ok
+
+
+def main() -> int:
+    """解析构建参数，按请求检查环境、构建和整理发行内容，失败时返回对应的非零退出码。"""
+    p = argparse.ArgumentParser(
+        description="用 Nuitka 打包 d3dxSkinManage-Plus",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument("--onefile", action="store_true", help="生成单文件 exe（默认 standalone 文件夹）")
+    p.add_argument("--console", action="store_true", help="保留控制台窗口（首次到目标机排错用）")
+    p.add_argument("--with-updater", action="store_true", help="附带已构建的原生 x64 updater.exe")
+    p.add_argument("--zip", action="store_true", help="构建后把成品打成发布 zip（落 build/）")
+    p.add_argument("--clean", action="store_true", help="只清理 build/ 成品与编译暂存目录，不构建")
+    p.add_argument("--check", action="store_true", help="只检查环境，不构建")
+    p.add_argument("--dry-run", action="store_true", help="只打印 Nuitka 命令，不执行")
+    p.add_argument(
+        "--install-deps", action="store_true", help="先把运行期依赖与 Nuitka 安装到当前解释器（需能访问 PyPI）"
+    )
+    p.add_argument("--index-url", default=DEFAULT_INDEX_URL, help=f"依赖安装源，默认 {DEFAULT_INDEX_URL}")
+    p.add_argument("nuitka_args", nargs="*", metavar="-- ARGS", help="`--` 之后的参数原样透传给 Nuitka")
+    args = p.parse_args()
+
+    if args.clean:
+        print("== 清理构建产物与编译暂存 ...")
+        return clean_outputs()
+
+    if args.install_deps:
+        print(f"== 安装运行期依赖 + Nuitka 到当前解释器（源: {args.index_url}）...")
+        # 文件读取使用 UTF-8，标准输出保持当前控制台编码。
+        env = {**os.environ, "PYTHONUTF8": "1"}
+        _enc = getattr(sys.stdout, "encoding", None)
+        if _enc:
+            env["PYTHONIOENCODING"] = f"{_enc}:replace"
+        installation = subprocess.run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "-e",
+                f"{ROOT}[build]",
+                "-i",
+                args.index_url,
+            ],
+            check=False,
+            env=env,
+        )
+        if installation.returncode:
+            return installation.returncode
+        print()
+
+    if not ENTRY.exists():
+        print(f"[X] 缺少入口脚本 {ENTRY}（应与本脚本一起提供）")
+        return 1
+    if not RESOURCES.is_dir():
+        print(f"[X] 缺少资源目录 {RESOURCES}")
+        return 1
+
+    env_ok = check_env()
+    print()
+    if args.check:
+        return 0 if env_ok else 1
+    if not env_ok and not args.dry_run:
+        print("环境不完整，已中止。补齐上面标 [X] 的项后重试，或先用 --dry-run 看命令。")
+        return 1
+
+    updater_exe: Path | None = None
+    if args.with_updater and not args.dry_run:
+        try:
+            updater_exe = prepare_updater_exe()
+        except OSError as error:
+            print(f"[X] {error}")
+            return 1
+
+    cmd = build_command(args)
+    print("== Nuitka 命令:")
+    print("   " + " ".join(cmd) + "\n")
+    if args.dry_run:
+        return 0
+
+    print("== 生成发行教程 ...")
+    try:
+        generated_documents = build_documentation()
+    except (OSError, ValueError, subprocess.CalledProcessError) as error:
+        print(f"[X] 生成发行教程失败：{error}")
+        return 1
+
+    if not str(ROOT).isascii():
+        print(
+            "[i] 项目路径含非 ASCII 字符，编译使用 ASCII 暂存目录以支持 MSVC 工具链。\n"
+            "    链接器的 GBK 路径问题；构建成功后成品会自动搬回项目 build 目录。\n"
+            f"    暂存目录：{OUTPUT_DIR}\n"
+        )
+
+    print(
+        f"== 模式: {'onefile 单文件' if args.onefile else 'standalone 文件夹'}"
+        f" | 控制台: {'保留' if args.console else '隐藏'}\n"
+    )
+
+    # cwd=ROOT 让 run_app.py 与 --include-package=src 都能正确解析 src 包
+    PROJECT_BUILD.mkdir(parents=True, exist_ok=True)
+    result = subprocess.run(cmd, cwd=str(ROOT))
+    if result.returncode != 0:
+        print(f"\n[X] Nuitka 失败（退出码 {result.returncode}）")
+        return result.returncode
+
+    try:
+        normalize_compilation_report(PROJECT_BUILD / "nuitka-report.xml")
+    except OSError as error:
+        print(f"[X] 整理编译报告失败：{error}")
+        return 1
+
+    # 构建后将成品移入项目 build 目录。
+    try:
+        final = relocate_product(args.onefile)
+    except Exception as e:
+        final = (OUTPUT_DIR / EXE_NAME) if args.onefile else (OUTPUT_DIR / "run_app.dist")
+        print(f"\n[!] 成品搬运到项目 build 目录失败（{e}），成品仍在暂存目录。")
+
+    product_dir = final if final.is_dir() else final.parent
+    embedded: Path | None = None
+    if updater_exe:
+        try:
+            embedded = embed_updater(product_dir, updater_exe)
+            updater_exe = embedded
+        except OSError as error:
+            print(f"[X] 放置原生更新器失败：{error}")
+            return 1
+
+    try:
+        if args.zip and final.is_dir():
+            purge_runtime_artifacts(final)
+        language_dir = stage_language_packs(final if final.is_dir() else final.parent)
+        plugin_dir = stage_plugins(final if final.is_dir() else final.parent)
+        documentation_dir = stage_documentation(product_dir, generated_documents)
+        story_dir = stage_project_story(product_dir)
+        legal_notices = stage_legal_notices(product_dir)
+        entries: list[tuple[Path, str]] = [(final, "")]
+        if args.onefile:
+            entries.extend((notice, notice.name if notice.is_dir() else "") for notice in legal_notices)
+            entries.extend(
+                (
+                    (language_dir, "config/languages"),
+                    (plugin_dir, "plugins"),
+                    (documentation_dir, "docs"),
+                    (story_dir, "resources/about/story"),
+                )
+            )
+            if embedded:
+                entries.append((embedded, UPDATER_SUBDIR))
+        manifest = generate_release_manifest(entries, product_dir)
+        if args.onefile:
+            entries.append((manifest, ""))
+    except (OSError, ValueError) as error:
+        print(f"[X] 准备语言配置、插件、教程、项目短片、许可材料或更新清单失败：{error}")
+        return 1
+
+    print("\n[OK] 构建完成。成品位于（项目 build 目录内）：")
+    if args.onefile:
+        print(f"   {final}")
+        print(
+            f"   -> 将 exe、{language_dir.relative_to(final.parent)}、plugins/、docs/、"
+            f"{story_dir.relative_to(final.parent)}、licenses/、LICENSE、THIRD_PARTY_NOTICES.md "
+            "和 files.manifest 一起拷到目标设备。"
+        )
+        if updater_exe:
+            print(
+                f"   -> 更新器: {updater_exe}（onefile 装不进单 exe，需与 exe 同级放 {UPDATER_SUBDIR}/ 才能自动更新）"
+            )
+    else:
+        print(f"   {final}")
+        print(f"   -> 可执行文件: {final / EXE_NAME}")
+        if embedded:
+            print(f"   -> 更新器已内置: {embedded.relative_to(final)}")
+        print("   -> 拷贝整个文件夹到目标设备运行（文件夹可随意改名）。")
+
+    if args.zip:
+        print("\n== 打包发布 zip ...")
+        try:
+            zip_path = make_zip(entries)
+            print(f"   [OK] {zip_path}")
+        except Exception as e:
+            print(f"   [X] 打包 zip 失败：{e}")
+            return 1
+
+    if STAGING_DIR.resolve() != PROJECT_BUILD.resolve() and OUTPUT_DIR.exists():
+        print(f"\n   （编译暂存目录：{OUTPUT_DIR}\n    可保留以加速下次增量构建，或用 --clean / 构建工具菜单清理。）")
+    print("\n提示：首次在目标机若闪退或无窗口，用 `--console` 重新构建，从控制台看报错。")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
