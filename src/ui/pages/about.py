@@ -612,3 +612,156 @@ class _AxisNode(QWidget):
         """更新节点缩放比例并请求重绘。"""
         self._scale = v
         self.update()
+
+    nodeScale = Property(float, fget=_get_scale, fset=_set_scale)
+
+    def set_hovered(self, on: bool) -> None:
+        """按卡片悬停状态缩放对应时间线节点，禁用动画时直接应用。"""
+        target = 1.25 if on else 1.0
+        if not anim.is_enabled():
+            self._set_scale(target)
+            return
+        a = QPropertyAnimation(self, b"nodeScale", self)
+        a.setDuration(anim.DURATION["normal"])
+        a.setStartValue(self._scale)
+        a.setEndValue(target)
+        a.setEasingCurve(QEasingCurve.Type.OutCubic)
+        a.start(QAbstractAnimation.DeletionPolicy.DeleteWhenStopped)
+        self._scale_anim = a
+
+    def paintEvent(self, _event) -> None:
+        """绘制时间轴、节点光晕和空心圆环，中心底色遮住贯穿节点的轴线。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        cy = self.height() / 2
+        cx = self.width() / 2
+        c = QPointF(cx, cy)
+        pen = QPen(self._line)
+        pen.setWidth(2)
+        p.setPen(pen)
+        p.drawLine(0, int(cy), self.width(), int(cy))
+        s = self._scale
+        p.setPen(Qt.PenStyle.NoPen)
+        soft = QColor(self._node)
+        soft.setAlphaF(0.18)
+        p.setBrush(soft)
+        p.drawEllipse(c, 11 * s, 11 * s)
+        # 先绘制强调色外圆，再以背景色覆盖中心，形成空心节点并遮住下方中轴线。
+        p.setBrush(self._node)
+        p.drawEllipse(c, 8 * s, 8 * s)
+        p.setBrush(QColor(theme.color("bg.base")))
+        p.drawEllipse(c, 5 * s, 5 * s)
+        p.end()
+
+
+# 两端留白与淡出带等宽，保证滚动到边界时首尾卡片完全可见。
+_TIMELINE_EDGE_FADE = 56
+
+
+class _EdgeFadeEffect(QGraphicsEffect):
+    """对时间线左右边缘应用透明度渐变。
+
+    遮罩附加到滚动内容，通过滚动量将视口边缘映射到内容坐标。
+    仅在两条窄带内使用 DestinationOut 清除透明度，中间内容保持原样。
+    """
+
+    def __init__(self, viewport: QWidget, scrollbar, fade: int = _TIMELINE_EDGE_FADE) -> None:
+        """将边缘渐隐效果绑定到视口生命周期，并保存水平滚动条与渐隐宽度。"""
+        # 绑定视口生命周期，避免 PySide6 回收临时特效对象后移除渐隐遮罩。
+        super().__init__(viewport)
+        self._viewport = viewport
+        self._sb = scrollbar
+        self._fade = float(fade)
+
+    def draw(self, painter: QPainter) -> None:
+        """按当前视口在轨道图像中的位置擦除两侧透明渐变，再绘制带渐隐边缘的内容。"""
+        offset = QPoint()
+        pixmap = self.sourcePixmap(
+            Qt.CoordinateSystem.LogicalCoordinates,
+            offset,
+            QGraphicsEffect.PixmapPadMode.NoPad,
+        )
+        if pixmap.isNull():
+            return
+        vw = self._viewport.width()
+        fade = self._fade
+        if vw > 0 and fade > 0.0:
+            dpr = pixmap.devicePixelRatio() or 1.0
+            ph = pixmap.height() / dpr
+            ox = float(offset.x()) if offset is not None else 0.0
+            # 视口可见窗口换算到 pixmap（=track）逻辑坐标：左沿 = 横向滚动量 − 源偏移。
+            left = float(self._sb.value()) - ox
+            right = left + vw
+            qp = QPainter(pixmap)
+            qp.setCompositionMode(QPainter.CompositionMode.CompositionMode_DestinationOut)
+            # 左带：外缘全擦(α255) → 内缘不擦(α0)。
+            gl = QLinearGradient(left, 0.0, left + fade, 0.0)
+            gl.setColorAt(0.0, QColor(0, 0, 0, 255))
+            gl.setColorAt(1.0, QColor(0, 0, 0, 0))
+            qp.fillRect(QRectF(left, 0.0, fade, ph), QBrush(gl))
+            # 右带：内缘不擦(α0) → 外缘全擦(α255)。
+            gr = QLinearGradient(right - fade, 0.0, right, 0.0)
+            gr.setColorAt(0.0, QColor(0, 0, 0, 0))
+            gr.setColorAt(1.0, QColor(0, 0, 0, 255))
+            qp.fillRect(QRectF(right - fade, 0.0, fade, ph), QBrush(gr))
+            qp.end()
+        painter.drawPixmap(offset if offset is not None else QPointF(0.0, 0.0), pixmap)
+
+
+class _TimelineProgress(QWidget):
+    """随横向滚动位置填充的时间线进度条。"""
+
+    def __init__(self) -> None:
+        """创建不截获鼠标的细进度条，初始位置为时间线起点。"""
+        super().__init__()
+        self._ratio = 0.0
+        self.setFixedSize(180, 3)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_ratio(self, r: float) -> None:
+        """限制滚动比例，并仅在可见进度有实际变化时请求重绘。"""
+        r = max(0.0, min(1.0, r))
+        if abs(r - self._ratio) > 0.001:
+            self._ratio = r
+            self.update()
+
+    def paintEvent(self, _event) -> None:
+        """绘制主题渐变进度条，为时间线起点保留最小可见长度。"""
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        w = self.width()
+        h = self.height()
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(theme.color("bg.subtle")))
+        p.drawRoundedRect(QRectF(0, 0, w, h), h / 2, h / 2)
+        fw = w * (0.08 + self._ratio * 0.92)
+        grad = QLinearGradient(0, 0, fw, 0)
+        grad.setColorAt(0.0, QColor(_accent()))
+        grad.setColorAt(1.0, QColor(_gold()))
+        p.setBrush(QBrush(grad))
+        p.drawRoundedRect(QRectF(0, 0, fw, h), h / 2, h / 2)
+        p.end()
+
+
+class _HeroTitle(QWidget):
+    """在单个控件内绘制普通标题和渐变文字，保持基线对齐。
+
+    可用宽度不足时等比缩小字号，避免横向溢出。
+    """
+
+    def __init__(self, plain: str, grad: str, px: int) -> None:
+        """按标题两部分的字体度量保存自然宽度与固定高度，为自适应绘制预留空间。"""
+        super().__init__()
+        self._plain = plain
+        self._grad = grad
+        self._px = px
+        fm = QFontMetrics(_font(px, QFont.Weight.ExtraBold))
+        self._nat_w = fm.horizontalAdvance(plain) + fm.horizontalAdvance(grad) + 6
+        self._pad = 8
+        self._h = fm.height() + self._pad * 2
+        self.setFixedHeight(self._h)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+
+    def sizeHint(self) -> QSize:
+        """返回标题按原定字体绘制时的自然布局尺寸。"""
+        return QSize(self._nat_w, self._h)
