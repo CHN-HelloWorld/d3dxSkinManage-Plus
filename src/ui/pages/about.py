@@ -223,3 +223,165 @@ class _WrapLabel(QLabel):
         """创建随可用宽度自动换行的说明标签。"""
         super().__init__(text)
         self.setWordWrap(True)
+
+    def resizeEvent(self, event) -> None:
+        """宽度变化后按换行文本的实际高度更新最小高度，避免布局裁切说明。"""
+        super().resizeEvent(event)
+        w = self.width()
+        if w > 0:
+            h = self.heightForWidth(w)
+            if h > 0 and h != self.minimumHeight():
+                self.setMinimumHeight(h)
+
+
+def _label(
+    text: str,
+    px: float,
+    token: str,
+    *,
+    weight: QFont.Weight = QFont.Weight.Normal,
+    wrap: bool = False,
+    max_w: int | None = None,
+    align: Qt.AlignmentFlag | None = None,
+) -> QLabel:
+    """按关于页字体和颜色规则创建标签，可配置换行、最大宽度及对齐方式。"""
+    lbl: QLabel = _WrapLabel(text) if wrap else QLabel(text)
+    lbl.setFont(_font(px, weight))
+    col = _accent() if token == "accent" else theme.color(token)
+    lbl.setStyleSheet(f"color: {col}; background: transparent; {_font_css(px, weight)}")
+    if wrap:
+        lbl.setWordWrap(True)
+    if max_w is not None:
+        lbl.setMaximumWidth(max_w)
+    if align is not None:
+        lbl.setAlignment(align)
+    return lbl
+
+
+def _avatars_dir() -> Path:
+    """返回随应用资源提供的关于页头像目录。"""
+    return get_resources_dir() / "about" / "avatars"
+
+
+def _circular_avatar(filename: str, size: int, ring: str) -> QPixmap:
+    """加载头像并裁成圆形（带一圈描边）。文件缺失时返回带描边的空底圆。"""
+    src = QPixmap(str(_avatars_dir() / filename))
+    out = QPixmap(size, size)
+    out.fill(Qt.GlobalColor.transparent)
+    p = QPainter(out)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+    path = QPainterPath()
+    inset = 2.0
+    path.addEllipse(inset, inset, size - 2 * inset, size - 2 * inset)
+    p.setClipPath(path)
+    if not src.isNull():
+        scaled = src.scaled(
+            size,
+            size,
+            Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (scaled.width() - size) // 2
+        y = (scaled.height() - size) // 2
+        p.drawPixmap(-x, -y, scaled)
+    else:
+        p.fillRect(0, 0, size, size, QColor(theme.color("bg.hover")))
+    p.setClipping(False)
+    pen = QPen(QColor(ring))
+    pen.setWidthF(2.0)
+    p.setPen(pen)
+    p.drawEllipse(int(inset), int(inset), size - 2 * int(inset), size - 2 * int(inset))
+    p.end()
+    return out
+
+
+# 自定义控件
+
+
+class _HoverCard(QFrame):
+    """支持悬停描边、上浮、渐变和外部悬停回调的卡片。
+
+    属性动画同时驱动描边和位移；描边在 paintEvent 中插值，避免逐帧更新样式
+    触发布局并覆盖位移。进入时结合当前位移还原布局基准，保持快速移入移出和
+    窗口缩放后的动画连续。静态卡片不启用悬停效果。
+    """
+
+    def __init__(
+        self,
+        *,
+        radius: int = 12,
+        left_accent: str | None = None,
+        hover_border: str | None = None,
+        lift: bool = False,
+        tint: str | None = None,
+    ) -> None:
+        """保存圆角、描边、渐变和上浮策略，初始化悬停进度及布局基线。"""
+        super().__init__()
+        self.setObjectName("hoverCard")
+        self._radius = radius
+        self._left = left_accent
+        self._hover_border = hover_border
+        self._lift = lift
+        self._tint = tint
+        self._on_hover = None
+        self._home_y: int | None = None
+        self._t = 0.0
+        self._t_anim = None
+        self._reapplying = False  # moveEvent 重施上浮时防递归
+        self._interactive = bool(hover_border) or lift
+        # 描边插值端点：静止 stroke.card → hover 点亮色（无 hover_border 则恒为 stroke.card）。
+        self._border0 = QColor(theme.color("stroke.card"))
+        self._border1 = QColor(hover_border) if hover_border else QColor(self._border0)
+        self._restyle()
+
+    def set_hover_callback(self, cb) -> None:
+        """登记接收鼠标进入和离开状态的回调。"""
+        self._on_hover = cb
+
+    def _restyle(self) -> None:
+        """更新卡片静态背景和圆角，交互描边交给绘制事件插值以减少动画期间的布局更新。"""
+        bg = theme.surface_color("bg.card", "panel")
+        # 致敬横幅始终叠加左侧金色渐变，背景图模式使用透明颜色以保留底层材质。
+        if self._tint:
+            bg = (
+                f"qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+                f" stop:0 {_rgba_hex(self._tint, 0.20)},"
+                f" stop:0.5 {_rgba_hex(self._tint, 0.05)},"
+                f" stop:0.72 {bg}, stop:1 {bg})"
+            )
+        if self._interactive:
+            # 交互描边由 paintEvent 插值，避免逐帧改写样式触发布局并重置上浮位置。
+            self.setStyleSheet(
+                f"QFrame#hoverCard {{ background: {bg}; border: none; border-radius: {self._radius}px; }}"
+            )
+        else:
+            left = f" border-left: 3px solid {self._left};" if self._left else ""
+            self.setStyleSheet(
+                f"QFrame#hoverCard {{ background: {bg};"
+                f" border: 1px solid {_qss_rgba(self._border0)};"
+                f"{left} border-radius: {self._radius}px; }}"
+            )
+
+    def paintEvent(self, event) -> None:
+        """在样式背景上绘制随悬停进度插值的描边，不改写样式表或布局。"""
+        super().paintEvent(event)  # QSS 画底色 + 圆角（静态卡连边框/左金条一起画）
+        if not self._interactive:
+            return
+        # 交互卡：在 QSS 底色之上补一圈插值描边（不动 QSS，不触发布局）。
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        pen = QPen(_lerp_color(self._border0, self._border1, self._t))
+        pen.setWidthF(1.0)
+        p.setPen(pen)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        r = float(self._radius)
+        p.drawRoundedRect(QRectF(0.5, 0.5, self.width() - 1.0, self.height() - 1.0), r, r)
+        p.end()
+
+    def _get_t(self) -> float:
+        """返回供 Qt 属性动画读取的悬停过渡进度。"""
+        return self._t
+
+    def _lift_offset(self) -> int:
+        """按当前悬停进度计算上浮像素数，未启用上浮时返回零。"""
+        return round(3 * self._t) if self._lift else 0
