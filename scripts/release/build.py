@@ -229,3 +229,114 @@ def _remove(path: Path) -> bool:
         except OSError:
             return False
     return not path.exists()
+
+
+def clean_outputs() -> int:
+    """清理本仓库的构建产物和编译暂存目录。"""
+    documentation_outputs = (PROJECT_BUILD / "docs", PROJECT_BUILD / "tutorials")
+    try:
+        for directory in documentation_outputs:
+            _validate_documentation_output(directory, PROJECT_BUILD)
+    except ValueError as error:
+        print(f"[X] {error}")
+        return 1
+    targets: list[Path] = [
+        PROJECT_BUILD / DIST_NAME,
+        PROJECT_BUILD / EXE_NAME,
+        PROJECT_BUILD / "files.manifest",
+        PROJECT_BUILD / "nuitka-report.xml",
+        PROJECT_BUILD / "config" / "languages",
+        PROJECT_BUILD / "plugins",
+        PROJECT_BUILD / "resources" / "about" / "story",
+        PROJECT_BUILD / UPDATER_SUBDIR,
+        PROJECT_BUILD / "licenses",
+        *documentation_outputs,
+        *(PROJECT_BUILD / name for name in LEGAL_NOTICES),
+        *sorted(PROJECT_BUILD.glob("*.zip")),
+        STAGING_DIR,
+    ]
+    removed = 0
+    for t in targets:
+        if _remove(t):
+            print(f"   [OK] 已删除 {t}")
+            removed += 1
+    # 暂存根目录为空时一并移除。
+    if STAGING_ROOT != PROJECT_BUILD and STAGING_ROOT.is_dir():
+        try:
+            next(STAGING_ROOT.iterdir())
+        except StopIteration:
+            STAGING_ROOT.rmdir()
+            print(f"   [OK] 已删除空暂存根目录 {STAGING_ROOT}")
+        except OSError:
+            pass
+    if not removed:
+        print("   [i] 没有可清理的产物（build/ 与暂存目录本来就是干净的）")
+    return 0
+
+
+def prepare_updater_exe() -> Path:
+    """将已构建的原生 Release 更新器复制到输出目录。"""
+    if not NATIVE_UPDATER_EXE.is_file():
+        raise FileNotFoundError(
+            f"未找到原生 x64 更新器：{NATIVE_UPDATER_EXE}\n"
+            "请先执行 python updater/tools/build.py 生成 Release | x64 更新器。"
+        )
+    return embed_updater(PROJECT_BUILD, NATIVE_UPDATER_EXE)
+
+
+def embed_updater(dist_dir: Path, updater_exe: Path) -> Path:
+    """将原生更新器放入主程序目录下的更新器子目录。"""
+    dest = dist_dir / UPDATER_SUBDIR / UPDATER_EXE_NAME
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    if updater_exe.resolve() != dest.resolve():
+        shutil.copy2(updater_exe, dest)
+    return dest
+
+
+def stage_language_packs(product_dir: Path) -> Path:
+    """为目录模式和单文件模式复制默认语言配置。"""
+    directory = product_dir / "config" / "languages"
+    for relative in SHIPPED_LANGUAGE_FILES:
+        target = directory / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(LANGUAGES / relative, target)
+    return directory
+
+
+def stage_project_story(product_dir: Path) -> Path:
+    """复制清单指定的短片和封面，供两种打包模式读取。"""
+    story = load_project_story(PROJECT_STORY)
+    selected = {story.video_path, story.cover_path}
+    for source in selected:
+        if not source.is_file():
+            raise FileNotFoundError(f"项目短片资源缺失：{source}")
+    selected.update(PROJECT_STORY / name for name in ("story.json", "README.md") if (PROJECT_STORY / name).is_file())
+    directory = product_dir / "resources" / "about" / "story"
+    target, product, source_root = directory.resolve(), product_dir.resolve(), PROJECT_STORY.resolve()
+    if (
+        not target.is_relative_to(product)
+        or target == product
+        or target.is_relative_to(source_root)
+        or source_root.is_relative_to(target)
+    ):
+        raise ValueError(f"项目短片输出目录无效：{directory}")
+    if directory.exists():
+        shutil.rmtree(directory)
+    for source in sorted(selected):
+        destination = directory / source.relative_to(PROJECT_STORY)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, destination)
+    return directory
+
+
+def stage_plugins(product_dir: Path) -> Path:
+    """复制随包教学插件的清单、源码、语言包与说明，排除本地安装文件。"""
+    directory = product_dir / "plugins"
+    if directory.exists():
+        shutil.rmtree(directory)
+    for plugin_id in SHIPPED_PLUGIN_IDS:
+        for relative in SHIPPED_PLUGIN_FILES[plugin_id]:
+            target = directory / plugin_id / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(PLUGINS / plugin_id / relative, target)
+    return directory
