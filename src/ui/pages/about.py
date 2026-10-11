@@ -1341,3 +1341,297 @@ class AboutPage(QWidget):
         v.addWidget(area)
         v.addWidget(progress, alignment=Qt.AlignmentFlag.AlignHCenter)
         return wrap
+
+    def _milestone_column(
+        self, idx: int, year: str, gold: bool, card: QWidget, slot_h: int, node: _AxisNode
+    ) -> QWidget:
+        """按上下交替布局显示时间轴卡片，并连接到中轴节点。"""
+        up = idx % 2 == 0
+        col = _gold() if gold else _accent()
+        conn = theme.color("stroke.control")
+        w = QWidget()
+        w.setFixedWidth(244)
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(0)
+
+        # 上槽：up 列放「卡片 + 向下连接线」（底对齐贴近中轴）；down 列留空占位保节点对齐。
+        top = QWidget()
+        top.setFixedHeight(slot_h)
+        top.setStyleSheet("background: transparent;")
+        tl = QVBoxLayout(top)
+        tl.setContentsMargins(0, 0, 0, 0)
+        tl.setSpacing(0)
+        if up:
+            tl.addStretch(1)
+            tl.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+            tl.addWidget(_Connector(conn), alignment=Qt.AlignmentFlag.AlignHCenter)
+        v.addWidget(top)
+
+        v.addWidget(node)
+        year_lbl = _label(tr(year), 13, "accent", weight=QFont.Weight.Bold, align=Qt.AlignmentFlag.AlignHCenter)
+        year_lbl.setStyleSheet(f"color: {col}; background: transparent; {_font_css(13, QFont.Weight.Bold)}")
+        v.addWidget(year_lbl)
+
+        # 下槽：down 列放「向上连接线 + 卡片」（顶对齐贴近中轴/年份）。
+        bottom = QWidget()
+        bottom.setFixedHeight(slot_h)
+        bottom.setStyleSheet("background: transparent;")
+        bl = QVBoxLayout(bottom)
+        bl.setContentsMargins(0, 0, 0, 0)
+        bl.setSpacing(0)
+        if not up:
+            bl.addWidget(_Connector(conn), alignment=Qt.AlignmentFlag.AlignHCenter)
+            bl.addWidget(card, alignment=Qt.AlignmentFlag.AlignHCenter)
+            bl.addStretch(1)
+        v.addWidget(bottom)
+        return w
+
+    # 团队信息。
+    def _team_section(self) -> QWidget:
+        """按三列网格展示团队成员，并追加贡献者占位卡，顶部预留悬停上浮空间。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(20)
+        lay.addWidget(
+            self._section_head(
+                tr("Team · 团队"),
+                tr("创始人与贡献者"),
+                tr("让这个项目从想法变成现实的人。随着社区成长，这份名单会越来越长 —— 欢迎每一位贡献者的加入。"),
+            )
+        )
+
+        grid = QGridLayout()
+        # 顶部保留六像素余量，容纳贡献者卡片的悬停上浮。
+        grid.setContentsMargins(0, 6, 0, 0)
+        grid.setHorizontalSpacing(16)
+        grid.setVerticalSpacing(16)
+        cards = [self._person_card(*p) for p in _TEAM]
+        cards.append(self._placeholder_person())
+        for i, c in enumerate(cards):
+            grid.addWidget(c, i // 3, i % 3)
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        host.setLayout(grid)
+        lay.addWidget(host)
+        return w
+
+    def _person_card(self, filename: str, name: str, role: str, desc: str, url: str | None, founder: bool) -> QFrame:
+        """组合成员头像、角色、贡献说明和可选主页入口，用头像环色区分创始人。"""
+        role, desc = tr(role), tr(desc)
+        ring = _gold() if founder else _accent()
+        f = _HoverCard(hover_border=_accent(), lift=True)
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(16)
+
+        avatar = QLabel()
+        avatar.setPixmap(_circular_avatar(filename, 60, ring))
+        avatar.setFixedSize(60, 60)
+        avatar.setStyleSheet("background: transparent;")
+        lay.addWidget(avatar)
+
+        info = QVBoxLayout()
+        info.setSpacing(3)
+        name_row = QHBoxLayout()
+        name_row.setSpacing(8)
+        name_row.addWidget(_label(name, 17, "text.primary", weight=QFont.Weight.DemiBold))
+        name_row.addWidget(self._pill(role, gold=founder))
+        name_row.addStretch(1)
+        info.addLayout(name_row)
+        info.addWidget(_label(desc, 13, "text.tertiary", wrap=True))
+        if url:
+            link_row = QHBoxLayout()
+            link_row.setContentsMargins(0, 6, 0, 0)
+            link_row.addWidget(self._person_link(url))
+            link_row.addStretch(1)
+            info.addLayout(link_row)
+        lay.addLayout(info, 1)
+        return f
+
+    def _placeholder_person(self) -> QFrame:
+        """创建与成员卡片布局一致的贡献邀请占位卡。"""
+        # 贡献者占位卡沿用可叠加背景的面板表面色。
+        f = QFrame()
+        f.setObjectName("personPlaceholder")
+        bg = theme.surface_color("bg.card", "panel")
+        f.setStyleSheet(
+            f"QFrame#personPlaceholder {{ background: {bg};"
+            f" border: 1px dashed {theme.color('stroke.control')}; border-radius: 12px; }}"
+        )
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(16)
+
+        dot = QLabel("＋")
+        dot.setFont(_font(24))
+        dot.setFixedSize(60, 60)
+        dot.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        dot.setStyleSheet(
+            f"color: {theme.color('text.tertiary')}; background: {theme.color('bg.hover')};"
+            f" border-radius: 30px; {_font_css(24)}"
+        )
+        lay.addWidget(dot)
+
+        info = QVBoxLayout()
+        info.setSpacing(3)
+        info.addWidget(_label(tr("虚位以待"), 17, "text.tertiary", weight=QFont.Weight.DemiBold))
+        info.addWidget(_label(tr("期待你的贡献"), 13, "text.disabled"))
+        info.addStretch(1)
+        lay.addLayout(info, 1)
+        return f
+
+    # 许可信息。
+    def _license_section(self) -> QWidget:
+        """将许可正文说明与关键授权信息并排组织为声明分区。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(20)
+        lay.addWidget(
+            self._section_head(
+                tr("License · 声明"), tr("使用许可与开源声明"), tr("关于本项目的授权方式、使用边界与法律声明。")
+            )
+        )
+
+        row = QHBoxLayout()
+        row.setSpacing(16)
+        row.addWidget(self._license_card(), 3)
+        row.addWidget(self._license_meta(), 2)
+        host = QWidget()
+        host.setStyleSheet("background: transparent;")
+        host.setLayout(row)
+        lay.addWidget(host)
+        return w
+
+    def _license_card(self) -> QFrame:
+        """展示许可名称、使用边界和允许、禁止及附注条目，正文以仓库许可文件为准。"""
+        f = _HoverCard()
+        lay = QVBoxLayout(f)
+        lay.setContentsMargins(26, 24, 26, 24)
+        lay.setSpacing(10)
+        lay.addWidget(
+            _label(
+                tr("PolyForm Noncommercial 1.0.0 + 署名完整性附加条款"),
+                18,
+                "text.primary",
+                weight=QFont.Weight.DemiBold,
+                wrap=True,
+            )
+        )
+        lay.addWidget(
+            _label(
+                tr(
+                    "本项目采用 PolyForm Noncommercial License "
+                    "1.0.0（非商业·源代码可用许可）并附加署名完整性条款：源代码对社区完全开"
+                    "放、可自由学习与改进，但禁止商业牟利，且禁止篡改署名事实。最终以仓库 "
+                    "LICENSE 文件为准。"
+                ),
+                14,
+                "text.secondary",
+                wrap=True,
+            )
+        )
+        lay.addWidget(self._license_list(tr("✓ 允许"), _LICENSE_ALLOW, "✓"))
+        lay.addWidget(self._license_list(tr("✕ 禁止"), _LICENSE_DENY, "✕"))
+        lay.addWidget(self._license_list(tr("附注"), _LICENSE_NOTE, "·"))
+        return f
+
+    def _license_list(self, head: str, items: list[str], mark: str) -> QWidget:
+        """为许可条目添加对应标记、语义颜色和分隔线，并允许长说明换行。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 6, 0, 0)
+        v.setSpacing(5)
+        head_lbl = _label(head, 12, "text.tertiary", weight=QFont.Weight.Bold)
+        v.addWidget(head_lbl)
+        mark_col = theme.color("danger") if mark == "✕" else _accent() if mark == "✓" else theme.color("text.tertiary")
+        for i, it in enumerate(items):
+            line = QWidget()
+            line.setStyleSheet("background: transparent;")
+            hl = QHBoxLayout(line)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.setSpacing(8)
+            m = _label(mark, 13.5, "accent", weight=QFont.Weight.Bold)
+            m.setStyleSheet(f"color: {mark_col}; background: transparent; {_font_css(13.5, QFont.Weight.Bold)}")
+            m.setFixedWidth(14)
+            hl.addWidget(m, alignment=Qt.AlignmentFlag.AlignTop)
+            hl.addWidget(_label(tr(it), 13.5, "text.secondary", wrap=True), 1)
+            v.addWidget(line)
+            if i < len(items) - 1:  # 绘制条目间分隔线。
+                div = QFrame()
+                div.setFixedHeight(1)
+                div.setStyleSheet(f"background: {theme.color('stroke.divider')}; border: none;")
+                v.addWidget(div)
+        return w
+
+    def _license_meta(self) -> QWidget:
+        """创建许可类型、项目时间与独立性关系等关键资料行。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 0, 0, 0)
+        v.setSpacing(10)
+        rows = [
+            (tr("许可证"), tr("PolyForm NC 1.0.0 +附加"), None),
+            (tr("商业牟利"), tr("禁止"), theme.color("danger")),
+            (tr("篡改署名"), tr("禁止"), theme.color("danger")),
+            (tr("立项时间"), "2026-03-09", None),
+            (tr("发布时间"), tr("待定"), None),
+            (tr("与原 d3dxSkinManage 关系"), tr("独立 · 无引用"), None),
+        ]
+        for k, val, vcol in rows:
+            v.addWidget(self._meta_row(k, val, vcol))
+        v.addStretch(1)
+        return w
+
+    def _meta_row(self, key: str, val: str, vcol: str | None) -> QFrame:
+        """构建键值对形式的资料行，可单独强调值的颜色。"""
+        f = QFrame()
+        f.setObjectName("metaRow")
+        f.setStyleSheet(
+            f"QFrame#metaRow {{ background: {theme.color('bg.subtle')};"
+            f" border: 1px solid {theme.color('stroke.control')}; border-radius: 8px; }}"
+        )
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(14, 11, 14, 11)
+        lay.addWidget(_label(key, 13, "text.tertiary"))
+        lay.addStretch(1)
+        val_lbl = _label(val, 13.5, "text.primary", weight=QFont.Weight.DemiBold)
+        if vcol:
+            val_lbl.setStyleSheet(f"color: {vcol}; background: transparent; {_font_css(13.5, QFont.Weight.DemiBold)}")
+        lay.addWidget(val_lbl)
+        return f
+
+    # 页脚
+    def _footer(self) -> QWidget:
+        """构建关于页底部分隔线、社区致谢和版权说明。"""
+        w = QWidget()
+        w.setStyleSheet("background: transparent;")
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 24, 0, 8)
+        v.setSpacing(8)
+        line = QFrame()
+        line.setFixedHeight(1)
+        line.setStyleSheet(f"background: {theme.color('stroke.divider')}; border: none;")
+        v.addWidget(line)
+        v.addSpacing(16)
+
+        gold = _gold()
+        l1 = QLabel(f'Made with <span style="color:{gold}">&#9829;</span> for the community · d3dxSkinManage-Plus')
+        l1.setTextFormat(Qt.TextFormat.RichText)
+        l1.setFont(_font(13))
+        l1.setStyleSheet(f"color: {theme.color('text.disabled')}; background: transparent; {_font_css(13)}")
+        l1.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+        v.addWidget(l1, alignment=Qt.AlignmentFlag.AlignHCenter)
+
+        l2 = _label(
+            tr("© 2026 · 致敬每一位为社区点亮火种的人"), 13, "text.disabled", align=Qt.AlignmentFlag.AlignHCenter
+        )
+        v.addWidget(l2, alignment=Qt.AlignmentFlag.AlignHCenter)
+        return w
