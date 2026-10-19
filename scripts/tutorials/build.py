@@ -147,3 +147,29 @@ def assemble_manual(language: str = "zh-CN") -> str:
     destination.write_text(text, encoding="utf-8")
     print(f"  [拼装] {destination.name}  {len(text)} 字符")
     return text
+
+
+def rebase_markdown_links(text: str, source: Path, destination: Path | None = None) -> str:
+    """按目标文档目录换算本地链接；渲染 HTML 时统一使用教程素材根目录。"""
+    destination = destination or TUT
+
+    def replace(match: re.Match[str]) -> str:
+        """仅换算本地文档和图片路径，保留可选的页内锚点。"""
+        target = match[2].strip("<>")
+        parsed = urlsplit(target)
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            return match[0]
+        path = (source.parent / unquote(parsed.path)).resolve()
+        relative = Path(os.path.relpath(path, destination)).as_posix()
+        if parsed.fragment:
+            relative += f"#{parsed.fragment}"
+        return f"{match[1]}{relative}{match[3]}"
+
+    lines, fenced = [], False
+    for line in text.splitlines(keepends=True):
+        if line.strip().startswith("```"):
+            fenced = not fenced
+        elif not fenced:
+            line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", replace, line)
+        lines.append(line)
+    return "".join(lines)
