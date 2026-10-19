@@ -129,3 +129,21 @@ def emote_for(text: str) -> str | None:
             path = TUT / "images" / "plusa" / "face" / f"{name}.webp"
             return f"images/plusa/face/{name}.webp" if path.is_file() else None
     return None
+
+
+def assemble_manual(language: str = "zh-CN") -> str:
+    """按章节顺序拼装手册，将链接换算为完整手册所在目录的相对路径。"""
+    english = language == "en-US"
+    parts = [(EN_MANUAL_HEAD if english else MANUAL_HEAD).rstrip()]
+    chapter_order = EN_CHAPTER_ORDER if english else CHAPTER_ORDER
+    draft = DRAFT / ("en" if english else "zh")
+    destination = EN_MANUAL if english else MANUAL
+    for name in chapter_order:
+        path = draft / name
+        if not path.is_file():
+            raise FileNotFoundError(f"缺少章节：{path}")
+        parts.append(rebase_markdown_links(path.read_text(encoding="utf-8"), path, destination.parent).strip())
+    text = "\n\n---\n\n".join(parts) + "\n"
+    destination.write_text(text, encoding="utf-8")
+    print(f"  [拼装] {destination.name}  {len(text)} 字符")
+    return text
