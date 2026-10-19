@@ -253,3 +253,13 @@ def inline(text: str, embed) -> str:
     for i in range(len(holes) - 1, -1, -1):
         out = out.replace(f"\x00{i}\x00", holes[i])
     return out
+
+
+def slugify(text: str, used: set[str]) -> str:
+    """生成可分享且在文档内唯一的小节标识。"""
+    base = re.sub(r"[^\w一-鿿]+", "-", text).strip("-").lower() or "sec"
+    slug, n = base, 2
+    while slug in used:
+        slug, n = f"{base}-{n}", n + 1
+    used.add(slug)
+    return slug
