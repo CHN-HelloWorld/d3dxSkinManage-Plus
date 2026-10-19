@@ -173,3 +173,39 @@ def rebase_markdown_links(text: str, source: Path, destination: Path | None = No
             line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", replace, line)
         lines.append(line)
     return "".join(lines)
+
+
+def embed_source_references(body: str, *, language: str) -> str:
+    """将正文引用的仓库文本内嵌为源码附录，使离线指南无需旁带源码目录。"""
+    repository = TUT.parent.parent.resolve()
+    references: dict[Path, str] = {}
+
+    def replace(match: re.Match[str]) -> str:
+        """把仓库内可读文本的链接指向去重后的附录，并拒绝目录越界。"""
+        target = html.unescape(match[1])
+        parsed = urlsplit(target)
+        if parsed.scheme or parsed.netloc or not parsed.path:
+            return match[0]
+        source = (TUT / unquote(parsed.path)).resolve()
+        if not source.is_relative_to(repository) or source.suffix not in {".md", ".py", ".json"}:
+            raise ValueError(f"源码引用必须是仓库内的 Markdown、Python 或 JSON 文件：{target}")
+        if not source.is_file():
+            raise FileNotFoundError(f"源码引用不存在：{source}")
+        relative = source.relative_to(repository).as_posix()
+        anchor = "source-" + hashlib.sha256(relative.encode("utf-8")).hexdigest()[:16]
+        references[source] = anchor
+        return f'<a href="#{anchor}">{match[3]}</a>'
+
+    body = re.sub(r'<a href="([^"]+)"([^>]*)>(.*?)</a>', replace, body, flags=re.DOTALL)
+    if not references:
+        return body
+    label = "Referenced source files" if language == "en-US" else "引用的源码文件"
+    parts = [f'<section class="source-references" aria-label="{label}"><p><strong>{label}</strong></p>']
+    for source, anchor in references.items():
+        relative = html.escape(source.relative_to(repository).as_posix())
+        contents = html.escape(source.read_text(encoding="utf-8"), quote=False)
+        parts.append(
+            f'<details class="source-file" id="{anchor}"><summary>{relative}</summary>'
+            f"<pre><code>{contents}</code></pre></details>"
+        )
+    return body + "\n" + "\n".join(parts) + "</section>"
