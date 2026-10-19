@@ -209,3 +209,47 @@ def embed_source_references(body: str, *, language: str) -> str:
             f"<pre><code>{contents}</code></pre></details>"
         )
     return body + "\n" + "\n".join(parts) + "</section>"
+
+
+_INLINE_CODE = re.compile(r"`([^`]+)`")
+_BOLD = re.compile(r"\*\*([^*]+)\*\*")
+_ITALIC = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
+_LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+_IMG = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
+
+DOC_ANCHORS = {
+    "zh/插件开发指南.md": "#插件开发指南",
+    "zh/5分钟快速上手.md": "#5-分钟快速上手",
+    "zh/完整功能手册.md": "#完整功能手册",
+    "en/Quickstart.en.md": "#5-minute-quick-start",
+    "en/Manual.en.md": "#complete-user-manual",
+    "en/PluginGuide.en.md": "#plugin-development-guide",
+}
+
+
+def inline(text: str, embed) -> str:
+    """转义正文并渲染行内代码、强调及链接。"""
+    out = html.escape(text, quote=False)
+    holes: list[str] = []
+
+    def stash(rendered: str) -> str:
+        """暂存已渲染片段，避免后续替换重复转义。"""
+        holes.append(rendered)
+        return f"\x00{len(holes) - 1}\x00"
+
+    def link(match) -> str:
+        """将教程内文档链接转换为当前页面锚点。"""
+        href = html.unescape(match.group(2)).strip("<>")
+        href = DOC_ANCHORS.get(href, href)
+        target = "" if href.startswith("#") else ' target="_blank" rel="noopener"'
+        return stash(f'<a href="{html.escape(href, quote=True)}"{target}>{match.group(1)}</a>')
+
+    out = _INLINE_CODE.sub(lambda m: stash(f"<code>{m.group(1)}</code>"), out)
+    out = _BOLD.sub(lambda m: stash(f"<strong>{m.group(1)}</strong>"), out)
+    out = _ITALIC.sub(lambda m: stash(f"<em>{m.group(1)}</em>"), out)
+    out = _LINK.sub(link, out)
+    out = re.sub(r"\\n", "<br>", out)
+    # 外层样式可能包含先保存的代码片段，先还原外层再展开内层。
+    for i in range(len(holes) - 1, -1, -1):
+        out = out.replace(f"\x00{i}\x00", holes[i])
+    return out
