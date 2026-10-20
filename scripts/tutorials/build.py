@@ -332,3 +332,124 @@ def data_uri(rel: str) -> str:
     except Exception as e:
         print(f"  ! {rel} 转 WebP 失败，按原图内嵌：{e}", file=sys.stderr)
     return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
+
+
+def render(
+    md: str,
+    toc: list[tuple[int, str, str]],
+    used_slugs: set[str],
+    id_prefix: str,
+    translations: dict[str, str] | None = None,
+) -> str:
+    """将教程 Markdown 转换为正文，并记录导航和译文目标。"""
+    lines = md.splitlines()
+    out: list[str] = []
+    i, n = 0, len(lines)
+    while i < n:
+        line = lines[i]
+
+        if not line.strip():
+            i += 1
+            continue
+
+        if line.startswith("```"):
+            lang = line[3:].strip()
+            i += 1
+            buf: list[str] = []
+            while i < n and not lines[i].startswith("```"):
+                buf.append(lines[i])
+                i += 1
+            i += 1
+            code = html.escape("\n".join(buf), quote=False)
+            cls = f' class="lang-{html.escape(lang)}"' if lang else ""
+            out.append(f"<pre{cls}><code>{code}</code></pre>")
+            continue
+
+        if re.match(r"^(-{3,}|\*{3,})\s*$", line):
+            out.append("<hr>")
+            i += 1
+            continue
+
+        m = re.match(r"^(#{1,6})\s+(.*)$", line)
+        if m:
+            level, text = len(m.group(1)), m.group(2).strip()
+            slug = f"{id_prefix}{slugify(text, used_slugs)}"
+            if level <= 3:
+                toc.append((level, text, slug))
+            emo = emote_for(text) if level == 2 else None
+            icon = f'<img class="emo" src="{data_uri(emo)}" data-source="{emo}" alt="">' if emo else ""
+            translated = f' data-translation-id="{html.escape(translations[slug], quote=True)}"' if translations else ""
+            out.append(f'<h{level} id="{slug}"{translated}>{icon}{inline(text, None)}</h{level}>')
+            i += 1
+            continue
+
+        mi = _IMG.match(line.strip())
+        if mi:
+            alt, src = mi.group(1), mi.group(2)
+            cap = ""
+            j = i + 1
+            while j < n and not lines[j].strip():
+                j += 1
+            mcap = re.match(r"^\*([^*].*)\*$", lines[j].strip()) if j < n else None
+            if mcap:
+                cap = f"<figcaption>{inline(mcap.group(1), None)}</figcaption>"
+                i = j
+            # 看板娘立绘不占整行：浮动在正文旁边当点缀。指路是朝右指的，浮左才指向文字
+            cls = ""
+            if "images/plusa/" in src:
+                cls = ' class="mascot left"' if "指路" in src else ' class="mascot right"'
+            out.append(
+                f'<figure{cls}><img loading="lazy" src="{data_uri(src)}" data-source="{html.escape(src, quote=True)}" '
+                f'alt="{html.escape(alt, quote=True)}">{cap}</figure>'
+            )
+            i += 1
+            continue
+
+        if line.lstrip().startswith(">"):
+            buf = []
+            while i < n and lines[i].lstrip().startswith(">"):
+                buf.append(re.sub(r"^\s*>\s?", "", lines[i]))
+                i += 1
+            body = " ".join(x.strip() for x in buf if x.strip())
+            kind = "warn" if body.startswith("⚠️") else ("tip" if body.startswith("💡") else "note")
+            out.append(f'<blockquote class="{kind}">{inline(body, None)}</blockquote>')
+            continue
+
+        if "|" in line and i + 1 < n and re.match(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", lines[i + 1]):
+            head = [c.strip() for c in line.strip().strip("|").split("|")]
+            i += 2
+            rows = []
+            while i < n and "|" in lines[i] and lines[i].strip():
+                rows.append([c.strip() for c in lines[i].strip().strip("|").split("|")])
+                i += 1
+            th = "".join(f"<th>{inline(c, None)}</th>" for c in head)
+            body = "".join("<tr>" + "".join(f"<td>{inline(c, None)}</td>" for c in r) + "</tr>" for r in rows)
+            out.append(f"<div class='tw'><table><thead><tr>{th}</tr></thead><tbody>{body}</tbody></table></div>")
+            continue
+
+        m = re.match(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$", line)
+        if m:
+            ordered = m.group(2) not in ("-", "*", "+")
+            tag = "ol" if ordered else "ul"
+            items: list[str] = []
+            while i < n:
+                mm = re.match(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$", lines[i])
+                if not mm:
+                    if lines[i].startswith(("  ", "\t")) and lines[i].strip() and items:
+                        items[-1] += " " + inline(lines[i].strip(), None)
+                        i += 1
+                        continue
+                    break
+                items.append(inline(mm.group(3), None))
+                i += 1
+            lis = "".join(f"<li>{x}</li>" for x in items)
+            out.append(f"<{tag}>{lis}</{tag}>")
+            continue
+
+        buf = []
+        while i < n and lines[i].strip() and not re.match(r"^(#{1,6}\s|```|>|\s*([-*+]|\d+[.)])\s)", lines[i]):
+            buf.append(lines[i].strip())
+            i += 1
+        if buf:
+            out.append(f"<p>{inline(' '.join(buf), None)}</p>")
+    return "\n".join(out)
