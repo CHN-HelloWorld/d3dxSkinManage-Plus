@@ -263,3 +263,40 @@ def slugify(text: str, used: set[str]) -> str:
         slug, n = f"{base}-{n}", n + 1
     used.add(slug)
     return slug
+
+
+def translation_ids(docs: list[tuple[str, str]], translated_docs: list[tuple[str, str]]) -> dict[str, str]:
+    """按各篇文档的标题结构配对，保留两种语言各自可分享的原有锚点。"""
+
+    def outlines(documents):
+        """按正文顺序读取标题，跳过代码示例。"""
+        used: set[str] = set()
+        result = []
+        for _, md in documents:
+            headings, fenced = [], False
+            for line in md.splitlines():
+                if line.startswith("```"):
+                    fenced = not fenced
+                elif not fenced and (match := re.match(r"^(#{1,6})\s+(.*)$", line)):
+                    level, title = len(match[1]), match[2].strip()
+                    headings.append((level, title, slugify(title, used)))
+            result.append(headings)
+        return result
+
+    if len(docs) != len(translated_docs):
+        raise ValueError("中英文文档数量不同，无法配对语言切换目标。")
+    pairs = {}
+    number_pattern = r"^(?:(?:第|Chapter|Step)\s*)?(\d+(?:\.\d+)*)(?=[\s.:：])"
+    for (title, _), source, target in zip(docs, outlines(docs), outlines(translated_docs), strict=True):
+        if [item[0] for item in source] != [item[0] for item in target]:
+            raise ValueError(f"{title} 中英文标题数量或层级不同，无法配对语言切换目标。")
+        for (level, text, slug), (_, translated_text, translated_slug) in zip(source, target, strict=True):
+            if level > 1:
+                numbers = [
+                    match[1] if (match := re.match(number_pattern, value)) else None
+                    for value in (text, translated_text)
+                ]
+                if numbers[0] != numbers[1]:
+                    raise ValueError(f"{title} 中英文小节编号不一致：{text} / {translated_text}")
+            pairs[slug] = translated_slug
+    return pairs
