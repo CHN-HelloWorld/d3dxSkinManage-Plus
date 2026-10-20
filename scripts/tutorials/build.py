@@ -300,3 +300,35 @@ def translation_ids(docs: list[tuple[str, str]], translated_docs: list[tuple[str
                     raise ValueError(f"{title} 中英文小节编号不一致：{text} / {translated_text}")
             pairs[slug] = translated_slug
     return pairs
+
+
+#: 内嵌统计：{"alpha": 带透明通道的图数, "flat": 不透明图数}，构建结束时打印，
+#: 让「alpha 又被烤掉」这类回归在构建输出里一眼可见
+EMBED_STATS = {"alpha": 0, "flat": 0}
+
+
+@cache
+def data_uri(rel: str) -> str:
+    """保留原始尺寸与 RGBA 像素，使用更小的无损 WebP 或原文件字节内嵌。
+
+    缩放仅由浏览器排版完成；放大查看时仍使用完整原图。相同来源只编码一次。
+    """
+    path = (TUT / rel).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(f"图片不存在：{rel}")
+    raw, mime = path.read_bytes(), mimetypes.guess_type(path.name)[0] or "image/png"
+    try:
+        import io
+
+        from PIL import Image
+
+        with Image.open(path) as im:
+            has_alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
+            buf = io.BytesIO()
+            im.convert("RGBA" if has_alpha else "RGB").save(buf, "WEBP", lossless=True, exact=True, method=4)
+            EMBED_STATS["alpha" if has_alpha else "flat"] += 1
+        if buf.tell() < len(raw):
+            raw, mime = buf.getvalue(), "image/webp"
+    except Exception as e:
+        print(f"  ! {rel} 转 WebP 失败，按原图内嵌：{e}", file=sys.stderr)
+    return f"data:{mime};base64," + base64.b64encode(raw).decode("ascii")
