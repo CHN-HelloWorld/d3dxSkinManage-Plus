@@ -906,3 +906,59 @@ def render_edition(
         "mainHTML": embed_source_references(cover + shortcuts + "\n<hr>\n".join(body_parts), language=language),
         "tocHTML": "\n".join(nav),
     }
+
+
+def build_html(
+    docs: list[tuple[str, str]],
+    *,
+    translated_docs: list[tuple[str, str]],
+    developer: bool = False,
+    language: str = "zh-CN",
+) -> str:
+    """内嵌两种语言与资源，使静态文档离线可读并支持原位切换。"""
+    alternate_language = "zh-CN" if language == "en-US" else "en-US"
+    primary = render_edition(docs, translated_docs=translated_docs, developer=developer, language=language)
+    alternate = render_edition(translated_docs, translated_docs=docs, developer=developer, language=alternate_language)
+    shared_sources = set(re.findall(r'data-source="([^"]+)"', primary["mainHTML"]))
+    assets = {}
+
+    def reuse_image(match):
+        """复用已内嵌图片，仅为另一语言补充独有资源。"""
+        tag = match[0]
+        source = re.search(r'data-source="([^"]+)"', tag)
+        image = re.search(r'\bsrc="([^"]+)"', tag)
+        if source is None or image is None:
+            raise ValueError("语言切换配图缺少内嵌内容或来源标记。")
+        if source[1] not in shared_sources:
+            assets[html.unescape(source[1])] = html.unescape(image[1])
+        return tag[: image.start()] + tag[image.end() :]
+
+    alternate["mainHTML"] = re.sub(r"<img\b[^>]*>", reuse_image, alternate["mainHTML"])
+    payload = {
+        "initial": language,
+        "pages": {
+            language: {"file": primary["file"], "labels": primary["labels"]},
+            alternate_language: alternate,
+        },
+        "assets": assets,
+    }
+    # 转义小于号，避免源码示例中的标签提前结束内嵌数据容器。
+    reader_data = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
+    language_links = []
+    for code, label in (("zh-CN", "中文"), ("en-US", "English")):
+        current = code == language
+        attributes = 'id="language-current" aria-current="page"' if current else 'id="language-link"'
+        href = "#cover" if current else quote(alternate["file"]) + "#cover"
+        language_links.append(f'<a {attributes} lang="{code}" hreflang="{code}" href="{href}">{label}</a>')
+    shell = SHELL
+    for key, value in primary["labels"].items():
+        shell = shell.replace(f"__{key}__", html.escape(value, quote=True))
+    return (
+        shell.replace("__CSS__", CSS)
+        .replace("__JS__", JS)
+        .replace("__AVATAR__", data_uri("images/plusa/00-头像.webp"))
+        .replace("__TOC__", primary["tocHTML"])
+        .replace("__MAIN__", primary["mainHTML"])
+        .replace("__LANGUAGES__", "".join(language_links))
+        .replace("__READER_DATA__", reader_data)
+    )
