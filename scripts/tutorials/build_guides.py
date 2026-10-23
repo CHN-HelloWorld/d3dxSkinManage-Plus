@@ -141,3 +141,28 @@ def build_one(spec: dict, record: dict, destination: Path) -> dict:
         "device_pixel_ratio": scale,
         "screen_origin": [origin_x, header],
     }
+
+
+def main() -> None:
+    """根据标注清单构建全部配图，保存可核验的来源和坐标。"""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--language", choices=("zh-CN", "en-US", "all"), default="all")
+    args = parser.parse_args()
+    for language in ("zh-CN", "en-US") if args.language == "all" else (args.language,):
+        suffix = "-en" if language == "en-US" else ""
+        layouts = "guide_layouts.en.json" if language == "en-US" else "guide_layouts.json"
+        specs = json.loads((Path(__file__).parent / layouts).read_text(encoding="utf-8"))
+        captures = json.loads((TUTORIAL / f"images/final{suffix}/captures.json").read_text(encoding="utf-8"))
+        records = {record["file"]: record for record in captures["screenshots"]}
+        output = TUTORIAL / f"images/guide{suffix}"
+        results = [build_one(spec, records[spec["file"]], output / spec["file"]) for spec in specs]
+        (output / "annotations.json").write_text(
+            json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+        )
+        print(
+            f"已生成 {len(results)} 张操作配图、{sum(len(result['marks']) for result in results)} 处编号说明：{output}"
+        )
+
+
+if __name__ == "__main__":
+    main()
