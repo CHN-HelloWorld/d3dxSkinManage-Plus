@@ -962,3 +962,54 @@ def build_html(
         .replace("__LANGUAGES__", "".join(language_links))
         .replace("__READER_DATA__", reader_data)
     )
+
+
+def main() -> int:
+    """生成所选语言的离线文档，产物写入构建目录或显式指定的位置。"""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--language", choices=("zh-CN", "en-US", "all"), default="all")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT, help="离线 HTML 输出目录")
+    args = parser.parse_args()
+    output_dir = args.output_dir.resolve()
+    if output_dir == TUT.resolve() or output_dir.is_relative_to(TUT.resolve()):
+        parser.error("HTML 输出目录不能位于教程源码目录中。")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    editions = {}
+    for language in ("zh-CN", "en-US"):
+        english = language == "en-US"
+        quick = EN_QUICK if english else QUICK
+        plugin = EN_PLUGIN_GUIDE if english else PLUGIN_GUIDE
+        for required in (quick, plugin):
+            if not required.is_file():
+                print(f"缺少 {required}", file=sys.stderr)
+                return 1
+        manual = EN_MANUAL if english else MANUAL
+        manual_md = rebase_markdown_links(assemble_manual(language), manual)
+        quick_md = rebase_markdown_links(quick.read_text(encoding="utf-8"), quick)
+        plugin_md = rebase_markdown_links(plugin.read_text(encoding="utf-8"), plugin)
+        titles = (
+            ("5-minute quick start", "Complete user manual", "Plugin development guide")
+            if english
+            else ("5 分钟快速上手", "完整功能手册", "插件开发指南")
+        )
+        editions[language] = list(zip(titles, (quick_md, manual_md, plugin_md)))
+    for language in ("zh-CN", "en-US") if args.language == "all" else (args.language,):
+        english = language == "en-US"
+        docs = editions[language]
+        translated_docs = editions["zh-CN" if english else "en-US"]
+        outputs = (
+            (
+                EN_OUT_HTML if english else OUT_HTML,
+                build_html(docs, translated_docs=translated_docs, language=language),
+            ),
+            (
+                EN_OUT_PLUGIN_HTML if english else OUT_PLUGIN_HTML,
+                build_html([docs[-1]], translated_docs=[translated_docs[-1]], developer=True, language=language),
+            ),
+        )
+        for path, document in outputs:
+            path = output_dir / path.name
+            path.write_text(document, encoding="utf-8")
+            images = len(re.findall(r'src="data:image', document))
+            print(f"  [构建] {path.name}  {path.stat().st_size / 1024 / 1024:.2f} MiB，内嵌 {images} 张无损图")
+    return 0
