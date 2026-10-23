@@ -1013,3 +1013,7 @@ def main() -> int:
             images = len(re.findall(r'src="data:image', document))
             print(f"  [构建] {path.name}  {path.stat().st_size / 1024 / 1024:.2f} MiB，内嵌 {images} 张无损图")
     return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
