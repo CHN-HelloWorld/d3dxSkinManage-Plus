@@ -109,3 +109,51 @@ def _set_tutorial_source(environment, files: dict[str, str], *, exit_code: int =
     (environment.tutorials / "source.json").write_text(
         json.dumps({"files": files, "exit_code": exit_code}, ensure_ascii=False), encoding="utf-8"
     )
+
+
+@pytest.mark.parametrize("onefile", [False, True])
+def test_build_distributes_current_tutorials_in_product_manifest_and_zip(
+    documentation_environment, monkeypatch, onefile
+):
+    env = documentation_environment
+    build = env.build
+    product = env.output if onefile else env.output / build.DIST_NAME
+    monkeypatch.setattr(sys, "argv", ["build.py", "--zip", *(["--onefile"] if onefile else [])])
+
+    for revision in ("first", "updated"):
+        documents = {name: f"<!doctype html><p>{revision}: {name}</p>" for name in DOCUMENT_NAMES}
+        _set_tutorial_source(env, {**documents, "构建指南.md": "build guide", "draft.html": "draft"})
+
+        assert build.main() == 0
+
+        assert (product / "docs").is_dir()
+        assert {path.name for path in (product / "docs").iterdir()} == set(DOCUMENT_NAMES)
+        for name, content in documents.items():
+            assert (product / "docs" / name).read_text(encoding="utf-8") == content
+        manifest = (product / "files.manifest").read_text(encoding="utf-8")
+        managed, preserve = manifest.split("[preserve]")
+        assert set(managed.splitlines()) - {"", "[managed]"} == {
+            build.EXE_NAME,
+            *(f"docs/{name}" for name in DOCUMENT_NAMES),
+        }
+        assert "docs/" not in preserve.splitlines()
+        with ZipFile(next(env.output.glob("*.zip"))) as archive:
+            entries = {name.split("/", 1)[1]: name for name in archive.namelist()}
+            assert set(entries) == {build.EXE_NAME, "files.manifest", *(f"docs/{name}" for name in DOCUMENT_NAMES)}
+            for name, content in documents.items():
+                assert archive.read(entries[f"docs/{name}"]).decode("utf-8") == content
+
+
+@pytest.mark.parametrize("failure", ["exit_code", "missing_file"])
+def test_tutorial_generation_failure_stops_before_compilation(documentation_environment, monkeypatch, failure):
+    env = documentation_environment
+    documents = {name: "<!doctype html><p>old output</p>" for name in DOCUMENT_NAMES}
+    _write_files(env.output / "tutorials", documents)
+    current = documents if failure == "exit_code" else {name: documents[name] for name in DOCUMENT_NAMES[:-1]}
+    _set_tutorial_source(env, current, exit_code=7 if failure == "exit_code" else 0)
+    monkeypatch.setattr(sys, "argv", ["build.py", "--zip"])
+
+    assert env.build.main() != 0
+
+    assert not env.compiled.exists()
+    assert not list(env.output.glob("*.zip"))
