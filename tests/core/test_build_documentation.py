@@ -157,3 +157,46 @@ def test_tutorial_generation_failure_stops_before_compilation(documentation_envi
 
     assert not env.compiled.exists()
     assert not list(env.output.glob("*.zip"))
+
+
+@pytest.mark.parametrize("docs_directory", ["docs", "DOCS"])
+def test_dirty_documentation_is_excluded_from_release_zip_and_manifest(tmp_path, monkeypatch, docs_directory):
+    from scripts.release import build
+
+    product = tmp_path / "product"
+    documents = {f"docs/{name}": "<!doctype html><p>release tutorial</p>" for name in DOCUMENT_NAMES}
+    excluded = {
+        f"{docs_directory}/构建指南.md": "developer instructions",
+        f"{docs_directory}/用户指南.md": "old guide",
+        f"{docs_directory}/插件开发指南.md": "old plugin guide",
+        f"{docs_directory}/tools/build.py": "source tool",
+        f"{docs_directory}/draft.html": "draft",
+        f"{docs_directory}/local.txt": "local note",
+    }
+    _write_files(product, {build.EXE_NAME: "program", **excluded, **documents})
+    monkeypatch.setattr(build, "PROJECT_BUILD", tmp_path)
+
+    manifest = build.generate_release_manifest([(product, "")], product)
+    archive = build.make_zip([(product, "")])
+
+    manifest_paths = {line.casefold() for line in manifest.read_text(encoding="utf-8").splitlines()}
+    assert {path.casefold() for path in documents} <= manifest_paths
+    assert not {path.casefold() for path in excluded} & manifest_paths
+    with ZipFile(archive) as package:
+        names = {name.split("/", 1)[1].casefold() for name in package.namelist()}
+        assert names == {path.casefold() for path in (build.EXE_NAME, "files.manifest", *documents)}
+
+
+def test_clean_removes_generated_documentation_but_preserves_sources(documentation_environment):
+    env = documentation_environment
+    _write_files(env.output / "tutorials", {name: "generated" for name in DOCUMENT_NAMES})
+    _write_files(env.output / "docs", {name: "shipped" for name in DOCUMENT_NAMES})
+    _write_files(env.output, {"unrelated.txt": "retained"})
+
+    assert env.build.clean_outputs() == 0
+
+    assert not (env.output / "tutorials").exists()
+    assert not (env.output / "docs").exists()
+    assert (env.source / "docs/构建指南.md").read_text(encoding="utf-8") == "build guide"
+    assert (env.source / "scripts/tutorials/build.py").is_file()
+    assert (env.output / "unrelated.txt").read_text(encoding="utf-8") == "retained"
