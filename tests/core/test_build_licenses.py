@@ -209,3 +209,90 @@ def test_restaging_removes_notices_for_dependencies_no_longer_shipped(license_en
 
     assert not (env.product / "licenses/old-library").exists()
     assert (env.product / "licenses/new-library/LICENSE.txt").read_bytes() == b"new-library license\r\n"
+
+
+@pytest.mark.parametrize("missing", [False, True])
+def test_upstream_supplements_are_required_only_for_shipped_components(license_environment, missing):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("library", 'Nuitka; extra == "build"'))
+    env.install("library")
+    env.install("Nuitka")
+    sources = {
+        "native-library": {
+            "distributions": ["library"],
+            "source": "https://example.invalid/library/1.0/LICENSE",
+            "files": ["native-library/LICENSE"],
+        },
+        "compiler": {
+            "distributions": ["Nuitka"],
+            "source": "https://example.invalid/compiler/LICENSE",
+            "files": ["compiler/LICENSE"],
+        },
+    }
+    (env.supplements / "sources.json").write_text(json.dumps(sources), encoding="utf-8")
+    if missing:
+        with pytest.raises((OSError, ValueError), match="native-library"):
+            env.build.stage_legal_notices(env.product)
+    else:
+        (env.supplements / "native-library").mkdir()
+        (env.supplements / "native-library/LICENSE").write_bytes(b"Upstream native terms\r\n")
+        env.build.stage_legal_notices(env.product)
+        assert (
+            env.product / "licenses/supplements/native-library/LICENSE"
+        ).read_bytes() == b"Upstream native terms\r\n"
+        assert not (env.product / "licenses/supplements/compiler").exists()
+
+
+@pytest.mark.parametrize("onefile", [False, True])
+def test_build_includes_notices_in_manifest_and_zip(license_environment, monkeypatch, onefile):
+    env = license_environment
+    build = env.build
+    env.install(build.APP_NAME, requires=("library",))
+    env.install("library")
+    output = env.product.parent / "build"
+    output.mkdir()
+    product = output if onefile else output / "app"
+    product.mkdir(exist_ok=True)
+    executable = product / build.EXE_NAME
+    executable.write_bytes(b"program")
+    monkeypatch.setattr(build, "PROJECT_BUILD", output)
+    monkeypatch.setattr(build, "OUTPUT_DIR", output)
+    monkeypatch.setattr(build, "STAGING_DIR", output)
+    monkeypatch.setattr(build, "check_env", lambda: True)
+    monkeypatch.setattr(build, "relocate_product", lambda mode: executable if mode else product)
+    monkeypatch.setattr(build.subprocess, "run", lambda command, **kwargs: subprocess.CompletedProcess(command, 0))
+    documentation = output / "tutorials"
+    documentation.mkdir()
+    for name in build.SHIPPED_DOCUMENT_FILES:
+        (documentation / name).write_text("<!doctype html><p>Guide</p>", encoding="utf-8")
+    monkeypatch.setattr(build, "build_documentation", lambda: documentation)
+
+    def unrelated_directory(relative):
+        def stage(directory):
+            path = directory / relative
+            path.mkdir(parents=True, exist_ok=True)
+            return path
+
+        return stage
+
+    monkeypatch.setattr(build, "stage_language_packs", unrelated_directory("config/languages"))
+    monkeypatch.setattr(build, "stage_plugins", unrelated_directory("plugins"))
+    monkeypatch.setattr(build, "stage_project_story", unrelated_directory("resources/about/story"))
+    monkeypatch.setattr(sys, "argv", ["build.py", "--zip", *(["--onefile"] if onefile else [])])
+
+    assert build.main() == 0
+
+    expected = {
+        "LICENSE": b"Project license\r\n",
+        "THIRD_PARTY_NOTICES.md": b"Project notices\r\n",
+        "licenses/library/LICENSE.txt": b"library license\r\n",
+        "licenses/python/LICENSE.txt": b"Python runtime license\r\n",
+    }
+    manifest = (product / "files.manifest").read_text(encoding="utf-8").splitlines()
+    managed = manifest[manifest.index("[managed]") + 1 : manifest.index("[preserve]")]
+    assert expected.keys() <= set(managed)
+    with ZipFile(next(output.glob("*.zip"))) as archive:
+        paths = {name.split("/", 1)[1]: name for name in archive.namelist()}
+        for relative, content in expected.items():
+            assert archive.read(paths[relative]) == content
+        assert "licenses/index.json" in paths
