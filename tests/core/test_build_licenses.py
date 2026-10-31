@@ -63,3 +63,51 @@ def license_environment(tmp_path, monkeypatch):
     return SimpleNamespace(
         install=install, product=tmp_path / "product", python=python, site=site, build=build, supplements=supplements
     )
+
+
+def test_stages_runtime_dependencies_and_later_requested_extras(license_environment):
+    env = license_environment
+    env.install(
+        env.build.APP_NAME,
+        requires=(
+            "shared>=1.0",
+            "plugin",
+            'pytest; extra == "dev"',
+            'Nuitka; extra == "build"',
+            'foreign; sys_platform == "not-a-platform"',
+        ),
+    )
+    env.install("shared", requires=("base", 'codec; extra == "render"', 'test-only; extra == "test"'))
+    env.install("plugin", requires=("shared[render]>=1.0",))
+    for name in ("base", "codec", "pytest", "Nuitka", "foreign", "test-only", "unrelated"):
+        env.install(name)
+
+    env.build.stage_legal_notices(env.product)
+
+    for name in ("shared", "plugin", "base", "codec"):
+        assert (env.product / f"licenses/{name}/LICENSE.txt").read_bytes() == f"{name} license\r\n".encode()
+    assert {path.name for path in (env.product / "licenses").iterdir() if path.is_dir()} == {
+        "shared",
+        "plugin",
+        "base",
+        "codec",
+        "python",
+    }
+    assert (env.product / "licenses/python/LICENSE.txt").read_bytes() == b"Python runtime license\r\n"
+    assert (env.product / "LICENSE").read_bytes() == b"Project license\r\n"
+    assert (env.product / "THIRD_PARTY_NOTICES.md").read_bytes() == b"Project notices\r\n"
+    index = json.loads((env.product / "licenses/index.json").read_text(encoding="utf-8"))
+    assert {package["name"] for package in index["packages"]} == {"shared", "plugin", "base", "codec"}
+
+
+def test_requested_extra_keeps_base_dependencies(license_environment):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("library[render]",))
+    env.install("library", requires=('base; extra == ""', 'codec; extra == "render"'))
+    env.install("base")
+    env.install("codec")
+
+    env.build.stage_legal_notices(env.product)
+
+    assert (env.product / "licenses/base/LICENSE.txt").read_bytes() == b"base license\r\n"
+    assert (env.product / "licenses/codec/LICENSE.txt").read_bytes() == b"codec license\r\n"
