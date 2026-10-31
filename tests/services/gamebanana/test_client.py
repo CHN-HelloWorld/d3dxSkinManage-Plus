@@ -45,6 +45,18 @@ async def test_categories_happy(client, respx_mock):
     assert all(c.id > 0 for c in cats)
 
 
+async def test_requests_identify_current_application_version(client, respx_mock):
+    from src.utils.constants import APP_VERSION
+
+    route = respx_mock.get("https://gamebanana.com/apiv11/ModCategory/5000/SubCategories").mock(
+        return_value=httpx.Response(200, json=[])
+    )
+
+    await client.sub_categories(5000)
+
+    assert route.calls.last.request.headers["User-Agent"] == f"d3dxSkinManagePlus-GB/{APP_VERSION}"
+
+
 async def test_sub_categories_returns_children(client, respx_mock):
     # 官方端点 /apiv11/ModCategory/{id}/SubCategories 返回的是数组，
     # 字段是 _sName / _sUrl / _sIconUrl / _nItemCount —— **没有** _idRow，
