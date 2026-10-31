@@ -1,0 +1,209 @@
+name: Windows 构建与发布
+run-name: Windows ${{ inputs.mode }} · ${{ inputs.version }}
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 操作（publish 构建并发布；build 只构建下载包）
+        type: choice
+        options:
+          - publish
+          - build
+        default: publish
+        required: true
+      version:
+        description: 版本号，例如 0.1.1（可带 v 前缀）
+        type: string
+        required: true
+      release_title:
+        description: 发布标题（publish 时必填，将显示在程序更新窗口）
+        type: string
+      release_notes:
+        description: '发布正文（publish 时必填；支持 Markdown，网页输入可用 \n 换行）'
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: 构建 Windows x64
+    runs-on: windows-2022
+    timeout-minutes: 180
+    env:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      NUITKA_CACHE_DIR: ${{ github.workspace }}/build/nuitka-cache
+    outputs:
+      tag: ${{ steps.prepare.outputs.tag }}
+      asset_name: ${{ steps.prepare.outputs.asset_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.14"
+          architecture: x64
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - name: 准备版本、更新来源和发布说明
+        id: prepare
+        run: python scripts/release/github_release.py prepare
+      - name: 检查发布目标
+        if: inputs.mode == 'publish'
+        uses: actions/github-script@v7
+        env:
+          RELEASE_TAG: ${{ steps.prepare.outputs.tag }}
+        with:
+          script: |
+            const target = { ...context.repo, tag: process.env.RELEASE_TAG };
+            try {
+              const { data: release } = await github.rest.repos.getReleaseByTag(target);
+              if (!release.draft) throw new Error('该版本已经发布，请使用新的版本号。');
+              if (release.target_commitish !== context.sha) {
+                throw new Error('已有草稿属于其他提交，请使用新的版本号或先处理该草稿。');
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+            try {
+              const { data: ref } = await github.rest.git.getRef({
+                ...context.repo, ref: `tags/${target.tag}`
+              });
+              let object = ref.object;
+              while (object.type === 'tag') {
+                const { data } = await github.rest.git.getTag({ ...context.repo, tag_sha: object.sha });
+                object = data.object;
+              }
+              if (object.sha !== context.sha) {
+                throw new Error('同名 tag 指向其他提交，不能用于本次发布。');
+              }
+            } catch (error) {
+              if (error.status !== 404) throw error;
+            }
+      - name: 下载并校验独立视频资源
+        env:
+          GH_TOKEN: ${{ github.token }}
+          STORY_MEDIA_TAG: ${{ vars.STORY_MEDIA_TAG || 'build-resources' }}
+        run: |
+          gh release download "$env:STORY_MEDIA_TAG" --repo "$env:GITHUB_REPOSITORY" --pattern "d3dxSkinManage-Plus-story-media.zip" --dir "$env:RUNNER_TEMP/story-media"
+          if ($LASTEXITCODE) {
+            throw "请先在资源 Release 中上传 d3dxSkinManage-Plus-story-media.zip，详见 docs/构建指南.md 的首次配置。"
+          }
+          python scripts/release/github_release.py restore-media --archive "$env:RUNNER_TEMP/story-media/d3dxSkinManage-Plus-story-media.zip"
+      - uses: microsoft/setup-msbuild@v2
+      - name: 恢复 Nuitka 编译缓存
+        uses: actions/cache@v4
+        with:
+          path: build/nuitka-cache
+          key: nuitka-windows-x64-python314-${{ hashFiles('pyproject.toml', 'scripts/release/nuitka-package.config.yml') }}
+          restore-keys: nuitka-windows-x64-python314-
+      - name: 安装运行和打包依赖
+        run: python -m pip install -e ".[build]"
+      - name: 构建原生更新器
+        run: msbuild updater/updater.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:DeployUpdater=false /verbosity:minimal
+      - name: 构建主程序和完整发行 ZIP
+        run: python scripts/release/build.py --with-updater --zip -- --msvc=latest --jobs=2 --lto=no
+      - name: 整理附件、正文和 SHA256
+        run: python scripts/release/github_release.py bundle
+      - name: 保存可下载的构建产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-${{ steps.prepare.outputs.tag }}
+          path: build/release/
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+      - name: 保存编译诊断报告
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuitka-report-${{ github.run_id }}
+          path: build/nuitka-report.xml
+          if-no-files-found: ignore
+          retention-days: 7
+
+  publish:
+    name: 发布 GitHub Release
+    if: inputs.mode == 'publish'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows-${{ needs.build.outputs.tag }}
+          path: release
+      - name: 准备发布草稿
+        id: draft
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const info = JSON.parse(fs.readFileSync('release/release.json', 'utf8'));
+            const releases = await github.paginate(github.rest.repos.listReleases, {
+              ...context.repo, per_page: 100
+            });
+            const existing = releases.find(release => release.tag_name === info.tag);
+            const parameters = {
+              ...context.repo, tag_name: info.tag, target_commitish: context.sha,
+              name: info.title, body: info.body, draft: true, prerelease: false
+            };
+            let release;
+            if (existing) {
+              if (!existing.draft) throw new Error('该版本已经发布，不能覆盖公开版本。');
+              if (existing.target_commitish !== context.sha) {
+                throw new Error('已有草稿属于其他提交，不能覆盖。');
+              }
+              ({ data: release } = await github.rest.repos.updateRelease({
+                ...parameters, release_id: existing.id
+              }));
+            } else {
+              ({ data: release } = await github.rest.repos.createRelease(parameters));
+            }
+            core.setOutput('release_id', release.id);
+      - name: 上传程序和校验文件
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ needs.build.outputs.tag }}
+          ASSET_NAME: ${{ needs.build.outputs.asset_name }}
+        run: gh release upload "$RELEASE_TAG" "release/$ASSET_NAME" "release/$ASSET_NAME.sha256" --clobber
+      - name: 附件就绪后公开发布
+        uses: actions/github-script@v7
+        env:
+          RELEASE_ID: ${{ steps.draft.outputs.release_id }}
+        with:
+          script: |
+            const fs = require('fs');
+            const info = JSON.parse(fs.readFileSync('release/release.json', 'utf8'));
+            const target = { ...context.repo, release_id: Number(process.env.RELEASE_ID) };
+            const { data: release } = await github.rest.repos.getRelease(target);
+            if (!release.draft) throw new Error('该 Release 已经公开，停止修改。');
+            const assets = await github.paginate(github.rest.repos.listReleaseAssets, target);
+            const archives = assets.filter(asset => asset.name.toLowerCase().endsWith('.zip'));
+            if (archives.length !== 1 || archives[0].name !== info.asset_name ||
+                archives[0].size !== info.asset_size || archives[0].state !== 'uploaded') {
+              throw new Error('发行 ZIP 未完整上传，或草稿包含多余的 ZIP。');
+            }
+            if (archives[0].digest && archives[0].digest !== `sha256:${info.sha256}`) {
+              throw new Error('GitHub 附件摘要与本次构建不符。');
+            }
+            if (!assets.some(asset => asset.name === info.checksum_name && asset.state === 'uploaded')) {
+              throw new Error('SHA256 校验文件尚未上传。');
+            }
+            const { data: published } = await github.rest.repos.updateRelease({
+              ...target, name: info.title, body: info.body, draft: false,
+              prerelease: false, make_latest: 'true'
+            });
+            await core.summary.addHeading('发布完成').addLink(info.title, published.html_url).write();
