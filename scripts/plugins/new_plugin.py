@@ -124,7 +124,7 @@ def main() -> int:
         "version": "0.1.0",
         "apiVersion": API_VERSION,
         "files": ["entry.py", "commands.py", "README.md", "languages"],
-        "minAppVersion": "0.1.0",
+        "minAppVersion": "1.0.0",
         "author": args.author,
         "description": f"{name} 插件",
         "entry": "entry.py",

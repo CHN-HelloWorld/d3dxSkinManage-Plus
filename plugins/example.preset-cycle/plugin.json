@@ -4,7 +4,7 @@
   "version": "0.1.0",
   "apiVersion": "2.0",
   "files": ["entry.py", "README.md", "languages"],
-  "minAppVersion": "0.1.0",
+  "minAppVersion": "1.0.0",
   "author": "d3dxSkinManage-Plus",
   "description": "通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。",
   "entry": "entry.py",

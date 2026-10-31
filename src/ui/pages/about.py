@@ -1127,7 +1127,7 @@ class AboutPage(QWidget):
         lay.setContentsMargins(0, 6, 0, 0)
         lay.setSpacing(10)
         lay.addWidget(_label(tr("当前状态"), 13.5, "text.tertiary"))
-        code = QLabel(tr("开发中 · 未发布"))
+        code = QLabel(tr("已发布"))
         code.setFont(_font(13))
         code.setStyleSheet(
             f"color: {theme.color('text.secondary')}; background: {theme.color('bg.subtle')};"

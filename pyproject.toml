@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "d3dxSkinManage-Plus"
-version = "0.1.0"
+version = "1.0.0"
 description = "一款基于 PySide6 的现代化 3DMigoto Mod 管理器"
 readme = "README.md"
 license = "LicenseRef-d3dxSkinManage-Plus"
@@ -29,6 +29,11 @@ dependencies = [
     "tenacity>=8.0.0",
     "rapidfuzz>=3.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus"
+Repository = "https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus"
+Issues = "https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/issues"
 
 [project.optional-dependencies]
 build = [

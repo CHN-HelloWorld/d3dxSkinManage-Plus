@@ -30,6 +30,7 @@ from src.services.gamebanana.models import (
     GbModRecord,
     GbModUpdateEntry,
 )
+from src.utils.constants import APP_VERSION
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 
@@ -90,7 +91,7 @@ class GameBananaClient:
         request_interval_ms: int = 200,
         proxy: str | None = None,
         user_agent: str | None = None,
-        version: str = "0.1.0",
+        version: str = APP_VERSION,
         cache: GbApiCache | None = None,
     ) -> None:
         """创建异步 HTTP 连接和并发配额，配置请求间隔、代理、缓存及更新检查冷却状态。"""
