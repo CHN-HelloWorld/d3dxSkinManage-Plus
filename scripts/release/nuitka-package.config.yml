@@ -1,0 +1,17 @@
+# windows-capture 2.0.1 仅用 OpenCV 保存图片；捕获与帧转换由原生扩展和 NumPy 完成。
+# 只在编译时替换两个保存入口，开发环境保留上游安装内容。
+- module-name: 'windows_capture' # checksum: edf12af2
+  anti-bloat:
+    - description: '使用已有的 Pillow 保存捕获图片，避免携带 OpenCV 及其视频库'
+      replacements_plain:
+        'import cv2': 'from PIL import Image'
+        'cv2.imwrite(path, self.frame_buffer)': '_save_capture_image(path, self.frame_buffer)'
+        'cv2.imwrite(path, self.to_bgr())': '_save_capture_image(path, self.to_bgr())'
+      append_plain: |
+        def _save_capture_image(path, pixels):
+            """将 BGR/BGRA 帧保存为图片，保留 PNG 透明度并兼容 JPEG。"""
+            channels = [2, 1, 0, 3] if pixels.shape[2] == 4 else [2, 1, 0]
+            image = Image.fromarray(pixels[..., channels])
+            if image.mode == "RGBA" and str(path).lower().endswith((".jpg", ".jpeg", ".jpe", ".jfif")):
+                image = image.convert("RGB")
+            image.save(path)
