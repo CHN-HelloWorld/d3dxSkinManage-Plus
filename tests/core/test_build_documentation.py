@@ -200,3 +200,25 @@ def test_clean_removes_generated_documentation_but_preserves_sources(documentati
     assert (env.source / "docs/构建指南.md").read_text(encoding="utf-8") == "build guide"
     assert (env.source / "scripts/tutorials/build.py").is_file()
     assert (env.output / "unrelated.txt").read_text(encoding="utf-8") == "retained"
+
+
+def test_documentation_staging_rejects_repository_source_directory(documentation_environment):
+    env = documentation_environment
+    generated = env.output / "tutorials"
+    _write_files(generated, {name: "generated" for name in DOCUMENT_NAMES})
+
+    with pytest.raises(ValueError):
+        env.build.stage_documentation(env.source, generated)
+
+    assert (env.source / "docs/构建指南.md").read_text(encoding="utf-8") == "build guide"
+    assert (env.source / "scripts/tutorials/build.py").is_file()
+
+
+def test_clean_rejects_a_build_directory_containing_documentation_sources(documentation_environment, monkeypatch):
+    env = documentation_environment
+    monkeypatch.setattr(env.build, "PROJECT_BUILD", env.source)
+
+    assert env.build.clean_outputs() == 1
+
+    assert (env.source / "docs/构建指南.md").read_text(encoding="utf-8") == "build guide"
+    assert (env.source / "scripts/tutorials/build.py").is_file()
