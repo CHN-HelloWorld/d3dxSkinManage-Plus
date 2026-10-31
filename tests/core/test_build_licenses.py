@@ -149,3 +149,48 @@ def test_copies_declared_legacy_and_embedded_wheel_notices_unchanged(license_env
     }
     for relative, content in expected.items():
         assert (env.product / "licenses" / relative).read_bytes() == content
+
+
+@pytest.mark.parametrize("same_content", [False, True])
+def test_repeated_wheel_notice_paths_are_deduplicated_only_when_identical(license_environment, same_content):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("library",))
+    env.install(
+        "library",
+        declarations=("library/vendor/LICENSE",),
+        files={"licenses/library/vendor/LICENSE": b"Vendor terms\r\n"},
+        package_files={"library/vendor/LICENSE": b"Vendor terms\r\n" if same_content else b"Other vendor terms\r\n"},
+    )
+    if same_content:
+        env.build.stage_legal_notices(env.product)
+        assert (env.product / "licenses/library/library/vendor/LICENSE").read_bytes() == b"Vendor terms\r\n"
+        index = json.loads((env.product / "licenses/index.json").read_text(encoding="utf-8"))
+        assert len(index["packages"][0]["files"]) == 1
+    else:
+        with pytest.raises(ValueError, match="library"):
+            env.build.stage_legal_notices(env.product)
+
+
+@pytest.mark.parametrize("missing", ["declared", "recorded", "all", "python", "dependency"])
+def test_missing_license_material_aborts_staging(license_environment, missing):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("library",))
+    if missing == "dependency":
+        expected = "library"
+    elif missing == "declared":
+        env.install("library", declarations=("LICENSE.txt", "COPYING"))
+        expected = "COPYING"
+    elif missing == "all":
+        env.install("library", declarations=(), files={})
+        expected = "library"
+    else:
+        env.install("library")
+        if missing == "recorded":
+            (env.site / "library-1.0.dist-info/licenses/LICENSE.txt").unlink()
+            expected = "LICENSE.txt"
+        else:
+            (env.python / "LICENSE.txt").unlink()
+            expected = "Python"
+
+    with pytest.raises((OSError, ValueError), match=expected):
+        env.build.stage_legal_notices(env.product)
