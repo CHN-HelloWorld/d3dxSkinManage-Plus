@@ -107,7 +107,7 @@ class AppUpdateChecker:
         try:
             release = self._race_fetch(api_path, timeout, self.proxy)
         except Exception as e:
-            # 降级策略（任务3）：用代理失败 → 直连重试一次，仍失败才报错
+            # 代理请求失败后直连重试一次，仍失败时返回错误。
             if self.proxy:
                 logger.warning("程序更新：代理检查失败(%s)，降级直连重试", e)
                 try:
@@ -221,7 +221,8 @@ class AppUpdateChecker:
                 return data
 
         last_err: Exception | None = None
-        with ThreadPoolExecutor(max_workers=len(urls)) as pool:
+        pool = ThreadPoolExecutor(max_workers=len(urls))
+        try:
             futures = {pool.submit(fetch, u): u for u in urls}
             pending = set(futures)
             while pending:
@@ -231,8 +232,10 @@ class AppUpdateChecker:
                 for fut in done:
                     try:
                         result = fut.result()
-                        # 取得有效结果后返回，其余具有短超时的请求自行结束。
                         return result
                     except Exception as e:
                         last_err = e
+        finally:
+            # 不等待慢源；已运行的请求在完成或超时后自行关闭客户端。
+            pool.shutdown(wait=False, cancel_futures=True)
         raise last_err or RuntimeError(tr("所有更新源均无响应"))

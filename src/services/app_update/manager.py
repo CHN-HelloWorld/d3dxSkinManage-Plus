@@ -111,7 +111,7 @@ class AppUpdateManager(QObject):
         self._info: AppUpdateInfo | None = None
         self._silent = False
         self._is_busy = False
-        # 下载候选源状态（任务5：下载源选择 + 失败回退）
+        # 记录下载候选源和失败后的回退位置。
         self._dl_info: AppUpdateInfo | None = None
         self._dl_candidates: list[str] = []
         self._dl_index = 0
@@ -167,7 +167,7 @@ class AppUpdateManager(QObject):
         checker = AppUpdateChecker(
             current_version=APP_VERSION,
             repo=repo,
-            # 任务3：软件更新无条件走代理（仅受代理总开关约束），与 Mod 商店「启用代理」无关
+            # 程序更新遵循代理总开关，不受 Mod 商店的代理设置影响。
             proxy=get_configured_proxy_url(self._config),
         )
         self._check_worker = _CheckWorker(checker, self)
@@ -236,7 +236,7 @@ class AppUpdateManager(QObject):
         save_dir.mkdir(parents=True, exist_ok=True)
         self._dl_save_path = save_dir / (info.download_url.split("/")[-1] or "update.zip")
 
-        # 任务5：按用户选择的下载源构造候选 URL 列表（auto=镜像优先、失败回退）
+        # 按下载源设置构造候选地址，自动模式优先镜像并在失败后回退。
         self._dl_candidates = self._build_download_candidates(info.download_url)
         self._dl_index = 0
 
@@ -296,7 +296,7 @@ class AppUpdateManager(QObject):
             on_progress=self._on_download_progress,
             on_finished=self._on_download_finished,
             on_error=self._on_download_error,
-            # 任务3：更新下载也走代理（总开关开启时），代理失败/超时自动降级直连
+            # 更新下载遵循代理总开关，代理失败或超时后回退直连。
             proxy=get_configured_proxy_url(self._config),
         )
 
