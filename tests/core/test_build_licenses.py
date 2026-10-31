@@ -194,3 +194,18 @@ def test_missing_license_material_aborts_staging(license_environment, missing):
 
     with pytest.raises((OSError, ValueError), match=expected):
         env.build.stage_legal_notices(env.product)
+
+
+def test_restaging_removes_notices_for_dependencies_no_longer_shipped(license_environment):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("old-library",))
+    env.install("old-library")
+    env.build.stage_legal_notices(env.product)
+    assert (env.product / "licenses/old-library/LICENSE.txt").is_file()
+    env.install(env.build.APP_NAME, requires=("new-library",))
+    env.install("new-library")
+
+    env.build.stage_legal_notices(env.product)
+
+    assert not (env.product / "licenses/old-library").exists()
+    assert (env.product / "licenses/new-library/LICENSE.txt").read_bytes() == b"new-library license\r\n"
