@@ -111,3 +111,41 @@ def test_requested_extra_keeps_base_dependencies(license_environment):
 
     assert (env.product / "licenses/base/LICENSE.txt").read_bytes() == b"base license\r\n"
     assert (env.product / "licenses/codec/LICENSE.txt").read_bytes() == b"codec license\r\n"
+
+
+def test_copies_declared_legacy_and_embedded_wheel_notices_unchanged(license_environment):
+    env = license_environment
+    env.install(env.build.APP_NAME, requires=("PySide6_Essentials", "unrar2-cffi", "httpx", "watchdog"))
+    env.install(
+        "PySide6_Essentials",
+        declarations=("LicenseRef-Qt-Commercial.txt",),
+        files={"licenses/LicenseRef-Qt-Commercial.txt": b"Qt commercial notice\r\n"},
+        package_files={"PySide6/Qt/licenses/LGPL-3.0.txt": b"Qt bundled LGPL text\r\n"},
+    )
+    env.install(
+        "unrar2-cffi",
+        declarations=("LICENSE",),
+        files={"licenses/LICENSE": b"Binding license\n"},
+        package_files={"unrar/LICENSE-UnRAR.txt": b"\xef\xbb\xbfUnRAR engine notice\r\n"},
+    )
+    env.install("httpx", declarations=(), files={"licenses/LICENSE.md": b"HTTP license\n"})
+    env.install(
+        "watchdog",
+        declarations=("LICENSE", "COPYING", "AUTHORS"),
+        files={"LICENSE": b"Watchdog license", "COPYING": b"Watchdog terms", "AUTHORS": b"Watchdog authors"},
+    )
+
+    env.build.stage_legal_notices(env.product)
+
+    expected = {
+        "pyside6-essentials/LicenseRef-Qt-Commercial.txt": b"Qt commercial notice\r\n",
+        "pyside6-essentials/PySide6/Qt/licenses/LGPL-3.0.txt": b"Qt bundled LGPL text\r\n",
+        "unrar2-cffi/LICENSE": b"Binding license\n",
+        "unrar2-cffi/unrar/LICENSE-UnRAR.txt": b"\xef\xbb\xbfUnRAR engine notice\r\n",
+        "httpx/LICENSE.md": b"HTTP license\n",
+        "watchdog/LICENSE": b"Watchdog license",
+        "watchdog/COPYING": b"Watchdog terms",
+        "watchdog/AUTHORS": b"Watchdog authors",
+    }
+    for relative, content in expected.items():
+        assert (env.product / "licenses" / relative).read_bytes() == content
