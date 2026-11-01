@@ -99,6 +99,7 @@ from src.utils.qt_timers import call_later
 try:
     from pypinyin import lazy_pinyin as _lazy_pinyin
 except Exception:
+    logger.exception("拼音词典加载失败，中文名称排序回退为原文比较")
     _lazy_pinyin = None
 
 
@@ -119,6 +120,8 @@ _AGE_RATING_LABELS = {
     AgeRating.R: N_("R - 限制级"),
     AgeRating.X: N_("X · 18+ 内容"),
 }
+
+_ALPHABETICAL_SORTS = ("alpha_asc", "alpha_desc")
 
 
 def _age_rating_text(rating: AgeRating) -> str:
@@ -1471,6 +1474,7 @@ class OverviewPage(QWidget):
         self._mod_manager = None  # 主窗口注入（parse_mod_key_bindings/edit_mod_key/部署用）
         self._adult_mode = "show"
         self._sort_key = "alpha_asc"  # 排序方式
+        self._category_sort_key = "alpha_asc"
         self._collator = QCollator()
         self._collator.setLocale(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
         self._collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -2228,6 +2232,7 @@ class OverviewPage(QWidget):
             effective_tags,
             self._tag_filter.match_mode if effective_tags else "",
             self._sort_key,
+            self._category_sort_key,
         )
         view = _PresentedOverviewView(
             (self._current_game_id, self._current_parent_id, self._view_mode),
@@ -2287,6 +2292,7 @@ class OverviewPage(QWidget):
             ):
                 combo.setCurrentIndex(max(0, combo.findData(value)))
             self._sort_key = view.signature[5]
+            self._category_sort_key = view.signature[6]
             self._tag_filter.selected_ids = [tag for tag in view.tag_ids if tag in self._tag_filter.catalog]
             self._tag_filter.set_match_mode(view.tag_mode)
             self._tag_filter.set_mod_types_enabled(view.signature[1] not in ("category", "character"))
@@ -2599,7 +2605,7 @@ class OverviewPage(QWidget):
         )
 
     def _sort_text_key(self, text: str) -> object:
-        """生成并缓存文本排序键，优先拼音并以原文区分同音名称，转换器变化时重建缓存。"""
+        """缓存保留非汉字内容的拼音排序键，以原文区分同音名称，转换器变化时重建缓存。"""
         value = (text or "").strip()
         converter = self._lazy_pinyin
         if not hasattr(self, "_sort_text_cache") or self._sort_text_converter is not converter:
@@ -2612,7 +2618,7 @@ class OverviewPage(QWidget):
         result = (value.casefold(),)
         if self._lazy_pinyin is not None and value:
             try:
-                py = "".join(self._lazy_pinyin(value, errors="ignore"))
+                py = "".join(self._lazy_pinyin(value, errors="default"))
                 if py:
                     result = (py.casefold(), value.casefold())
             except Exception:
@@ -2859,6 +2865,7 @@ class OverviewPage(QWidget):
         rating = self._age_filter.currentData() or ""
         has_tags = bool(self._tag_filter.selected_ids) and self._tag_filter.button.isEnabled()
         category_count = sum(item["type"] == "category" for item in desired)
+        mods_first = self._sort_key not in _ALPHABETICAL_SORTS
         for mod in mods:
             membership = self._delta_subtree_positions if query or has_tags else self._delta_direct_positions
             if mod.mod_id not in membership or type_filter in ("category", "character"):
@@ -2871,8 +2878,8 @@ class OverviewPage(QWidget):
                 continue
             if has_tags and not self._tag_filter.matches(mod.info.tags):
                 continue
-            lo = 0 if self._sort_key == "status_desc" else category_count
-            hi = len(desired) - category_count if self._sort_key == "status_desc" else len(desired)
+            lo = 0 if mods_first else category_count
+            hi = len(desired) - category_count if mods_first else len(desired)
             while lo < hi:
                 middle = (lo + hi) // 2
                 other = desired[middle]["data"]
@@ -3292,7 +3299,7 @@ class OverviewPage(QWidget):
             self._refresh_table(self._search_input.text().strip())
 
     def _build_display_items(self) -> None:
-        """构建混合显示列表（类别在前，Mod在后），并应用排序"""
+        """构建混合显示列表，Mod 专用排序将 Mod 分组置于类别之前。"""
         self._display_items = []
         self._display_idx_map = {}
         sorted_cats = list(self._characters)
@@ -3300,7 +3307,7 @@ class OverviewPage(QWidget):
         sorted_cats, sorted_mods = self._apply_sort(sorted_cats, sorted_mods)
 
         items_order: list[tuple[str, object]] = []
-        if self._sort_key == "status_desc":
+        if self._sort_key not in _ALPHABETICAL_SORTS:
             items_order.extend([("mod", mod) for mod in sorted_mods])
             items_order.extend([("category", cat) for cat in sorted_cats])
         else:
@@ -3626,7 +3633,7 @@ class OverviewPage(QWidget):
         self._display_items = []
         self._display_idx_map = {}
         items_order: list[tuple[str, object]] = []
-        if self._sort_key == "status_desc":
+        if self._sort_key not in _ALPHABETICAL_SORTS:
             items_order.extend([("mod", mod) for mod in filtered_mods])
             items_order.extend([("category", cat) for cat in filtered_cats])
         else:
@@ -6159,6 +6166,8 @@ class OverviewPage(QWidget):
     def _on_sort_changed(self, _index: int = 0) -> None:
         """排序方式变更 — 先持久化预览图切换状态，刷新后恢复选中面板"""
         self._sort_key = self._sort_combo.currentData() or "alpha_asc"
+        if self._sort_key in _ALPHABETICAL_SORTS:
+            self._category_sort_key = self._sort_key
 
         # 记住当前选中的Mod和正在显示的预览图 *路径*（而非索引，因为 flush 会重排列表）
         saved_mod = self._selected_mod
@@ -6200,19 +6209,21 @@ class OverviewPage(QWidget):
                 # 同步卡片预览图
                 self._update_card_preview_by_path(fresh_mod.mod_id, saved_preview_path)
 
-    def _apply_sort(self, cats: list, mods: list) -> tuple:
-        """根据当前排序方式对类别和Mod列表排序，返回排序后的 (cats, mods)"""
+    def _apply_sort(self, cats: list[dict], mods: list[Mod]) -> tuple[list[dict], list[Mod]]:
+        """类别沿用最近的字母排序方向，Mod 使用当前排序规则。"""
+        category_sort = self._sort_key if self._sort_key in _ALPHABETICAL_SORTS else self._category_sort_key
+        cats = sorted(
+            cats,
+            key=lambda c: self._sort_text_key(c.get("name", "")),
+            reverse=category_sort == "alpha_desc",
+        )
         if self._sort_key == "alpha_asc":
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
             mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name))
         elif self._sort_key == "alpha_desc":
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
             mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name), reverse=True)
         elif self._sort_key == "time_asc":
-            cats = sorted(cats, key=lambda c: c.get("sort_order", 0))
             mods = sorted(mods, key=lambda m: m.imported_at or "")
         elif self._sort_key == "time_desc":
-            cats = sorted(cats, key=lambda c: c.get("sort_order", 0), reverse=True)
             mods = sorted(mods, key=lambda m: m.imported_at or "", reverse=True)
         elif self._sort_key == "author_asc":
             mods_with_author = [m for m in mods if (m.info.author or "").strip()]
@@ -6225,7 +6236,6 @@ class OverviewPage(QWidget):
                 ),
             )
             mods = mods_with_author + mods_without_author
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
         elif self._sort_key == "author_desc":
             mods_with_author = [m for m in mods if (m.info.author or "").strip()]
             mods_without_author = [m for m in mods if not (m.info.author or "").strip()]
@@ -6238,7 +6248,6 @@ class OverviewPage(QWidget):
                 reverse=True,
             )
             mods = mods_with_author + mods_without_author
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")), reverse=True)
         elif self._sort_key == "status_desc":
             mods = sorted(
                 mods,
@@ -6247,7 +6256,6 @@ class OverviewPage(QWidget):
                     self._sort_text_key(m.display_name),
                 ),
             )
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
         elif self._sort_key == "age_asc":
             rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
             mods = sorted(
@@ -6257,7 +6265,6 @@ class OverviewPage(QWidget):
                     self._sort_text_key(m.display_name),
                 ),
             )
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
         elif self._sort_key == "age_desc":
             rating_rank = {"G": 0, "P": 1, "R": 2, "X": 3}
             mods = sorted(
@@ -6267,7 +6274,6 @@ class OverviewPage(QWidget):
                     self._sort_text_key(m.display_name),
                 ),
             )
-            cats = sorted(cats, key=lambda c: self._sort_text_key(c.get("name", "")))
         return cats, mods
 
     def _on_card_scale_changed(self, value: int) -> None:
@@ -6582,7 +6588,7 @@ class OverviewPage(QWidget):
         category_items = [{"id": cat.get("id", ""), "type": "category", "data": cat} for cat in filtered_cats]
         mod_items = [{"id": mod.mod_id, "type": "mod", "data": mod} for mod in filtered_mods]
         self._display_items = (
-            mod_items + category_items if self._sort_key == "status_desc" else category_items + mod_items
+            mod_items + category_items if self._sort_key not in _ALPHABETICAL_SORTS else category_items + mod_items
         )
         self._display_idx_map = {item["id"]: i for i, item in enumerate(self._display_items)}
 

@@ -152,6 +152,7 @@ def test_replaced_rows_never_render_old_lazy_content(qtbot, temp_data_dir):
 
 def test_identity_copies_keep_distinct_status_and_rebuild_resets_category_height(qtbot, temp_data_dir):
     page = _list_page(qtbot, count=2)
+    page._sort_key = "alpha_asc"
     enabled, disabled = page._current_mods
     enabled.enable()
     page.set_characters([{"id": "category", "name": "Category"}], refresh=False)
