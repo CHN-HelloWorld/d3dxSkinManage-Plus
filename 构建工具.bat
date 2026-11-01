@@ -1,6 +1,16 @@
 @echo off
-cd /d "%~dp0"
+setlocal
+
+if defined D3DX_BUILD_MENU_UTF8 goto utf8_ready
+set "D3DX_BUILD_MENU_UTF8=1"
 chcp 65001 >nul
+"%ComSpec%" /d /s /c ""%~f0" %*"
+exit /b %errorlevel%
+
+:utf8_ready
+REM 使用独立的 UTF-8 CMD，避免从 CP936 启动时截断中文命令。
+set "D3DX_BUILD_MENU_UTF8="
+cd /d "%~dp0"
 title d3dxSkinManage-Plus 构建工具
 
 REM 构建菜单将参数传递给 scripts/release/build.py，成品保存到项目 build 目录。
