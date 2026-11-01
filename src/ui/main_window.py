@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
 
         界面构建后加载游戏数据、背景与插件，预热常用交互资源；后台任务结果通过所属线程信号与控制器发布。"""
         super().__init__(parent)
+        phase_started = time.perf_counter()
         self._config = Config()
         from src.ui.image_memory_runtime import ImageMemoryMonitor
 
@@ -282,7 +283,11 @@ class MainWindow(QMainWindow):
         # 导入期间暂停 watcher 触发的 _refresh_current，避免对账将待压缩或删除的
         # 中间目录登记为独立 Mod。异步导入期间去抖定时器仍会触发，因此需要显式状态保护。
         self._import_active = False
+        logger.info("启动阶段：核心服务初始化 %.3f 秒", time.perf_counter() - phase_started)
+        phase_started = time.perf_counter()
         self._setup_ui()
+        logger.info("启动阶段：主界面构建 %.3f 秒", time.perf_counter() - phase_started)
+        phase_started = time.perf_counter()
         from src.ui.deployment_activation import DeploymentActivationController
 
         self._deployment_activation = DeploymentActivationController(self._mod_manager, self)
@@ -370,15 +375,20 @@ class MainWindow(QMainWindow):
         self._setup_shortcuts()
         self._init_data()
         self.apply_background()  # 应用启动时加载自定义背景。
+        logger.info("启动阶段：运行状态恢复 %.3f 秒", time.perf_counter() - phase_started)
 
         # 插件系统：发现 + 激活（在数据/游戏就绪后，使插件激活时只读门面可用）
+        phase_started = time.perf_counter()
         self._init_plugins()
+        logger.info("启动阶段：插件初始化 %.3f 秒", time.perf_counter() - phase_started)
+        phase_started = time.perf_counter()
         self._prepare_interaction_dialogs()
         self._directory_cards_prepared = False
         self._directory_card_prepare_timer = QTimer(self)
         self._directory_card_prepare_timer.setSingleShot(True)
         self._directory_card_prepare_timer.timeout.connect(self._prepare_directory_cards)
         self._prepare_directory_cards()
+        logger.info("启动阶段：交互资源准备 %.3f 秒", time.perf_counter() - phase_started)
         if getattr(self._mod_manager, "category_preset_recovery_errors", ()):
             self._category_recovery_notice_timer = QTimer(self)
             self._category_recovery_notice_timer.setSingleShot(True)

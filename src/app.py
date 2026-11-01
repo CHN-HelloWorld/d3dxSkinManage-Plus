@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from time import perf_counter
 
 from PySide6.QtCore import QLoggingCategory
 from PySide6.QtGui import QIcon
@@ -50,6 +51,7 @@ class App:
 
     def run(self) -> int:
         """启动应用"""
+        startup_started = perf_counter()
         # 初始化函数可重复调用，保证直接启动应用时也记录日志。
         from src.utils.logger import init_app_logging, install_qt_message_handler
         from src.utils.win_console import disable_quick_edit_mode
@@ -87,6 +89,7 @@ class App:
             except Exception:
                 pass
 
+        phase_started = perf_counter()
         self._qt_app = QApplication(sys.argv)
         self._qt_app.setApplicationName(APP_NAME)
         # 不设 applicationDisplayName：Qt 会把它作为「 - 后缀」追加到每个已自设标题的弹窗后
@@ -140,10 +143,13 @@ class App:
             # 应用主题
             theme = self._config.get("general.theme", "light")
             self.apply_theme(theme)
+        logger.info("启动阶段：Qt 与主题初始化 %.3f 秒", perf_counter() - phase_started)
 
         # 创建主窗口
+        phase_started = perf_counter()
         from src.ui.main_window import MainWindow
 
+        logger.info("启动阶段：主窗口模块载入 %.3f 秒", perf_counter() - phase_started)
         self._main_window = MainWindow()
         self._main_window.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
         self._main_window.show()
@@ -157,7 +163,7 @@ class App:
         except Exception as e:
             logger.debug("窗口视觉增强不可用: %s", e)
 
-        logger.info("应用启动完成")
+        logger.info("应用启动完成（准备耗时 %.3f 秒）", perf_counter() - startup_started)
         return self._qt_app.exec()
 
     def _install_qt_translations(self, lang: str) -> None:
