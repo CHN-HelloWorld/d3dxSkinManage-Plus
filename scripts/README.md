@@ -5,7 +5,7 @@ Windows 使用 `.venv\Scripts\python.exe`，其他平台可替换为当前环境
 
 | 目录 | 职责与入口 |
 | --- | --- |
-| `release/` | [build.py](release/build.py) 构建和打包发行文件；[release_licenses.py](release/release_licenses.py) 由构建脚本调用以收集运行依赖许可；[nuitka-package.config.yml](release/nuitka-package.config.yml) 配置 Nuitka 包处理规则。 |
+| `release/` | [build.py](release/build.py) 构建和打包发行文件；[github_release.py](release/github_release.py) 准备云端发行版本、独立视频资源和发布附件；[release_licenses.py](release/release_licenses.py) 收集运行依赖许可；[nuitka-package.config.yml](release/nuitka-package.config.yml) 配置 Nuitka 包处理规则。 |
 | `tutorials/` | [build.py](tutorials/build.py) 生成离线教程，由发行构建自动调用；[verify.py](tutorials/verify.py) 核验文档、配图与语言导航；截图和标注工具用于维护教程素材。 |
 | `quality/` | [check_repository.py](quality/check_repository.py) 检查文本编码、源码说明、文档链接和 C++ 格式。 |
 | `i18n/` | [i18n_catalog.py](i18n/i18n_catalog.py) 提取翻译原文、创建语言包并校验占位符。 |
@@ -31,6 +31,7 @@ Windows 使用 `.venv\Scripts\python.exe`，其他平台可替换为当前环境
 
 ```powershell
 .venv\Scripts\python.exe scripts/release/build.py --dry-run
+.venv\Scripts\python.exe scripts/release/github_release.py pack-media
 .venv\Scripts\python.exe scripts/tutorials/build.py
 .venv\Scripts\python.exe scripts/tutorials/verify.py
 .venv\Scripts\python.exe scripts/quality/check_repository.py
@@ -45,5 +46,5 @@ Windows 使用 `.venv\Scripts\python.exe`，其他平台可替换为当前环境
 Fluent 图标获取脚本使用 Bash 执行：`bash scripts/assets/fetch_fluent_icons.sh`。
 性能脚本的参数通过各自的 `--help` 查看；测试数据和输出使用独立目录。
 
-详细说明见[构建指南](../docs/构建指南.md)、[语言包维护](../config/languages/README.md)、
+详细说明见[构建指南](../docs/构建指南.md)、[语言包维护](../docs/tutorials/zh/语言包指南.md)、
 [插件开发指南](../docs/tutorials/zh/插件开发指南.md)和[测试说明](../tests/README.md)。
