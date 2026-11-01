@@ -87,10 +87,17 @@ _TIMELINE = [
         "2026-03-09",
         N_("传承"),
         N_("d3dxSkinManage-Plus 立项"),
-        N_("全新独立项目，以现代技术栈与设计重新出发，承接社区需求（与原项目无代码关联）。正式发布时间待定。"),
+        N_("全新独立项目，以现代技术栈与设计重新出发，承接社区需求（与原项目无代码关联）。"),
         False,
     ),
     ("2026-08-29", N_("内测"), N_("第一次内测"), N_("d3dxSkinManage-Plus 开启第一次内测。"), False),
+    (
+        "2026-11-01",
+        N_("正式"),
+        N_("d3dxSkinManage-Plus 正式发布"),
+        N_("d3dxSkinManage-Plus 正式面向社区发布。"),
+        False,
+    ),
 ]
 
 # (头像文件名, 昵称, 角色名, 角色描述, GitHub URL（无主页时为 None）, 是否创始人)
@@ -1582,7 +1589,7 @@ class AboutPage(QWidget):
             (tr("商业牟利"), tr("禁止"), theme.color("danger")),
             (tr("篡改署名"), tr("禁止"), theme.color("danger")),
             (tr("立项时间"), "2026-03-09", None),
-            (tr("发布时间"), tr("待定"), None),
+            (tr("发布时间"), "2026-11-01", None),
             (tr("与原 d3dxSkinManage 关系"), tr("独立 · 无引用"), None),
         ]
         for k, val, vcol in rows:
