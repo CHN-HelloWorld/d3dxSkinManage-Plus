@@ -1,3 +1,5 @@
+"""验证字体设置、实时应用及字体选择弹窗的主题兼容性。"""
+
 from __future__ import annotations
 
 import json
@@ -356,7 +358,7 @@ def test_font_popup_surfaces_do_not_inherit_transparent_settings_background(
 
 
 def test_font_popup_preserves_acrylic_and_selected_font_after_retheme(qtbot, qapp, font_app, installed_family):
-    from src.ui import acrylic
+    from src.ui import acrylic, win_effects
 
     font_app.apply_font(installed_family)
     font_app.apply_theme("light")
@@ -381,7 +383,11 @@ def test_font_popup_preserves_acrylic_and_selected_font_after_retheme(qtbot, qap
 
             surface = combo.view().window().grab().toImage()
             alpha = surface.pixelColor(surface.width() - 30, surface.height() - 14).alpha()
-            assert 0 < alpha < 255, "The font selector must preserve the app's translucent popup surface"
+            if win_effects.needs_popup_paint_before_blur():
+                # Win10 已将采样背景和半透明底色合成，最终像素应不透明。
+                assert alpha == 255
+            else:
+                assert 0 < alpha < 255, "The font selector must preserve the app's translucent popup surface"
             assert combo.view().font().family() == installed_family
             combo.hidePopup()
     finally:
