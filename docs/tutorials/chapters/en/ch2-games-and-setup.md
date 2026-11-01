@@ -1,5 +1,7 @@
 ## Chapter 2: Games and initial setup
 
+> [![Plusa looking surprised](../../images/plusa/face/02-惊讶.webp)](../../images/plusa/02-惊讶.webp) **Plusa's tip:** The loader folder and the Mod folder read by the game are different locations. Check d3dx.ini and fill them in separately; keep the library separate from deployment.
+
 ### 2.1 Adding a game and the five fields
 
 Click **Games → Add game** to open a draft in the right panel. Fill it in and click **Confirm**. **Exit** discards the draft, with a confirmation if you have entered anything.

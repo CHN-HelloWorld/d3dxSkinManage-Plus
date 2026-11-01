@@ -122,6 +122,8 @@ Open **Settings → Personalization → Appearance** to choose Dark, Light, or F
 
 ## Chapter 2: Games and initial setup
 
+> [![Plusa looking surprised](../images/plusa/face/02-惊讶.webp)](../images/plusa/02-惊讶.webp) **Plusa's tip:** The loader folder and the Mod folder read by the game are different locations. Check d3dx.ini and fill them in separately; keep the library separate from deployment.
+
 ### 2.1 Adding a game and the five fields
 
 Click **Games → Add game** to open a draft in the right panel. Fill it in and click **Confirm**. **Exit** discards the draft, with a confirmation if you have entered anything.
@@ -233,7 +235,7 @@ Click once to select an item, double-click a category to enter it, and double-cl
 
 ### 3.2 Categories and characters/objects
 
-![Plusa organizing categories](../images/plusa/supplement/分类整理.webp)
+<img src="../images/plusa/supplement/分类整理.webp" alt="Plusa organizing categories" width="280">
 
 | Type | Enable rule | Suitable uses |
 | --- | --- | --- |
@@ -406,6 +408,8 @@ Cut items are marked in orange while awaiting a move. Pasting at the original le
 
 ### 3.12 Deletion and the Recycle Bin
 
+> [![Plusa reminding you to check carefully](../images/plusa/face/04-生气鼓脸.webp)](../images/plusa/04-生气鼓脸.webp) **Plusa's tip:** Check the scope before confirming. Disabling removes deployment; deleting removes library files. The Mod Recycle Bin option does not apply to deleting categories or games.
+
 Disabling only withdraws the copy used by the game; the Mod remains in the library. Deleting handles the source container and its associated deployment data.
 
 **Settings → General → Mod management → Deletion method** offers **Recycle Bin (recoverable)** and **Permanent deletion (unrecoverable)**. Permanent deletion is the default. This setting applies to deleting individual Mods or Mods in bulk. **Category deletion and game deletion do not use this Recycle Bin setting.**
@@ -434,6 +438,8 @@ The export window shows progress and offers pause, resume, and stop actions. Aft
 
 ### 3.14 Gallery
 
+> [![Plusa admiring the gallery](../images/plusa/face/08-星星眼.webp)](../images/plusa/08-星星眼.webp) **Plusa's tip:** Use the gallery to choose Mods by their covers. Click to locate the details or double-click to toggle a Mod, keeping the current game in mind.
+
 ![Gallery with placeholder data](../images/guide-en/21-画廊.webp)
 
 The gallery displays the current game's Mods through their preview images. Click once to locate the corresponding Mod in the overview; double-click to toggle its enabled state. The same rules apply as in the overview.
@@ -444,9 +450,11 @@ Return to **Category Overview** for categories, tags, sorting, editing, or batch
 
 ## Chapter 4: Presets, deployment, key bindings, and variants
 
+> [![Plusa sharing a useful trick](../images/plusa/face/06-坏笑.webp)](../images/plusa/06-坏笑.webp) **Plusa's tip:** A preset remembers a combination of Mods; a named variant remembers one Mod's appearance settings. Use each for its own purpose to avoid repeating setup.
+
 ### 4.1 Three different ways to save a setup
 
-![Plusa choosing Mod presets and variants](../images/plusa/supplement/组合变体.webp)
+<img src="../images/plusa/supplement/组合变体.webp" alt="Plusa choosing Mod presets and variants" width="280">
 
 | Name | What it saves | Where to find it |
 | --- | --- | --- |
@@ -640,7 +648,7 @@ A game's private working state records serve a different purpose from named vari
 
 ### 5.1 Connecting to GameBanana
 
-![Plusa organizing downloads](../images/plusa/supplement/下载更新.webp)
+<img src="../images/plusa/supplement/下载更新.webp" alt="Plusa organizing downloads" width="280">
 
 Activate a game, then open **Online Mods**. The app uses the English name in the game's configuration to find a match on GameBanana and saves the result for that game. Changing the English name triggers a new match.
 
@@ -691,6 +699,8 @@ Online installation still checks the archive, metadata, and destination path. A 
 If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
 
 ### 5.4 Managing downloads
+
+> [![Plusa waiting patiently](../images/plusa/face/07-困倦.webp)](../images/plusa/07-困倦.webp) **Plusa's tip:** Large files can take time. Check the status, speed, and error details in download management, and use its pause or cancel controls when you need to stop.
 
 Open **Downloads** from the online page to see queued, downloading, paused, completed, and failed tasks, along with their progress, speed, and size.
 
@@ -780,6 +790,8 @@ Application updates and GameBanana mod updates serve different purposes. The for
 ---
 
 ## Chapter 6: Settings
+
+> [![Plusa thinking](../images/plusa/face/09-思考.webp)](../images/plusa/09-思考.webp) **Plusa's tip:** Search settings when you are unsure where an option lives. Your saved configuration determines the current shortcuts and paths.
 
 ### 6.1 Sections, search, and saving
 
@@ -871,6 +883,8 @@ To create another language pack:
 4. Return to Settings, click **Refresh list**, select the language, and restart.
 
 Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
+
+For the file format, placeholders, fallback languages, and developer tools, see the [language pack guide](LanguagePackGuide.en.md).
 
 ### 6.7 Personalization → Window background
 
@@ -1108,6 +1122,10 @@ These plugins' source code and usage instructions are in `plugins/`. To write yo
 
 ![About page](../images/guide-en/19-关于.webp)
 
+<img src="../images/plusa/立绘.webp" alt="Full portrait of Plusa, the project&#x27;s original mascot" width="280">
+
+*Plusa is the project's original mascot and your companion throughout this guide.*
+
 Open **About** near the bottom of the navigation to read the project introduction, tribute to the original author, project timeline, team and contributor information, and license details.
 
 Watch the project film on the About page using its playback controls. Keep the supplied media folders when moving the application.
@@ -1122,7 +1140,7 @@ The manager's version and update controls are under **Settings → Update → Ap
 
 ### 8.1 Finding the actual data root
 
-![Plusa helping with backups and troubleshooting](../images/plusa/supplement/备份排障.webp)
+<img src="../images/plusa/supplement/备份排障.webp" alt="Plusa helping with backups and troubleshooting" width="280">
 
 The application first tries to store personal data beside the application. If that folder is not writable, it uses the Windows user data directory, usually:
 
@@ -1184,6 +1202,8 @@ When changing the deployment location, prefer the migration confirmation provide
 
 ### 8.5 File identity, verification, and recovery messages
 
+> [![Plusa helping with a setback](../images/plusa/face/05-哭泣.webp)](../images/plusa/05-哭泣.webp) **Plusa's tip:** Keep the complete original package and records when verification or recovery needs attention. Do not remove identity markers or the database to dismiss a warning; check the causes below.
+
 The app checks managed source files, metadata, and deployment records before an operation. The following changes can block writes:
 
 | Message type | First action |
@@ -1198,6 +1218,8 @@ The app checks managed source files, metadata, and deployment records before an 
 These messages prevent operations from continuing on the wrong item. **Do not delete markers, the database, or transaction records to dismiss the message.** Those records may contain the file contents and path information needed for recovery.
 
 ### 8.6 Common problems
+
+> [![Plusa checking a puzzling result](../images/plusa/face/03-无语滴汗.webp)](../images/plusa/03-无语滴汗.webp) **Plusa's tip:** Start with the current game, actual paths, and task results. Change one thing at a time and keep the original error text so you can identify which step went wrong.
 
 | Symptom | What to check |
 | --- | --- |
@@ -1222,6 +1244,10 @@ These messages prevent operations from continuing on the wrong item. **Do not de
 | Items are still missing after rebuilding | Review the report for invalid metadata, identity conflicts, or missing source files, and address each item |
 
 ### 8.7 Reporting a problem
+
+<img src="../images/plusa/排障.webp" alt="Plusa holding logs to help prepare a useful report" width="280">
+
+*Keep the steps, error text, and logs from the same time period together to help reproduce and locate the problem.*
 
 Use **Tools → View Logs** to find the startup session in which the problem occurred, and retain the records before and after the operation. Include:
 

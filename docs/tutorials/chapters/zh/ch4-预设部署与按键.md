@@ -1,8 +1,10 @@
 ## 第 4 章 · 预设、部署、按键与变体
 
+> [![普拉莎得意地分享技巧](../../images/plusa/face/06-坏笑.webp)](../../images/plusa/06-坏笑.webp) **普拉莎提醒：** 组合预设记住整套 Mod 搭配，命名变体记住单个 Mod 的外观配置。分清两者，就能少做重复设置。
+
 ### 4.1 先分清三种“保存方案”
 
-![普拉莎选择组合与变体](../../images/plusa/supplement/组合变体.webp)
+<img src="../../images/plusa/supplement/组合变体.webp" alt="普拉莎选择组合与变体" width="280">
 
 | 名称 | 保存什么 | 入口 |
 | --- | --- | --- |

@@ -59,7 +59,7 @@ def test_release_zip_contains_default_languages_without_local_config(tmp_path, m
         "app.exe": "program",
         "config/languages/zh-CN/strings.json": "Chinese",
         "config/languages/en-US/strings.json": "English",
-        "config/languages/README.md": "Instructions",
+        "config/languages/README.md": "Legacy instructions",
         "config/languages/schema.json": "Schema",
         "config/settings.json": "private settings",
         "config/games.json": "private games",
@@ -76,6 +76,5 @@ def test_release_zip_contains_default_languages_without_local_config(tmp_path, m
         "app.exe",
         "config/languages/zh-CN/strings.json",
         "config/languages/en-US/strings.json",
-        "config/languages/README.md",
         "config/languages/schema.json",
     }

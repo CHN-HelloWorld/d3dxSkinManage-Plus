@@ -2,7 +2,7 @@
 
 ### 5.1 Connecting to GameBanana
 
-![Plusa organizing downloads](../../images/plusa/supplement/下载更新.webp)
+<img src="../../images/plusa/supplement/下载更新.webp" alt="Plusa organizing downloads" width="280">
 
 Activate a game, then open **Online Mods**. The app uses the English name in the game's configuration to find a match on GameBanana and saves the result for that game. Changing the English name triggers a new match.
 
@@ -53,6 +53,8 @@ Online installation still checks the archive, metadata, and destination path. A 
 If you switch to another game during a download, the task still belongs to the original game. Once downloaded, it may wait for you to switch back before installing. If the new mod is missing from the current page, do not immediately import it again into a different game.
 
 ### 5.4 Managing downloads
+
+> [![Plusa waiting patiently](../../images/plusa/face/07-困倦.webp)](../../images/plusa/07-困倦.webp) **Plusa's tip:** Large files can take time. Check the status, speed, and error details in download management, and use its pause or cancel controls when you need to stop.
 
 Open **Downloads** from the online page to see queued, downloading, paused, completed, and failed tasks, along with their progress, speed, and size.
 

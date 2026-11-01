@@ -130,6 +130,10 @@ These plugins' source code and usage instructions are in `plugins/`. To write yo
 
 ![About page](../../images/guide-en/19-关于.webp)
 
+<img src="../../images/plusa/立绘.webp" alt="Full portrait of Plusa, the project&#x27;s original mascot" width="280">
+
+*Plusa is the project's original mascot and your companion throughout this guide.*
+
 Open **About** near the bottom of the navigation to read the project introduction, tribute to the original author, project timeline, team and contributor information, and license details.
 
 Watch the project film on the About page using its playback controls. Keep the supplied media folders when moving the application.

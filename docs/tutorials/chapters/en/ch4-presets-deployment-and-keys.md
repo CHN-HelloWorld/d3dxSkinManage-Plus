@@ -1,8 +1,10 @@
 ## Chapter 4: Presets, deployment, key bindings, and variants
 
+> [![Plusa sharing a useful trick](../../images/plusa/face/06-坏笑.webp)](../../images/plusa/06-坏笑.webp) **Plusa's tip:** A preset remembers a combination of Mods; a named variant remembers one Mod's appearance settings. Use each for its own purpose to avoid repeating setup.
+
 ### 4.1 Three different ways to save a setup
 
-![Plusa choosing Mod presets and variants](../../images/plusa/supplement/组合变体.webp)
+<img src="../../images/plusa/supplement/组合变体.webp" alt="Plusa choosing Mod presets and variants" width="280">
 
 | Name | What it saves | Where to find it |
 | --- | --- | --- |

@@ -51,7 +51,9 @@ def read_markdown_at_root(path: Path) -> str:
         if line.strip().startswith("```"):
             fenced = not fenced
         elif not fenced:
+            line = re.sub(r"(\[!\[[^\]]*\]\([^)]+\)\]\()([^)]+)(\))", normalize, line)
             line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", normalize, line)
+            line = re.sub(r"(<img\b[^>]*\bsrc=[\"'])([^\"']+)([\"'])", normalize, line)
         lines.append(line)
     return "".join(lines)
 
@@ -74,12 +76,27 @@ def markdown_headings(value: str) -> list[tuple[int, str]]:
 
 def markdown_images(value: str) -> list[str]:
     """保留正文图片顺序和重复次数，以核对完整译文及 HTML 内容。"""
+    images = []
+    for line in markdown_lines(value):
+        images.extend(re.findall(r"!\[[^\]]*\]\(([^)]+)\)", line))
+        if line.lstrip().startswith("<img "):
+            parser = TutorialHTML()
+            parser.feed(line)
+            images.extend(attributes["src"] for attributes in parser.images)
+    return [unquote(target.strip("<>")).replace("\\", "/") for target in images]
+
+
+def markdown_image_links(value: str) -> list[str]:
+    """读取缩略图所链接的大图，避免只核验可见的小图。"""
     prose = "\n".join(markdown_lines(value))
-    return [unquote(target.strip("<>")).replace("\\", "/") for target in re.findall(r"!\[[^\]]*\]\(([^)]+)\)", prose)]
+    return [
+        unquote(target.strip("<>")).replace("\\", "/")
+        for target in re.findall(r"\[!\[[^\]]*\]\([^)]+\)\]\(([^)]+)\)", prose)
+    ]
 
 
 def source_image_path(reference: str, context: str) -> Path:
-    """data-source 必须指向教程目录内实际存在的原始 PNG。"""
+    """data-source 必须指向教程目录内实际存在的 WebP 资源。"""
     relative = PurePosixPath(unquote(reference).replace("\\", "/"))
     assert (
         relative.parts
@@ -87,7 +104,7 @@ def source_image_path(reference: str, context: str) -> Path:
         and not relative.is_absolute()
         and ".." not in relative.parts
         and relative.suffix.lower() == ".webp"
-    ), f"{context} 图片来源不是教程内的 PNG：{reference}"
+    ), f"{context} 图片来源不是教程内的 WebP：{reference}"
     path = (TUTORIAL / Path(*relative.parts)).resolve()
     assert path.is_relative_to((TUTORIAL / "images").resolve()) and path.is_file(), (
         f"{context} 图片来源不存在或越出教程目录：{reference}"
@@ -104,7 +121,8 @@ class TutorialHTML(HTMLParser):
         self.ids = []
         self.hrefs = []
         self.images = []
-        self.figure_sources = []
+        self.linked_images = []
+        self.body_image_sources = []
         self.dependencies = []
         self.languages = []
         self.headings = []
@@ -124,13 +142,15 @@ class TutorialHTML(HTMLParser):
             self.hrefs.append(attributes["href"])
             if attributes.get("id") == "language-link":
                 self.language_href = attributes["href"]
+            if attributes.get("data-image-source"):
+                self.linked_images.append({"src": attributes["href"], "data-source": attributes["data-image-source"]})
         if tag == "img":
             if not attributes.get("src") and any(item[1] == "lb-stage" for item in self._ancestors):
                 self.empty_lightbox_images += 1
             else:
                 self.images.append(attributes)
-                if any(item[0] == "figure" for item in self._ancestors):
-                    self.figure_sources.append(attributes.get("data-source"))
+                if any(item[0] == "section" for item in self._ancestors):
+                    self.body_image_sources.append(attributes.get("data-source"))
         if tag in {"script", "iframe", "video", "audio", "source"} and attributes.get("src"):
             self.dependencies.append(attributes["src"])
         if tag == "link" and attributes.get("href"):
@@ -198,18 +218,21 @@ def verify_html(path, *, language="zh-CN", markdown_texts=None, verified_images=
     ids = set(parser.ids)
     plugin_anchor = "plugin-development-guide" if language == "en-US" else "插件开发指南"
     assert plugin_anchor in ids, f"{path.name} 未包含对应语言的插件指南锚点：{plugin_anchor}"
+    embedded_links = {attributes["src"] for attributes in parser.linked_images}
     for href in parser.hrefs:
         if href.startswith("#"):
             assert unquote(href[1:]) in ids, f"{path.name} 链接失效：{href}"
         elif href == parser.language_href:
             # 唯一允许的本地文档跳转；对应文件、语言和全部小节由专用检查器核验。
             assert (path.parent / unquote(href.split("#", 1)[0])).is_file(), f"{path.name} 对应语言文件不存在。"
+        elif href in embedded_links:
+            assert href.startswith("data:image/webp;base64,"), f"{path.name} 表情大图没有无损内嵌。"
         else:
             assert re.match(r"https?://|mailto:", href), f"离线 HTML 依赖本地文档：{href}"
     assert not parser.dependencies, f"存在外部脚本或媒体：{parser.dependencies}"
     assert parser.empty_lightbox_images == 1, f"{path.name} 应仅保留一张空的灯箱图片。"
     checked = verified_images if verified_images is not None else set()
-    for attributes in parser.images:
+    for attributes in [*parser.images, *parser.linked_images]:
         src = attributes.get("src", "")
         reference = attributes.get("data-source", "")
         assert src.startswith("data:image/") and ";base64," in src, f"{path.name} HTML 图片未内嵌。"
@@ -226,7 +249,7 @@ def verify_html(path, *, language="zh-CN", markdown_texts=None, verified_images=
                 )
                 difference = ImageChops.difference(picture.convert("RGBA"), source.convert("RGBA"))
                 assert difference.getbbox(alpha_only=False) is None, (
-                    f"{path.name} 内嵌图片像素与原 PNG 不同：{reference}"
+                    f"{path.name} 内嵌图片像素与来源 WebP 不同：{reference}"
                 )
             checked.add(identity)
         # 后续只需要来源与数量，不保留四份 HTML 的大段 base64 字符串。
@@ -235,11 +258,14 @@ def verify_html(path, *, language="zh-CN", markdown_texts=None, verified_images=
         expected_headings = [heading for value in markdown_texts for heading in markdown_headings(value)]
         assert parser.headings == expected_headings, f"{path.name} 正文标题缺失、顺序错误或与 Markdown 不一致。"
         expected_images = Counter(image for value in markdown_texts for image in markdown_images(value))
-        actual_images = Counter(parser.figure_sources)
+        actual_images = Counter(parser.body_image_sources)
         assert actual_images == expected_images, (
             f"{path.name} 正文配图不完整：缺少 {dict(expected_images - actual_images)}，"
             f"多出 {dict(actual_images - expected_images)}"
         )
+        expected_links = Counter(image for value in markdown_texts for image in markdown_image_links(value))
+        actual_links = Counter(attributes["data-source"] for attributes in parser.linked_images)
+        assert actual_links == expected_links, f"{path.name} 缩略图的大图链接与 Markdown 不一致。"
     return parser
 
 
@@ -289,6 +315,7 @@ def verify_translation(chinese: str, english: str, context: str) -> None:
     assert fences[0] == fences[1], f"{context} 中英文代码块数量或类型不一致。"
     expected_images = [image.replace("images/guide/", "images/guide-en/") for image in markdown_images(chinese)]
     assert markdown_images(english) == expected_images, f"{context} 英文配图缺失、顺序错误或仍指向中文配图。"
+    assert markdown_image_links(english) == markdown_image_links(chinese), f"{context} 英文表情大图缺失。"
 
 
 def index_records(records: list[dict], context: str) -> dict[str, dict]:
@@ -442,6 +469,7 @@ def verify(output_dir: Path | None = None) -> None:
             "quick": "zh/5分钟快速上手.md",
             "manual": "zh/完整功能手册.md",
             "plugin": "zh/插件开发指南.md",
+            "language_guide": "zh/语言包指南.md",
             "html": "d3dxSkinManage-Plus 使用教程.html",
             "plugin_html": "d3dxSkinManage-Plus 插件开发指南.html",
         },
@@ -451,6 +479,7 @@ def verify(output_dir: Path | None = None) -> None:
             "quick": "en/Quickstart.en.md",
             "manual": "en/Manual.en.md",
             "plugin": "en/PluginGuide.en.md",
+            "language_guide": "en/LanguagePackGuide.en.md",
             "html": "d3dxSkinManage-Plus User Guide.html",
             "plugin_html": "d3dxSkinManage-Plus Plugin Development Guide.html",
         },
@@ -469,9 +498,12 @@ def verify(output_dir: Path | None = None) -> None:
             )
             + "\n"
         )
-        for kind in ("quick", "manual", "plugin"):
+        for kind in ("quick", "manual", "plugin", "language_guide"):
             edition[f"{kind}_text"] = read_markdown_at_root(TUTORIAL / edition[kind])
         assert edition["manual_text"] == expected, f"{edition['manual']} 与分章不一致，请重新构建。"
+        assert edition["language_guide"] in re.findall(r"\]\(([^)]+)\)", edition["manual_text"]), (
+            f"{language} 手册应链接到同语言的语言包指南。"
+        )
         chapter_pattern = r"^## Chapter (\d+)\b" if language == "en-US" else r"^## 第 (\d+) 章"
         assert re.findall(chapter_pattern, expected, re.MULTILINE) == [str(number) for number in range(1, 9)], (
             f"{language} 手册缺少章节或章号顺序错误。"
@@ -483,6 +515,7 @@ def verify(output_dir: Path | None = None) -> None:
         verify_translation(zh, en, f"第 {number} 章")
     verify_translation(chinese["quick_text"], english["quick_text"], "快速上手")
     verify_translation(chinese["plugin_text"], english["plugin_text"], "插件开发指南")
+    verify_translation(chinese["language_guide_text"], english["language_guide_text"], "语言包指南")
     sdk_tree = ast.parse((REPO / "src/plugin_sdk/__init__.py").read_text(encoding="utf-8"))
     api_version = next(
         ast.literal_eval(node.value)
@@ -502,12 +535,13 @@ def verify(output_dir: Path | None = None) -> None:
         assert sum(line.strip().startswith(chr(96) * 3) for line in value.splitlines()) % 2 == 0, (
             f"代码块未闭合：{path}"
         )
-        for link in re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", "\n".join(markdown_lines(value))):
+        links = re.findall(r"!?\[[^\]]*\]\(([^)]+)\)", "\n".join(markdown_lines(value)))
+        for link in [*links, *markdown_image_links(value)]:
             target = unquote(link.strip("<>").split("#", 1)[0])
             if not target or "://" in target or target.startswith("mailto:"):
                 continue
             assert (link_base / target).is_file(), f"引用不存在：{path.name} -> {target}"
-        for target in markdown_images(value):
+        for target in [*markdown_images(value), *markdown_image_links(value)]:
             image_path = (link_base / target).resolve()
             reference = image_path.relative_to(TUTORIAL.resolve()).as_posix()
             assert reference.startswith(
@@ -524,7 +558,9 @@ def verify(output_dir: Path | None = None) -> None:
             md_images.add(image_path)
     for path in md_images:
         with Image.open(path) as picture:
+            assert picture.format == "WEBP", f"教程图片未统一为 WebP：{path}"
             picture.verify()
+    assert not list((TUTORIAL / "images").rglob("*.png")), "教程目录仍有未转换的 PNG。"
     assert not list((TUTORIAL / "images").glob("*.webp")), "教程目录仍有旧版平铺截图。"
     assert not (TUTORIAL / "images/raw").exists(), "教程目录仍有旧版原始截图。"
 
@@ -602,12 +638,18 @@ def verify(output_dir: Path | None = None) -> None:
                 markdown_texts=source_texts,
                 verified_images=checked_images,
             )
+            if filename == edition["html"]:
+                available = {
+                    path.relative_to(TUTORIAL).as_posix() for path in (TUTORIAL / "images/plusa").rglob("*.webp")
+                }
+                embedded = {attributes["data-source"] for attributes in [*parser.images, *parser.linked_images]}
+                assert available <= embedded, f"{language} 教程仍有闲置的普拉莎素材：{sorted(available - embedded)}"
             html_counts.append(len(parser.images))
 
     for path in Path(__file__).parent.glob("*.py"):
         ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     print(
-        f"检查通过：中英文各 8 章、各 {len(default_keys)} 个默认快捷键；"
+        f"检查通过：中英文各 8 章、语言包与插件指南、各 {len(default_keys)} 个默认快捷键；"
         f"{guide_count} 张操作配图、{mark_count} 处标注；"
         f"四份 HTML 分别内嵌 {' / '.join(map(str, html_counts))} 张无损图片。"
     )

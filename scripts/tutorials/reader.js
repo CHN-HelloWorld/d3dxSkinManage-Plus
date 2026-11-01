@@ -342,13 +342,15 @@
     if (previousFocus) previousFocus.focus({preventScroll: true});
   }
   function bindPictures() {
-    main.querySelectorAll('figure img,#cover img').forEach(function (img) {
-      img.tabIndex = 0;
-      img.setAttribute('role', 'button');
-      function openPicture() {
-        previousFocus = img;
+    main.querySelectorAll('figure img,#cover img,.image-link img,.emote').forEach(function (img) {
+      var imageLink = img.closest('a.image-link'), trigger = imageLink || img;
+      trigger.tabIndex = 0;
+      trigger.setAttribute('role', 'button');
+      function openPicture(event) {
+        if (event) event.preventDefault();
+        previousFocus = trigger;
         oldOverflow = document.body.style.overflow;
-        lbi.src = img.src;
+        lbi.src = imageLink ? imageLink.href : img.src;
         lbi.alt = img.alt;
         lb.classList.add('on');
         fitPicture();
@@ -357,8 +359,8 @@
         wrap.inert = top.inert = reading.inert = true;
         fitButton.focus();
       }
-      img.onclick = openPicture;
-      img.onkeydown = function (event) {
+      trigger.onclick = openPicture;
+      trigger.onkeydown = function (event) {
         if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openPicture(); }
       };
     });

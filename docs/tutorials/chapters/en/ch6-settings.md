@@ -1,5 +1,7 @@
 ## Chapter 6: Settings
 
+> [![Plusa thinking](../../images/plusa/face/09-思考.webp)](../../images/plusa/09-思考.webp) **Plusa's tip:** Search settings when you are unsure where an option lives. Your saved configuration determines the current shortcuts and paths.
+
 ### 6.1 Sections, search, and saving
 
 The Settings page has six sections across the top: **General**, **Personalization**, **Shortcuts**, **Import and export**, **Online Mods**, and **Update**. Each section also has subpages on the left.
@@ -90,6 +92,8 @@ To create another language pack:
 4. Return to Settings, click **Refresh list**, select the language, and restart.
 
 Languages are identified by their folder names. Game names, mod names, author descriptions, and custom tags are user content and are not automatically rewritten when the interface language changes.
+
+For the file format, placeholders, fallback languages, and developer tools, see the [language pack guide](../../en/LanguagePackGuide.en.md).
 
 ### 6.7 Personalization → Window background
 

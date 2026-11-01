@@ -1,10 +1,14 @@
 # 5-minute quick start
 
+> [![Plusa smiling confidently](../images/plusa/face/01-自信微笑.webp)](../images/plusa/01-自信微笑.webp) **Plusa's tip:** Complete these six steps and confirm that your first Mod works in the game, then consult the manual for the features you need.
+
 Start by adding a game, then follow these six steps to import and enable your first Mod and check it in the game. The time required depends on the Mod's size and your disk speed.
 
 The numbers in the illustrations correspond to the instructions below each image. Click an image to enlarge it. All example names and preview images are placeholders; enter your own game details and paths.
 
 ## Before you start
+
+<img src="../images/plusa/指路.webp" alt="Plusa pointing to the setup checklist" width="280">
 
 You need Windows 10/11 x64, a working 3DMigoto setup for your target game, and a Mod archive or folder. ZIP, 7z, and RAR archives can all be imported; you only need to install WinRAR separately to create RAR archives.
 
@@ -50,6 +54,8 @@ You can add a preview image later. The application does not automatically derive
 If no game is active, **Category Overview**, **Gallery**, and **Online Mods** display an introductory overlay. Each game has its own categories, Mods, and Mod presets.
 
 ## Step 3: Create a category
+
+> [![Plusa thinking](../images/plusa/face/09-思考.webp)](../images/plusa/09-思考.webp) **Plusa's tip:** Double-click the category after creating it. Check the breadcrumb so that the next step imports your Mod into the intended location.
 
 Open **Category Overview** from the left navigation. On an empty page, click **+ New Category** in the center to open the creation dialog. If categories already exist, right-click a blank part of the content area and select **New Category**, or use the default shortcut `Ctrl+Shift+N`.
 
@@ -103,11 +109,17 @@ Enabling a Mod for the first time extracts its library archive into the deployme
 
 ## Step 6: Launch the loader and game
 
+> [![Plusa giving a thumbs-up](../images/plusa/face/10-眨眼竖拇指.webp)](../images/plusa/10-眨眼竖拇指.webp) **Plusa's tip:** Wait for deployment to finish before starting the loader and game. If the game is already running, reload using your loader's configured controls.
+
 Use **Launch Mod Loader** and **Launch Game** in the left navigation, or the default shortcuts `F6` and `F7`. These actions require the corresponding paths to be configured first. You can also start them yourself as instructed by your loader.
 
 If the game is already running, use the loader's reload action. 3DMigoto's default configuration commonly uses **F10**; if you changed it, follow your loader configuration. This key is used inside the game and is separate from the manager's shortcuts.
 
 ## No effect? Check in this order
+
+<img src="../images/plusa/排障-带台词.webp" alt="Plusa holding logs and asking for the error details" width="280">
+
+*“Logs, please. I can't fix it without logs.” Keep the error text, then work through the checks below.*
 
 | Symptom | What to do |
 | --- | --- |

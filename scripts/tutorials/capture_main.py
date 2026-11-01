@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from demo_common import GAME_ID, TUTORIAL, isolate
+from image_assets import save_qt_capture
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 os.environ["QT_LOGGING_RULES"] = "qt.multimedia.*=false;qt.qpa.*=false"
@@ -113,7 +114,7 @@ def capture(theme_name: str, selected: set[str], *, language: str = "zh-CN", sca
         return not selected or number in selected
 
     def shot(name, widget, *, settle=600, required_text=()):
-        """仅在控件可见且截图非空时写入 PNG 和尺寸记录。"""
+        """仅在控件可见且截图非空时写入无损 WebP 和尺寸记录。"""
         pump(app, settle)
         pixmap = widget.grab()
         if pixmap.isNull():
@@ -150,11 +151,10 @@ def capture(theme_name: str, selected: set[str], *, language: str = "zh-CN", sca
         for expected in required_text:
             if expected not in visible_text and t(expected) not in visible_text:
                 raise RuntimeError(f"场景 {name} 缺少必要控件：{expected}")
-        if not pixmap.save(str(output / f"{name}.png")):
-            raise RuntimeError(f"截图保存失败：{name}")
+        save_qt_capture(pixmap, output / f"{name}.webp")
         records.append(
             {
-                "file": f"{name}.png",
+                "file": f"{name}.webp",
                 "width": pixmap.width(),
                 "height": pixmap.height(),
                 "logical_width": widget.width(),

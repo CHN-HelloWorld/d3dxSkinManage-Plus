@@ -127,7 +127,7 @@ def build_one(spec: dict, record: dict, destination: Path) -> dict:
             cursor += line_height
         cursor += round(14 * scale)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    canvas.save(destination)
+    canvas.save(destination, "WEBP", lossless=True, exact=True, method=4)
     return {
         "file": source.name,
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),

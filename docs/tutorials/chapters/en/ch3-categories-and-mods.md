@@ -14,7 +14,7 @@ Click once to select an item, double-click a category to enter it, and double-cl
 
 ### 3.2 Categories and characters/objects
 
-![Plusa organizing categories](../../images/plusa/supplement/分类整理.webp)
+<img src="../../images/plusa/supplement/分类整理.webp" alt="Plusa organizing categories" width="280">
 
 | Type | Enable rule | Suitable uses |
 | --- | --- | --- |
@@ -187,6 +187,8 @@ Cut items are marked in orange while awaiting a move. Pasting at the original le
 
 ### 3.12 Deletion and the Recycle Bin
 
+> [![Plusa reminding you to check carefully](../../images/plusa/face/04-生气鼓脸.webp)](../../images/plusa/04-生气鼓脸.webp) **Plusa's tip:** Check the scope before confirming. Disabling removes deployment; deleting removes library files. The Mod Recycle Bin option does not apply to deleting categories or games.
+
 Disabling only withdraws the copy used by the game; the Mod remains in the library. Deleting handles the source container and its associated deployment data.
 
 **Settings → General → Mod management → Deletion method** offers **Recycle Bin (recoverable)** and **Permanent deletion (unrecoverable)**. Permanent deletion is the default. This setting applies to deleting individual Mods or Mods in bulk. **Category deletion and game deletion do not use this Recycle Bin setting.**
@@ -214,6 +216,8 @@ To share named variants, tags, and additional previews, enable **Include metadat
 The export window shows progress and offers pause, resume, and stop actions. After completion, check the success, failure, and missing-source counts, then open the output folder to confirm the files.
 
 ### 3.14 Gallery
+
+> [![Plusa admiring the gallery](../../images/plusa/face/08-星星眼.webp)](../../images/plusa/08-星星眼.webp) **Plusa's tip:** Use the gallery to choose Mods by their covers. Click to locate the details or double-click to toggle a Mod, keeping the current game in mind.
 
 ![Gallery with placeholder data](../../images/guide-en/21-画廊.webp)
 

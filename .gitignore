@@ -33,7 +33,6 @@ htmlcov/
 /config/*
 !/config/languages/
 /config/languages/*
-!/config/languages/README.md
 !/config/languages/schema.json
 !/config/languages/zh-CN/
 !/config/languages/en-US/

@@ -26,6 +26,7 @@ import os
 import re
 import sys
 from functools import cache
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import quote, unquote, urlsplit
 
@@ -93,43 +94,6 @@ Click an image, then choose Original size to inspect its details.
 For application extensions, continue to the Plugin development guide.
 """
 
-#: 章标题里出现哪个关键字 → 用哪张普拉莎表情当小图标（看板娘轻量点缀）
-CHAPTER_EMOTE = {
-    "第 1 步": "01-自信微笑",
-    "第 2 步": "10-眨眼竖拇指",
-    "第 3 步": "09-思考",
-    "第 4 步": "01-自信微笑",
-    "第 5 步": "08-星星眼",
-    "第 6 步": "10-眨眼竖拇指",
-    "开始之前": "09-思考",
-    "没生效": "03-无语滴汗",
-    "接下来看什么": "06-坏笑",
-    "第 1 章": "01-自信微笑",
-    "第 2 章": "10-眨眼竖拇指",
-    "第 3 章": "08-星星眼",
-    "第 4 章": "09-思考",
-    "第 5 章": "08-星星眼",
-    "第 6 章": "06-坏笑",
-    "第 7 章": "11-害羞",
-    "第 8 章": "03-无语滴汗",
-    "附录 A": "10-眨眼竖拇指",
-    "附录 B": "02-惊讶",
-}
-
-CHAPTER_EMOTE.update({f"Chapter {i}": CHAPTER_EMOTE[f"第 {i} 章"] for i in range(1, 9)})
-CHAPTER_EMOTE.update({f"Step {i}": CHAPTER_EMOTE[f"第 {i} 步"] for i in range(1, 7)})
-CHAPTER_EMOTE.update({"Appendix A": "10-眨眼竖拇指", "Appendix B": "02-惊讶"})
-CHAPTER_EMOTE.update({"Before you start": "09-思考", "No effect?": "03-无语滴汗", "What to read next": "06-坏笑"})
-
-
-def emote_for(text: str) -> str | None:
-    """按章节标题选择用于导航提示的插画。"""
-    for key, name in CHAPTER_EMOTE.items():
-        if key in text:
-            path = TUT / "images" / "plusa" / "face" / f"{name}.webp"
-            return f"images/plusa/face/{name}.webp" if path.is_file() else None
-    return None
-
 
 def assemble_manual(language: str = "zh-CN") -> str:
     """按章节顺序拼装手册，将链接换算为完整手册所在目录的相对路径。"""
@@ -170,7 +134,9 @@ def rebase_markdown_links(text: str, source: Path, destination: Path | None = No
         if line.strip().startswith("```"):
             fenced = not fenced
         elif not fenced:
+            line = re.sub(r"(\[!\[[^\]]*\]\([^)]+\)\]\()([^)]+)(\))", replace, line)
             line = re.sub(r"(!?\[[^\]]*\]\()([^)]+)(\))", replace, line)
+            line = re.sub(r"(<img\b[^>]*\bsrc=[\"'])([^\"']+)([\"'])", replace, line)
         lines.append(line)
     return "".join(lines)
 
@@ -216,6 +182,21 @@ _BOLD = re.compile(r"\*\*([^*]+)\*\*")
 _ITALIC = re.compile(r"(?<!\*)\*([^*\n]+)\*(?!\*)")
 _LINK = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
 _IMG = re.compile(r"^!\[([^\]]*)\]\(([^)]+)\)\s*$")
+_INLINE_IMAGE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+_IMAGE_LINK = re.compile(r"\[!\[([^\]]*)\]\(([^)]+)\)\]\(([^)]+)\)")
+
+
+class _ImageTag(HTMLParser):
+    """读取 Markdown 中带显示尺寸的单行图片，不透传其他 HTML 属性。"""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.attributes = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "img":
+            self.attributes = dict(attrs)
+
 
 DOC_ANCHORS = {
     "zh/插件开发指南.md": "#插件开发指南",
@@ -228,7 +209,7 @@ DOC_ANCHORS = {
 
 
 def inline(text: str, embed) -> str:
-    """转义正文并渲染行内代码、强调及链接。"""
+    """转义正文并内嵌行内图片及其原图，保留代码、强调与文本链接。"""
     out = html.escape(text, quote=False)
     holes: list[str] = []
 
@@ -244,7 +225,26 @@ def inline(text: str, embed) -> str:
         target = "" if href.startswith("#") else ' target="_blank" rel="noopener"'
         return stash(f'<a href="{html.escape(href, quote=True)}"{target}>{match.group(1)}</a>')
 
+    def picture(alt: str, source: str) -> str:
+        """让 Markdown 中明确引用的表情在提示、列表和表格内显示。"""
+        source = html.unescape(source).strip("<>")
+        css = "emote" if "images/plusa/face/" in source else "inline-image"
+        return (
+            f'<img class="{css}" loading="lazy" src="{data_uri(source)}" '
+            f'data-source="{html.escape(source, quote=True)}" alt="{html.escape(html.unescape(alt), quote=True)}">'
+        )
+
+    def linked_picture(match) -> str:
+        """使用标准 Markdown 缩略图链接，将放大图也内嵌到离线文档。"""
+        original = html.unescape(match[3]).strip("<>")
+        return stash(
+            f'<a class="image-link" href="{data_uri(original)}" '
+            f'data-image-source="{html.escape(original, quote=True)}">{picture(match[1], match[2])}</a>'
+        )
+
     out = _INLINE_CODE.sub(lambda m: stash(f"<code>{m.group(1)}</code>"), out)
+    out = _IMAGE_LINK.sub(linked_picture, out)
+    out = _INLINE_IMAGE.sub(lambda match: stash(picture(match[1], match[2])), out)
     out = _BOLD.sub(lambda m: stash(f"<strong>{m.group(1)}</strong>"), out)
     out = _ITALIC.sub(lambda m: stash(f"<em>{m.group(1)}</em>"), out)
     out = _LINK.sub(link, out)
@@ -324,10 +324,11 @@ def data_uri(rel: str) -> str:
 
         with Image.open(path) as im:
             has_alpha = im.mode in ("RGBA", "LA") or (im.mode == "P" and "transparency" in im.info)
-            buf = io.BytesIO()
-            im.convert("RGBA" if has_alpha else "RGB").save(buf, "WEBP", lossless=True, exact=True, method=4)
+            buf = io.BytesIO(raw) if im.format == "WEBP" else io.BytesIO()
+            if im.format != "WEBP":
+                im.convert("RGBA" if has_alpha else "RGB").save(buf, "WEBP", lossless=True, exact=True, method=4)
             EMBED_STATS["alpha" if has_alpha else "flat"] += 1
-        if buf.tell() < len(raw):
+        if len(buf.getvalue()) < len(raw):
             raw, mime = buf.getvalue(), "image/webp"
     except Exception as e:
         print(f"  ! {rel} 转 WebP 失败，按原图内嵌：{e}", file=sys.stderr)
@@ -376,16 +377,23 @@ def render(
             slug = f"{id_prefix}{slugify(text, used_slugs)}"
             if level <= 3:
                 toc.append((level, text, slug))
-            emo = emote_for(text) if level == 2 else None
-            icon = f'<img class="emo" src="{data_uri(emo)}" data-source="{emo}" alt="">' if emo else ""
             translated = f' data-translation-id="{html.escape(translations[slug], quote=True)}"' if translations else ""
-            out.append(f'<h{level} id="{slug}"{translated}>{icon}{inline(text, None)}</h{level}>')
+            out.append(f'<h{level} id="{slug}"{translated}>{inline(text, None)}</h{level}>')
             i += 1
             continue
 
         mi = _IMG.match(line.strip())
-        if mi:
-            alt, src = mi.group(1), mi.group(2)
+        attributes = None
+        if line.lstrip().startswith("<img "):
+            tag = _ImageTag()
+            tag.feed(line)
+            attributes = tag.attributes
+        if mi or attributes is not None:
+            alt, src = (mi.group(1), mi.group(2)) if mi else (attributes.get("alt", ""), attributes["src"])
+            width = attributes.get("width") if attributes else None
+            if width is not None and not re.fullmatch(r"[1-9]\d*", width):
+                raise ValueError(f"图片显示宽度必须是正整数：{src}")
+            dimensions = f' width="{width}"' if width else ""
             cap = ""
             j = i + 1
             while j < n and not lines[j].strip():
@@ -399,8 +407,8 @@ def render(
             if "images/plusa/" in src:
                 cls = ' class="mascot left"' if "指路" in src else ' class="mascot right"'
             out.append(
-                f'<figure{cls}><img loading="lazy" src="{data_uri(src)}" data-source="{html.escape(src, quote=True)}" '
-                f'alt="{html.escape(alt, quote=True)}">{cap}</figure>'
+                f'<figure{cls}><img{dimensions} loading="lazy" src="{data_uri(src)}" '
+                f'data-source="{html.escape(src, quote=True)}" alt="{html.escape(alt, quote=True)}">{cap}</figure>'
             )
             i += 1
             continue
@@ -412,7 +420,10 @@ def render(
                 i += 1
             body = " ".join(x.strip() for x in buf if x.strip())
             kind = "warn" if body.startswith("⚠️") else ("tip" if body.startswith("💡") else "note")
-            out.append(f'<blockquote class="{kind}">{inline(body, None)}</blockquote>')
+            content = inline(body, None)
+            if 'class="emote"' in content:
+                kind += " plusa-note"
+            out.append(f'<blockquote class="{kind}">{content}</blockquote>')
             continue
 
         if "|" in line and i + 1 < n and re.match(r"^\s*\|?[\s:|-]+\|[\s:|-]*$", lines[i + 1]):
@@ -493,7 +504,7 @@ html{background:var(--bg);scrollbar-gutter:stable}
 }
 html,body,#top,#reading,#side,#cover,#cover p,#cover .said,#top .brand span,#side .grp,#side a,
 .btn,#q,#languages,#languages a,#languages span,code,pre,hr,h1,h2,h3,h4,h5,h6,
-.tw,th,td,tbody tr,blockquote,figure img,figcaption,h2 .emo,.guide-path,.side-heading{
+.tw,th,td,tbody tr,blockquote,figure img,figcaption,.emote,.guide-path,.side-heading{
   transition-property:background-color,color,border-color,box-shadow,scrollbar-color;
   transition-duration:var(--theme-duration);transition-timing-function:var(--ease);
 }
@@ -580,8 +591,11 @@ h1,h2,h3,h4,h5,h6,#cover{scroll-margin-top:calc(var(--sticky-height) + 16px)}
 main section>p,main section>ul,main section>ol{max-width:88ch}
 h1{font-size:29px;margin:8px 0 18px;padding-bottom:12px;border-bottom:2px solid var(--accent)}
 h2{font-size:22px;margin:44px 0 14px;padding-left:12px;border-left:4px solid var(--accent)}
-h2 .emo{width:38px;height:38px;border-radius:50%;vertical-align:-11px;margin-right:11px;
+.emote{width:80px;height:80px;object-fit:contain;border-radius:14px;vertical-align:middle;
   border:1px solid var(--line);background:var(--bg2)}
+.inline-image{max-width:100%;vertical-align:middle}
+.image-link{display:inline-block;cursor:zoom-in;border-radius:14px}
+.image-link:focus-visible{outline:3px solid var(--accent);outline-offset:4px}
 h3{font-size:17px;margin:30px 0 10px;color:var(--fg)}
 h4{font-size:15px;margin:22px 0 8px;color:var(--fg2)}
 p{margin:12px 0} ul,ol{margin:12px 0;padding-left:26px} li{margin:5px 0}
@@ -597,6 +611,9 @@ blockquote{margin:16px 0;padding:12px 16px;border-radius:8px;border-left:4px sol
   background:var(--bg2);color:var(--fg2)}
 blockquote.warn{border-left-color:var(--warn);background:var(--warn-bg)}
 blockquote.tip{border-left-color:var(--tip);background:var(--tip-bg)}
+blockquote.plusa-note{display:flow-root;min-height:80px;padding:16px 20px;
+  border-left-color:var(--accent);background:var(--accent-soft);color:var(--fg)}
+.plusa-note .image-link{float:left;margin:0 18px 4px 0;line-height:0}
 
 figure{margin:22px 0;text-align:center}
 figure img{max-width:100%;border:1px solid var(--line);border-radius:10px;cursor:zoom-in;
@@ -612,6 +629,11 @@ figure.mascot figcaption{font-size:12px}
 h2,h3,hr{clear:both}
 @media (max-width:900px){
   figure.mascot{float:none!important;width:62%;margin:14px auto}
+}
+@media (max-width:520px){
+  blockquote.plusa-note{padding:14px}
+  .plusa-note .emote{width:64px;height:64px}
+  .plusa-note .image-link{margin-right:12px}
 }
 
 #cover{display:block;margin:6px 0 34px;padding:0;overflow:hidden;

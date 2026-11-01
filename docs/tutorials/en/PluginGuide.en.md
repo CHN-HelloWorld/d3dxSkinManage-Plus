@@ -16,6 +16,8 @@ Section 10 provides reading and practice steps for each example. Sections 2–9 
 
 ## 1. Environment and your first plugin
 
+> [![Plusa helping you take the first step](../images/plusa/face/11-害羞.webp)](../images/plusa/11-害羞.webp) **Plusa's tip:** Load the minimal example successfully before adding your own command or page. If something breaks, compare it with that working version one change at a time.
+
 ### 1.1 Prepare the environment
 
 Use Windows 10/11 x64 and Python 3.10–3.14. Developing from the source checkout is recommended. Run these commands at the repository root; skip the first two if your development environment is already set up:
@@ -63,7 +65,7 @@ The scaffolding tool separates lifecycle code and command logic into `entry.py` 
   "name": "Mod summary",
   "version": "0.1.0",
   "apiVersion": "2.0",
-  "minAppVersion": "0.1.0",
+  "minAppVersion": "1.0.0",
   "author": "Example author",
   "description": "Mod summary plugin",
   "entry": "entry.py",
@@ -156,7 +158,7 @@ To build on a practical example, copy its folder and change the `id`, name, and 
 | `name` `version` | ✓ | Display name / semantic version |
 | `apiVersion` | ✓ | Required SDK version, currently `"2.0"`; the major version must match and the required minor version must not exceed the host's |
 | `entry` | ✓ | Relative `.py` path inside the plugin folder, exporting the `Plugin` class; absolute paths, `..`, and links outside the folder are prohibited |
-| `minAppVersion` | | Minimum application version, such as `"0.1.0"`; checked before importing code, with loading rejected if unmet |
+| `minAppVersion` | | Minimum application version, such as `"1.0.0"`; checked before importing code, with loading rejected if unmet |
 | `author` `description` `homepage` | | Metadata |
 | `permissions` | | See §6 |
 | `contributes` | | See §5 |
@@ -654,6 +656,8 @@ Configuration uses `settings.<key>` underneath. Plugins should access declared s
 Options closely tied to page operations can be placed directly on the page and saved with `ctx.storage.get()/set()`. The preset audit example saves **Include default preset** as `include_default`. Display text is translated with `ctx.i18n.t()`, while the persistent value remains a boolean. Dropdowns should likewise put a stable value in `userData` instead of saving translated text. Provide a clear message if saving fails.
 
 ## 12. Development checks
+
+> [![Plusa giving a playful reminder](../images/plusa/face/12-调皮吐舌.webp)](../images/plusa/12-调皮吐舌.webp) **Plusa's tip:** Also install and test the packaged plugin, even if it works in your development folder. Complete the checks below before sharing it.
 
 ### 12.1 Everyday editing workflow
 

@@ -2,7 +2,7 @@
 
 ### 8.1 Finding the actual data root
 
-![Plusa helping with backups and troubleshooting](../../images/plusa/supplement/备份排障.webp)
+<img src="../../images/plusa/supplement/备份排障.webp" alt="Plusa helping with backups and troubleshooting" width="280">
 
 The application first tries to store personal data beside the application. If that folder is not writable, it uses the Windows user data directory, usually:
 
@@ -64,6 +64,8 @@ When changing the deployment location, prefer the migration confirmation provide
 
 ### 8.5 File identity, verification, and recovery messages
 
+> [![Plusa helping with a setback](../../images/plusa/face/05-哭泣.webp)](../../images/plusa/05-哭泣.webp) **Plusa's tip:** Keep the complete original package and records when verification or recovery needs attention. Do not remove identity markers or the database to dismiss a warning; check the causes below.
+
 The app checks managed source files, metadata, and deployment records before an operation. The following changes can block writes:
 
 | Message type | First action |
@@ -78,6 +80,8 @@ The app checks managed source files, metadata, and deployment records before an 
 These messages prevent operations from continuing on the wrong item. **Do not delete markers, the database, or transaction records to dismiss the message.** Those records may contain the file contents and path information needed for recovery.
 
 ### 8.6 Common problems
+
+> [![Plusa checking a puzzling result](../../images/plusa/face/03-无语滴汗.webp)](../../images/plusa/03-无语滴汗.webp) **Plusa's tip:** Start with the current game, actual paths, and task results. Change one thing at a time and keep the original error text so you can identify which step went wrong.
 
 | Symptom | What to check |
 | --- | --- |
@@ -102,6 +106,10 @@ These messages prevent operations from continuing on the wrong item. **Do not de
 | Items are still missing after rebuilding | Review the report for invalid metadata, identity conflicts, or missing source files, and address each item |
 
 ### 8.7 Reporting a problem
+
+<img src="../../images/plusa/排障.webp" alt="Plusa holding logs to help prepare a useful report" width="280">
+
+*Keep the steps, error text, and logs from the same time period together to help reproduce and locate the problem.*
 
 Use **Tools → View Logs** to find the startup session in which the problem occurred, and retain the records before and after the operation. Include:
 

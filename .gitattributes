@@ -33,6 +33,7 @@
 
 # 二进制资源
 *.png binary
+*.webp binary
 *.jpg binary
 *.jpeg binary
 *.gif binary
