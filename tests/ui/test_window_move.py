@@ -6,7 +6,7 @@ from PySide6.QtCore import QEvent, QPoint, QPointF, Qt
 from PySide6.QtGui import QCursor, QMouseEvent
 from PySide6.QtWidgets import QApplication, QDialog
 
-from src.ui import native_resize, win_effects
+from src.ui import native_move, native_resize, win_effects
 from src.ui.dialog_chrome import decorate_dialog
 
 
@@ -21,6 +21,7 @@ class NativePointerEvent(QMouseEvent):
 def test_titlebar_coalesces_native_moves_and_commits_release(qapp, qtbot, monkeypatch):
     """队列中的旧坐标不能移动窗口，实际绘制使用最新光标，释放后不再追随光标。"""
     monkeypatch.setattr(QApplication, "platformName", lambda: "windows")
+    monkeypatch.setattr(native_move, "begin_native_move", lambda window: False)
     monkeypatch.setattr(win_effects, "needs_popup_paint_before_blur", lambda: True)
     monkeypatch.setattr(native_resize, "begin_native_resize", lambda window: None)
     dialog = QDialog()

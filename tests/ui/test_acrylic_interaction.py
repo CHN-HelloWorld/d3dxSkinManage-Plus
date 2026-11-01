@@ -25,7 +25,15 @@ def policies(monkeypatch, qapp):
             getwindowsversion=lambda: SimpleNamespace(build=19045),
         ),
     )
-    monkeypatch.setattr(win_effects, "_set_attr", lambda *_: False)
+    original_set_attr = win_effects._set_attr
+
+    def set_attr(hwnd, attr, value):
+        """只强制圆角回退，标题栏保留成功路径，原生运行时调用真实 DWM。"""
+        if attr == 33:
+            return False
+        return original_set_attr(hwnd, attr, value) if qapp.platformName() == "windows" else True
+
+    monkeypatch.setattr(win_effects, "_set_attr", set_attr)
     if not hasattr(ctypes, "windll"):
         monkeypatch.setattr(ctypes, "windll", SimpleNamespace(user32=SimpleNamespace()), raising=False)
     user = ctypes.windll.user32
@@ -166,6 +174,25 @@ def test_opaque_update_dialog_keeps_its_existing_surface(qtbot, policies):
     assert dialog.property("opaqueDialogSurface")
     assert not dialog.testAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
     assert dialog.windowFlags() == flags
+
+
+@pytest.mark.parametrize(
+    "build,corner_radius,expected_state",
+    [(19045, None, 3), (19045, 8, 3), (22631, None, 4), (22631, 8, 3)],
+)
+def test_win10_blur_does_not_depend_on_software_corners(
+    qtbot, policies, monkeypatch, build, corner_radius, expected_state
+):
+    """Win10 即使没有软件圆角也须避开完整 Acrylic，Win11 保持既有材质选择。"""
+    monkeypatch.setattr(win_effects.sys, "getwindowsversion", lambda: SimpleNamespace(build=build))
+    dialog = QDialog(None, Qt.WindowType.FramelessWindowHint)
+    qtbot.addWidget(dialog)
+    dialog.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+    if corner_radius is not None:
+        dialog.setProperty("_window_corner_radius", corner_radius)
+
+    assert win_effects.apply_acrylic_blurbehind(dialog)
+    assert policies[-1][0] == expected_state
 
 
 @pytest.mark.parametrize("build", [22000, 22631, 26100])
