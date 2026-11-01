@@ -17,9 +17,12 @@ from src.utils.logger import logger
 
 # DwmSetWindowAttribute 属性常量
 _DWMWA_USE_IMMERSIVE_DARK_MODE = 20  # BOOL：深色标题栏
+_DWMWA_USE_IMMERSIVE_DARK_MODE_OLD = 19  # Win10 1809 / 1903 使用旧编号。
 _DWMWA_SYSTEMBACKDROP_TYPE = 38  # int：背景材质（Win11 22H2+）
 _DWMWA_WINDOW_CORNER_PREFERENCE = 33  # int：窗口圆角偏好（Win11）
 _DWMWA_TRANSITIONS_FORCEDISABLED = 3  # BOOL：禁用窗口开/关 DWM 过渡动画
+
+_WM_NCACTIVATE = 0x0086  # 重绘非客户区的活动状态。
 
 # DWM 窗口圆角偏好。
 _DWMWCP_ROUND = 2  # 标准圆角(≈8px)
@@ -86,14 +89,30 @@ def _set_attr(hwnd: int, attr: int, value: int) -> bool:
 
 
 def apply_dark_titlebar(window, enabled: bool) -> bool:
-    """设置沉浸式深色/浅色标题栏。"""
+    """设置标题栏明暗并立即重绘，保留窗口原有焦点和活动状态。"""
     if not _supported():
         return False
     try:
         hwnd = int(window.winId())
     except Exception:
         return False
-    return _set_attr(hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE, 1 if enabled else 0)
+    value = 1 if enabled else 0
+    if not (
+        _set_attr(hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE, value)
+        or _set_attr(hwnd, _DWMWA_USE_IMMERSIVE_DARK_MODE_OLD, value)
+    ):
+        return False
+    try:
+        # Win10 只记录 DWM 属性，不会立即刷新已绘制的标题栏。
+        # 仅重绘非客户区，无需切换前台窗口、隐藏窗口或改变窗口尺寸。
+        user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.restype = wintypes.HWND
+        active = user32.GetForegroundWindow() == hwnd
+        for state in (not active, active):
+            user32.SendMessageW(wintypes.HWND(hwnd), _WM_NCACTIVATE, wintypes.WPARAM(state), wintypes.LPARAM(0))
+    except Exception as e:
+        logger.debug("刷新标题栏失败: %s", e)
+    return True
 
 
 def apply_mica(window, theme_name: str) -> bool:
