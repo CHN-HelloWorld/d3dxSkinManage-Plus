@@ -4386,7 +4386,7 @@ class MainWindow(QMainWindow):
         self._pending_retheme.discard(cur)
 
         def _flyout() -> None:
-            """刷新插件界面、下载浮层和各任务面板的主题样式。"""
+            """刷新插件界面、下载浮层、激活提示和各任务面板的主题样式。"""
             plugin_host = getattr(self, "_plugin_ui_host", None)
             if plugin_host is not None:
                 plugin_host.retheme()
@@ -4394,6 +4394,7 @@ class MainWindow(QMainWindow):
             if store is not None and hasattr(store, "download_flyout"):
                 store.download_flyout.retheme()
             for panel in (
+                getattr(self, "_lock_overlay", None),
                 getattr(self, "_intake_progress", None),
                 getattr(self, "_export_progress", None),
                 getattr(self, "_mod_update_progress", None),

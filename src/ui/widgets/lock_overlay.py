@@ -31,35 +31,25 @@ class LockOverlay(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.addStretch(1)
 
-        card = QFrame()
+        card = self._card = QFrame()
         card.setObjectName("lockOverlayCard")
-        card.setStyleSheet(
-            f"QFrame#lockOverlayCard {{ background-color: {theme.surface_color('bg.card', 'panel')};"
-            f" border: 1px solid {theme.color('stroke.card')};"
-            f" border-radius: {theme.radius('large')}px; }}"
-        )
         card.setMaximumWidth(440)
         cl = QVBoxLayout(card)
         cl.setContentsMargins(36, 30, 36, 30)
         cl.setSpacing(14)
 
-        icon = QLabel()
-        icon.setPixmap(icons.pixmap("actions/game", 48, "text.secondary"))
+        icon = self._icon = QLabel()
         icon.setAlignment(Qt.AlignmentFlag.AlignCenter)
         icon.setStyleSheet("background: transparent;")
         cl.addWidget(icon)
 
-        title = QLabel(tr("请先激活一个游戏环境"))
+        title = self._title = QLabel(tr("请先激活一个游戏环境"))
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet(
-            f"color: {theme.color('text.primary')}; font-size: 16px; font-weight: bold; background: transparent;"
-        )
         cl.addWidget(title)
 
-        hint = QLabel(tr("总览、画廊与在线 Mod 需要先在「游戏」页激活一个游戏环境后才能使用。"))
+        hint = self._hint = QLabel(tr("总览、画廊与在线 Mod 需要先在「游戏」页激活一个游戏环境后才能使用。"))
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        hint.setStyleSheet(f"color: {theme.color('text.secondary')}; font-size: 13px; background: transparent;")
         cl.addWidget(hint)
 
         btn = QPushButton(tr("前往「游戏」页激活"))
@@ -70,6 +60,21 @@ class LockOverlay(QWidget):
 
         root.addWidget(card, 0, Qt.AlignmentFlag.AlignHCenter)
         root.addStretch(1)
+        self.retheme()
+
+    def retheme(self) -> None:
+        """同步常驻提示卡片、文字、图标与遮罩的当前主题和背景材质。"""
+        self._card.setStyleSheet(
+            f"QFrame#lockOverlayCard {{ background-color: {theme.surface_color('bg.card', 'panel')};"
+            f" border: 1px solid {theme.color('stroke.card')};"
+            f" border-radius: {theme.radius('large')}px; }}"
+        )
+        self._title.setStyleSheet(
+            f"color: {theme.color('text.primary')}; font-size: 16px; font-weight: bold; background: transparent;"
+        )
+        self._hint.setStyleSheet(f"color: {theme.color('text.secondary')}; font-size: 13px; background: transparent;")
+        icons.apply_pixmap(self._icon, "actions/game", 48, "text.secondary")
+        self.update()
 
     def paintEvent(self, _event) -> None:
         # 半透明遮罩：暗化（暗色主题）/ 提亮（亮色主题）底层空页，保留一点上下文。
