@@ -9,7 +9,7 @@ import ctypes
 import sys
 from ctypes import wintypes
 
-from PySide6.QtCore import QEvent, QObject, QRectF
+from PySide6.QtCore import QEvent, QObject, QRectF, Qt
 from PySide6.QtGui import QPainterPath, QRegion
 from PySide6.QtWidgets import QApplication, QDialog, QWidget
 
@@ -22,7 +22,7 @@ _DWMWA_SYSTEMBACKDROP_TYPE = 38  # int：背景材质（Win11 22H2+）
 _DWMWA_WINDOW_CORNER_PREFERENCE = 33  # int：窗口圆角偏好（Win11）
 _DWMWA_TRANSITIONS_FORCEDISABLED = 3  # BOOL：禁用窗口开/关 DWM 过渡动画
 
-_WM_NCACTIVATE = 0x0086  # 重绘非客户区的活动状态。
+_WM_NCACTIVATE = 0x0086  # 更新非客户区的活动外观。
 
 # DWM 窗口圆角偏好。
 _DWMWCP_ROUND = 2  # 标准圆角(≈8px)
@@ -89,7 +89,7 @@ def _set_attr(hwnd: int, attr: int, value: int) -> bool:
 
 
 def apply_dark_titlebar(window, enabled: bool) -> bool:
-    """设置标题栏明暗并立即重绘，保留窗口原有焦点和活动状态。"""
+    """设置标题栏明暗，避免同步重绘并保留窗口原有焦点和活动状态。"""
     if not _supported():
         return False
     try:
@@ -103,13 +103,25 @@ def apply_dark_titlebar(window, enabled: bool) -> bool:
     ):
         return False
     try:
-        # Win10 只记录 DWM 属性，不会立即刷新已绘制的标题栏。
-        # 仅重绘非客户区，无需切换前台窗口、隐藏窗口或改变窗口尺寸。
+        flags = window.windowFlags()
+        if (
+            not window.isVisible()
+            or flags & Qt.WindowType.FramelessWindowHint
+            or not flags & Qt.WindowType.WindowTitleHint
+        ):
+            # 隐藏窗口在首次显示时采用新属性；自绘标题栏和浮层没有原生标题栏需要刷新。
+            return True
+        # Win10 缓存已绘制的标题栏颜色，需要更新活动外观后才会换色。
+        # lParam=-1 禁止 DefWindowProc 同步重绘非客户区，交由 DWM 合成新外观。
+        # 不缓存明暗状态：Qt 的调色板更新也可能改写同一 DWM 属性。
         user32 = ctypes.windll.user32
+        user32.GetForegroundWindow.argtypes = []
         user32.GetForegroundWindow.restype = wintypes.HWND
+        user32.SendMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
+        user32.SendMessageW.restype = ctypes.c_ssize_t
         active = user32.GetForegroundWindow() == hwnd
         for state in (not active, active):
-            user32.SendMessageW(wintypes.HWND(hwnd), _WM_NCACTIVATE, wintypes.WPARAM(state), wintypes.LPARAM(0))
+            user32.SendMessageW(wintypes.HWND(hwnd), _WM_NCACTIVATE, wintypes.WPARAM(state), wintypes.LPARAM(-1))
     except Exception as e:
         logger.debug("刷新标题栏失败: %s", e)
     return True
@@ -247,7 +259,8 @@ def apply_acrylic_blurbehind(window, dark: bool = True) -> bool:
     """为透明分层窗口配置 ACCENT 模糊背景。
 
     调用方先设置透明属性及半透明填充，再使用 SetWindowCompositionAttribute 应用材质。
-    窗口使用区域裁切时采用无系统叠色的实时模糊，让 Qt 的透明像素约束四角；
+    Windows 10 使用实时模糊，避免完整 Acrylic 在移动窗口时的合成延迟。
+    窗口使用区域裁切时也采用无系统叠色的实时模糊，让 Qt 的透明像素约束四角；
     ACCENT 亚克力会在区域之外填充矩形叠色。失败时返回 False，保留基础填充。
     """
     if not _supported():
@@ -270,7 +283,9 @@ def apply_acrylic_blurbehind(window, dark: bool = True) -> bool:
 
         accent = _ACCENT_POLICY()
         clipped = window.property(_CORNER_RADIUS_PROPERTY) is not None
-        accent.AccentState = _ACCENT_ENABLE_BLURBEHIND if clipped else _ACCENT_ENABLE_ACRYLICBLURBEHIND
+        # Win10 的拖动保护不能依赖是否安装圆角遮罩，否则调整窗口边框就会恢复慢速材质。
+        live_blur = clipped or sys.getwindowsversion().build < 22000
+        accent.AccentState = _ACCENT_ENABLE_BLURBEHIND if live_blur else _ACCENT_ENABLE_ACRYLICBLURBEHIND
         accent.AccentFlags = 0
         accent.GradientColor = gradient
         accent.AnimationId = 0
@@ -281,7 +296,7 @@ def apply_acrylic_blurbehind(window, dark: bool = True) -> bool:
         res = set_comp(wintypes.HWND(hwnd), ctypes.byref(data))
         ok = bool(res)
         if ok:
-            logger.debug("已启用%s磨砂", "区域实时模糊" if clipped else " Acrylic")
+            logger.debug("已启用%s磨砂", "实时模糊" if live_blur else " Acrylic")
         return ok
     except Exception as e:
         logger.debug("SetWindowCompositionAttribute 失败: %s", e)

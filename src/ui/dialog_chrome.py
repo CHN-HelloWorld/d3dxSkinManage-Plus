@@ -152,9 +152,14 @@ class DialogTitleBar(QWidget):
         self.close_button.refresh_icon()
 
     def mousePressEvent(self, event):
-        """保存拖动基准，Win10 原生指针使用合并移动，其他情况保留系统移动。"""
+        """优先进入 Win10 共用原生拖动路径，其他输入保留原有移动回退。"""
         if event.button() == Qt.MouseButton.LeftButton:
             self._end_drag()
+            from src.ui.native_move import begin_native_move
+
+            if begin_native_move(self.window()):
+                event.accept()
+                return
             self._drag_origin = event.globalPosition().toPoint()
             self._window_origin = self.window().pos()
             from src.ui import win_effects

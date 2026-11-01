@@ -129,6 +129,9 @@ class App:
         from src.ui import win_dnd_admin
 
         win_dnd_admin.install(self._qt_app)
+        from src.ui import native_move
+
+        native_move.install(self._qt_app)
 
         # 初始化 i18n
         # Qt 内置控件（QMessageBox 的 Save/Discard/Yes/No/Cancel 标准按钮、右键菜单等）
@@ -152,9 +155,8 @@ class App:
         logger.info("启动阶段：主窗口模块载入 %.3f 秒", perf_counter() - phase_started)
         self._main_window = MainWindow()
         self._main_window.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
-        self._main_window.show()
 
-        # Win11 Mica / 沉浸式标题栏（最佳努力，失败静默回退）
+        # 显示前设置标题栏和 Win11 Mica，使首次原生绘制直接采用正确主题。
         try:
             from src.ui import theme as theme_mod
             from src.ui import win_effects
@@ -162,6 +164,7 @@ class App:
             win_effects.apply_mica(self._main_window, theme_mod.current_theme())
         except Exception as e:
             logger.debug("窗口视觉增强不可用: %s", e)
+        self._main_window.show()
 
         logger.info("应用启动完成（准备耗时 %.3f 秒）", perf_counter() - startup_started)
         return self._qt_app.exec()
