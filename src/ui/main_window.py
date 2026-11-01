@@ -808,14 +808,14 @@ class MainWindow(QMainWindow):
         nav_container_layout.addWidget(self._collapse_btn)
 
         # 使用 QSplitter 让导航栏可调宽度
-        self._main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._main_splitter = QSplitter(Qt.Orientation.Horizontal, central)
         self._main_splitter.setChildrenCollapsible(False)
         self._main_splitter.addWidget(self._nav_container)
 
-        # 右侧页面栈
-        self._stack = QStackedWidget()
+        # 先确定最终父对象，避免完整页面加入容器时逐层重算字体和 QSS。
+        self._stack = QStackedWidget(self._main_splitter)
 
-        self._overview_page = OverviewPage()
+        self._overview_page = OverviewPage(self._stack)
         self._overview_page._mod_manager = self._mod_manager  # 注入，供按键面板/override 编辑
         self._stack.addWidget(self._overview_page)  # 0
 
@@ -825,7 +825,7 @@ class MainWindow(QMainWindow):
 
         self._connect_variant_controller()
 
-        self._gallery_page = GalleryPage()
+        self._gallery_page = GalleryPage(self._stack)
         self._stack.addWidget(self._gallery_page)  # 1
 
         # 恢复上次的成人级Mod预览模式（show|hide|blur），两页保持一致
@@ -833,10 +833,10 @@ class MainWindow(QMainWindow):
         self._overview_page.set_adult_mode(_adult_mode)
         self._gallery_page.set_adult_mode(_adult_mode)
 
-        self._settings_page = SettingsPage(shortcuts=self._shortcut_settings)
+        self._settings_page = SettingsPage(self._stack, shortcuts=self._shortcut_settings)
         self._stack.addWidget(self._settings_page)  # 2
 
-        self._tools_page = ToolsPage()
+        self._tools_page = ToolsPage(self._stack)
         self._stack.addWidget(self._tools_page)  # 3
 
         # GameBanana Mod Store 页
@@ -844,7 +844,7 @@ class MainWindow(QMainWindow):
         self._stack.addWidget(self._gb_store_page)  # 4
 
         # 游戏管理页（独立顶级页，PAGE_GAME）
-        self._game_page = GamePage(save_context=self._game_settings_save)
+        self._game_page = GamePage(self._stack, save_context=self._game_settings_save)
         self._stack.addWidget(self._game_page)  # 5
         self._game_page.game_changed.connect(self._on_game_changed)
         self._game_page.games_changed.connect(self._on_games_changed)
@@ -852,11 +852,11 @@ class MainWindow(QMainWindow):
         self._game_page.deploy_dir_cleared.connect(self._on_deploy_dir_cleared)
 
         # 插件管理页（PAGE_PLUGINS）
-        self._plugins_page = PluginsPage()
+        self._plugins_page = PluginsPage(self._stack)
         self._stack.addWidget(self._plugins_page)  # 6
 
         # 关于页（PAGE_ABOUT，导航底部入口）
-        self._about_page = AboutPage()
+        self._about_page = AboutPage(self._stack)
         self._stack.addWidget(self._about_page)  # 7
 
         # 无激活游戏时仍允许进入内容页，由 _stack 子控件覆盖显示激活提示。
@@ -928,7 +928,7 @@ class MainWindow(QMainWindow):
             image_loader=self._gb_image_loader,
             local_game_id=self._game_service.current_game_id,
             mod_index=self._mod_manager,
-            parent=self,
+            parent=self._stack,
         )
         page.open_settings_requested.connect(self._open_game_settings)
         page.open_local_mod_in_overview_requested.connect(self._open_local_mod_in_overview)

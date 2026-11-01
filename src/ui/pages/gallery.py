@@ -887,8 +887,9 @@ class GalleryPage(QWidget):
         """调整空状态标签使其填满可视区域并居中"""
         if not self._mods:
             vp = self._scroll_area.viewport()
-            w = vp.width() if vp.width() > 100 else self.width() - 48
-            h = vp.height() if vp.height() > 100 else self.height() - 60
+            # 隐藏页可能尚未参与父布局，初始尺寸小于边距时先保留零大小。
+            w = max(0, vp.width() if vp.width() > 100 else self.width() - 48)
+            h = max(0, vp.height() if vp.height() > 100 else self.height() - 60)
             self._empty_label.move(0, 0)
             self._empty_label.resize(w, h)
             self._loading_panel.setGeometry(0, 0, w, h)

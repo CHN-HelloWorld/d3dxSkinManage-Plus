@@ -66,7 +66,9 @@ class SettingsShellMixin:
         self._header_layout = QBoxLayout(QBoxLayout.Direction.LeftToRight, header)
         self._header_layout.setContentsMargins(20, 12, 20, 12)
         self._header_layout.setSpacing(16)
-        self._stack = QStackedWidget()
+        # 内容较多，构建前固定父子关系，避免稍后重挂整棵控件树。
+        self._content_stack = QStackedWidget(self._workspace)
+        self._stack = QStackedWidget(self._content_stack)
         nav = self._build_top_nav(
             [
                 (tr("常规"), "settings"),
@@ -116,7 +118,6 @@ class SettingsShellMixin:
             self._build_update_page(),
         ):
             self._stack.addWidget(page)
-        self._content_stack = QStackedWidget()
         self._content_stack.addWidget(self._stack)
         self._search_results = SettingsSearchPanel()
         self._search_results.activated.connect(self._open_search_result)
