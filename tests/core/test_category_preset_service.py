@@ -1,4 +1,6 @@
 import json
+import os
+import subprocess
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -9,7 +11,7 @@ from src.core.category_preset import CategoryPresetDocument, CategoryPresetError
 from src.core.category_preset_service import CategoryPresetService
 from src.core.mod_manager import ModManager
 from src.services.category_preset_file import read_category_preset, write_category_preset
-from src.utils.constants import CATEGORY_MARKER_FILE
+from src.utils.constants import CATEGORY_MARKER_FILE, META_DIR
 from tests.helpers import register_games, reset_game_service
 
 
@@ -37,6 +39,65 @@ def node(path, **kw):
 
 def snapshot(manager):
     return [tuple(row) for row in manager._index._db().execute("SELECT * FROM nodes ORDER BY id")]
+
+
+def windows_access_rules(paths):
+    """读取实际 Windows 访问规则，忽略规则来源并按主体、权限和允许类型比较。"""
+    command = """
+        $ErrorActionPreference = 'Stop'
+        $paths = $input | ConvertFrom-Json
+        foreach ($path in $paths) {
+            $acl = Get-Acl -LiteralPath $path
+            ($acl.Access | ForEach-Object {
+                $_.IdentityReference.Translate([System.Security.Principal.SecurityIdentifier]).Value +
+                ':' + $_.FileSystemRights.value__ + ':' + $_.AccessControlType
+            } | Sort-Object) -join ';'
+        }
+    """
+    result = subprocess.run(
+        ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command],
+        input=json.dumps([str(path) for path in paths]),
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    return result.stdout.splitlines()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="仅 Windows 使用目录访问控制列表")
+@pytest.mark.parametrize("target_state", ["missing", "existing", "existing_meta"])
+def test_import_permissions_match_manually_created_directories(manager, tmp_path, target_state):
+    """新分类、缺失资源根及补全图片均须保留普通建目录时的访问权限。"""
+    service = CategoryPresetService(manager)
+    # pytest 的临时根本身是私有目录，补充可继承的普通用户权限以模拟正常资源库。
+    subprocess.run(
+        ["icacls.exe", str(service.db_path.parent), "/grant", "*S-1-5-32-545:(OI)(CI)(RX)", "/T", "/Q"],
+        capture_output=True,
+        check=True,
+    )
+    manual = manager.add_character(name="手动分类")
+    manual_path = manager._index.paths.node_path(manual.id)
+    game_id = "other" if target_state == "missing" else "game_a"
+    if target_state == "existing_meta":
+        (manual_path / META_DIR).mkdir()
+    image = tmp_path / "image.png"
+    Image.new("RGB", (3, 3), "red").save(image)
+    import hashlib
+
+    image_id = hashlib.sha256(image.read_bytes()).hexdigest()
+    nodes = [node("新分类"), node("新分类/子分类", image_id=image_id)]
+    if game_id == "game_a":
+        nodes.append(node("手动分类", image_id=image_id))
+    plan = service.preview_import(preset(tmp_path, nodes, {image_id: image}), game_id)
+    expected_directory, expected_file = windows_access_rules([manual_path, manual_path / CATEGORY_MARKER_FILE])
+
+    service.execute_import(plan)
+
+    paths = [plan.target.root, *plan.target.root.rglob("*")]
+    rules = windows_access_rules(paths)
+    assert len(rules) == len(paths)
+    for path, actual in zip(paths, rules, strict=True):
+        assert actual == (expected_directory if path.is_dir() else expected_file), path
 
 
 def test_complete_tree_80_plus_6_preserves_existing_and_repeat_is_noop(manager, tmp_path):

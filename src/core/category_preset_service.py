@@ -257,10 +257,16 @@ class CategoryPresetService:
                 raise CategoryPresetError(tr("预设文件和暂存位置必须在所有分类库及部署目录之外：{path}", path=path))
         return path
 
-    def _new_stage(self):
-        """在数据库所在的安全目录中创建本次预设操作的独立暂存目录。"""
-        base = self._outside(self.db_path.parent)
-        return Path(tempfile.mkdtemp(prefix=".category-preset-", dir=base))
+    def _new_stage(self, parent=None, *, prefix=".category-preset-"):
+        """在安全目录中创建独立暂存目录，Windows 继承父目录访问权限。"""
+        base = self._outside(self.db_path.parent if parent is None else parent)
+        if os.name == "nt":
+            # mkdtemp 的 0o700 会设置私有 ACL，移动发布后资源管理器仍可能无法访问。
+            # 使用随机名称排他创建，并与手动创建分类一样继承正常目录权限。
+            stage = base / (prefix + uuid.uuid4().hex)
+            stage.mkdir()
+            return stage
+        return Path(tempfile.mkdtemp(prefix=prefix, dir=base))
 
     def _cleanup_owned(self, owner):
         """清理仍与所有权凭据匹配的暂存对象，记录并返回保留路径。"""
@@ -752,7 +758,7 @@ class CategoryPresetService:
                 if self._snapshot(conn, plan.target, (n.path for n in plan.document.nodes))[2] != plan.fingerprint:
                     raise CategoryPresetError(tr("目标分类状态发生变化，请重新比较"))
                 anchors = directory_anchors(plan.target.root / row.path for row in plan.rows)
-                publication = StagingOwnership(Path(tempfile.mkdtemp(prefix="publication-", dir=plan.staging)))
+                publication = StagingOwnership(self._new_stage(plan.staging, prefix="publication-"))
                 actions, inserts, updates = self._prepare(plan, conn, cancelled, publication, progress)
                 protected = [
                     str(plan.target.root / row.path) for row in plan.rows if row.status == "new" or row.fill_image
