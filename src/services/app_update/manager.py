@@ -139,9 +139,7 @@ class AppUpdateManager(QObject):
     # 对外入口
 
     def check_on_startup(self) -> None:
-        """启动后静默检查（受总开关 / 启动开关 / 24h 节流约束）。"""
-        if not self._config.get("app_update.enabled", True):
-            return
+        """启动后按启动检查偏好静默检查，距上次检查不足 24 小时则跳过。"""
         if not self._config.get("app_update.on_startup", True):
             return
         last = float(self._config.get("app_update.last_check_time", 0) or 0)
@@ -151,14 +149,10 @@ class AppUpdateManager(QObject):
         self.check_for_updates(silent=True)
 
     def check_for_updates(self, silent: bool = False) -> None:
-        """检查更新。silent=True 时不弹「已是最新 / 失败」提示，仅在有更新时打扰。"""
+        """独立于启动检查偏好和节流执行检查，静默模式仅在发现新版本时提示。"""
         if self._is_busy:
             logger.info("程序更新：已有任务进行中，忽略重复请求")
             return
-        if not self._config.get("app_update.enabled", True) and not silent:
-            self._info_box(tr("程序更新"), tr("程序自动更新已在设置中关闭。"))
-            return
-
         self._is_busy = True
         self._silent = silent
         self.check_started.emit()

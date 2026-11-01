@@ -467,7 +467,7 @@ class TestProxyLegacyRemoved:
         "gamebanana.proxy_config.mode",
         "gamebanana.update_check.enabled",
         "gamebanana.update_check.min_recheck_hours",
-        "app_update.enabled",
+        "app_update.on_startup",
         "app_update.download_source",
         "ui.adult_preview_mode",
         "ui.window_width",

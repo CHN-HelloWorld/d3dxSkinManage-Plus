@@ -909,8 +909,6 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         )
         g2, gl2 = self._make_group(tr("更新偏好"), icon="settings")
 
-        self._app_upd_enable_check = ToggleSwitch()
-        self._add_row(gl2, tr("启用程序自动更新"), self._app_upd_enable_check, tr("关闭后不再检查/提示新版本。"))
         self._app_upd_startup_check = ToggleSwitch()
         self._add_row(
             gl2, tr("启动时检查"), self._app_upd_startup_check, tr("启动后静默检查，带 24h 节流；有新版本才打扰。")
@@ -1353,7 +1351,6 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         self._dl_auto_delete_check.setChecked(bool(self._config.get("gamebanana.delete_archive_after_install", True)))
 
         # 程序更新设置
-        self._app_upd_enable_check.setChecked(self._config.get("app_update.enabled", True))
         self._app_upd_startup_check.setChecked(self._config.get("app_update.on_startup", True))
         self._app_upd_backup_check.setChecked(self._config.get("app_update.backup_before_update", True))
         src = self._config.get("app_update.download_source", "auto")
@@ -1476,8 +1473,7 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         self._upd_notify_combo.currentIndexChanged.connect(
             lambda _i: self._autosave(f"{uc}.notify_style", self._upd_notify_combo.currentData())
         )
-        # 程序更新开关
-        self._app_upd_enable_check.toggled.connect(lambda v: self._autosave("app_update.enabled", v))
+        # 程序更新偏好
         self._app_upd_startup_check.toggled.connect(lambda v: self._autosave("app_update.on_startup", v))
         self._app_upd_backup_check.toggled.connect(lambda v: self._autosave("app_update.backup_before_update", v))
         self._app_upd_source_combo.currentIndexChanged.connect(

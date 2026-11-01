@@ -120,7 +120,7 @@ def isolated_manager(root: Path):
             config = Config()
             config.set("gamebanana.enabled", False)
             config.set("gamebanana.update_check.enabled", False)
-            config.set("app_update.enabled", False)
+            config.set("app_update.on_startup", False)
             config.set("mods.delete_method", "permanent")
             deploy = directory("Mods")
             store = GameConfigStore()

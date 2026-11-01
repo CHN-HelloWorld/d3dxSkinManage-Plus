@@ -58,7 +58,6 @@ def create_demo() -> dict:
         "gamebanana.enabled": False,
         "gamebanana.update_check.enabled": False,
         "gamebanana.update_check.on_startup": False,
-        "app_update.enabled": False,
         "app_update.on_startup": False,
         "ui.overview_card_scale": 100,
         "ui.overview_preview_width": 390,

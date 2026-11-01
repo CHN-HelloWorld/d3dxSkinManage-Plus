@@ -123,7 +123,6 @@ def test_startup_cleanup_is_independent_of_update_check_settings(qtbot, temp_dat
     retired = executable(temp_data_dir / "Updater/updater.exe.old_update.5.1000.1")
     monkeypatch.setattr(manager_module, "is_frozen", lambda: True)
     config = Config()
-    config.set("app_update.enabled", False)
     config.set("app_update.on_startup", False)
     window = QWidget()
     qtbot.addWidget(window)

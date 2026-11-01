@@ -167,7 +167,6 @@ class Config:
         },
         # 程序自身自动更新（区别于 gamebanana.update_check 的「Mod」更新）
         "app_update": {
-            "enabled": True,  # 总开关：关闭后不检查也不提示程序更新
             "on_startup": True,  # 启动时静默检查（带 24h 节流）
             "repo": "",  # GitHub owner/repo，留空用 constants.APP_UPDATE_REPO
             "backup_before_update": True,  # 更新前备份程序文件，替换失败时用于恢复。
