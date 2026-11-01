@@ -79,15 +79,9 @@ class App:
         QLoggingCategory.setFilterRules(
             "qt.gui.imageio.warning=false\nqt.text.font.db.warning=false\nqt.qpa.fonts.warning=false"
         )
-        # Windows：显式设置 AppUserModelID，让任务栏用应用自身图标并正确分组，
-        # 而不是继承 python.exe / 启动器 的图标（必须在创建任何窗口之前调用）。
-        if sys.platform == "win32":
-            try:
-                import ctypes
+        from src.ui import taskbar
 
-                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("d3dxSkinManage-Plus.App")
-            except Exception:
-                pass
+        taskbar.configure_process()
 
         phase_started = perf_counter()
         self._qt_app = QApplication(sys.argv)
@@ -105,8 +99,10 @@ class App:
         with group_application_event_filters(self._qt_app):
             # 所有页面、弹窗及插件的下拉框只通过显式选择切项，避免滚动浏览时误改。
             from src.ui import combo_wheel
+            from src.ui.scrollbar_context_menu import install as install_scrollbar_context_menu
 
             combo_wheel.install(self._qt_app)
+            install_scrollbar_context_menu(self._qt_app)
 
             # 应用图标（窗口标题栏 / 任务栏 / Alt+Tab）——resources/app.ico 为多尺寸
             # (16~256)；scripts/release/build.py 打包时使用同一文件作为可执行文件图标。
@@ -155,6 +151,7 @@ class App:
         logger.info("启动阶段：主窗口模块载入 %.3f 秒", perf_counter() - phase_started)
         self._main_window = MainWindow()
         self._main_window.resize(DEFAULT_WINDOW_WIDTH, DEFAULT_WINDOW_HEIGHT)
+        taskbar.configure_window(self._main_window)
 
         # 显示前设置标题栏和 Win11 Mica，使首次原生绘制直接采用正确主题。
         try:
