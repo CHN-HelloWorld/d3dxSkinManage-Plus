@@ -2726,7 +2726,7 @@
     "查看来源": "View source",
     "X · 18+ 内容": "X · 18+ Content",
     "18+ 内容已隐藏": "18+ content hidden",
-    "18+ 内容显示模式": "18+ content display mode",
+    "显示：正常显示 NSFW Mod 预览\n隐藏：不显示 NSFW Mod\n模糊：模糊预览": "Show: display NSFW Mod previews normally\nHide: exclude NSFW Mods from the list\nBlur: blur previews",
     "持续关注 · 鼎力支持": "Continued interest · Unwavering support",
     "未识别权限": "Unknown permission",
     "命令 {command_id!r} 已由插件 {owner!r} 注册": "Command {command_id!r} is already registered by plugin {owner!r}",

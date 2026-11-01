@@ -82,7 +82,7 @@ class GbFilterBar(QFrame):
 
         # NSFW 显示模式：下拉框内前置眼睛图标（图标不进下拉项）
         self.nsfw_combo = LeadingIconComboBox("status/visible")
-        self.nsfw_combo.setToolTip(tr("18+ 内容显示模式"))
+        self.nsfw_combo.setToolTip(tr("显示：正常显示 NSFW Mod 预览\n隐藏：不显示 NSFW Mod\n模糊：模糊预览"))
         for label, policy in NSFW_LABEL_TO_KEY.items():
             self.nsfw_combo.addItem(t(label), policy)
         self.nsfw_combo.currentIndexChanged.connect(
