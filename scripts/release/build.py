@@ -165,7 +165,15 @@ def build_command(args: argparse.Namespace) -> list[str]:
     if not args.console:
         cmd.append("--windows-console-mode=disable")
 
-    cmd.extend(("--include-package-data=certifi", "--include-package=pypinyin", "--include-package=unrar"))
+    # pypinyin 导入时读取两份 JSON 词典，仅包含 Python 模块会使发行版无法按拼音排序。
+    cmd.extend(
+        (
+            "--include-package-data=certifi",
+            "--include-package=pypinyin",
+            "--include-package-data=pypinyin",
+            "--include-package=unrar",
+        )
+    )
 
     if ICON.exists():
         cmd.append(f"--windows-icon-from-ico={ICON}")
@@ -607,6 +615,15 @@ def main() -> int:
     if result.returncode != 0:
         print(f"\n[X] Nuitka 失败（退出码 {result.returncode}）")
         return result.returncode
+
+    # 两种模式均从 standalone 目录封装发行内容，在搬运前确认拼音运行资源完整。
+    pinyin_dir = OUTPUT_DIR / "run_app.dist" / "pypinyin"
+    missing_dictionaries = [
+        name for name in ("pinyin_dict.json", "phrases_dict.json") if not (pinyin_dir / name).is_file()
+    ]
+    if missing_dictionaries:
+        print("[X] 发行包缺少拼音词典：" + ", ".join(missing_dictionaries))
+        return 1
 
     try:
         normalize_compilation_report(PROJECT_BUILD / "nuitka-report.xml")
