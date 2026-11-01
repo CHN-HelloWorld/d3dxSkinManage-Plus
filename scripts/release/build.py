@@ -142,6 +142,7 @@ def build_command(args: argparse.Namespace) -> list[str]:
         "--include-package=windows_capture",  # 场景捕获的 Rust 扩展及 Python 包装
         f"--user-package-configuration-file={ROOT / 'scripts' / 'release' / 'nuitka-package.config.yml'}",
         "--nofollow-import-to=cv2",  # 捕获库的图片保存已改用 Pillow，不携带 OpenCV
+        "--nofollow-import-to=httpx._main",  # 不使用 HTTPX 命令行入口，避免带入 Pygments 语法高亮模块
         f"--report={PROJECT_BUILD / 'nuitka-report.xml'}",  # 依赖诊断独立保存，不进入发行包
         # 使用 pefile 分析 DLL 依赖，支持非 ASCII 源路径。
         "--experimental=force-dependencies-pefile",
