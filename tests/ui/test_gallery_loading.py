@@ -1,3 +1,5 @@
+"""验证画廊加载状态、异步结果与隐藏页面的布局边界。"""
+
 from types import SimpleNamespace
 
 import pytest
@@ -42,6 +44,30 @@ def _has_empty_message(page):
 def test_unloaded_gallery_does_not_claim_library_is_empty(page):
     assert not _has_empty_message(page)
     assert page._loading_panel.isVisible()
+
+
+def test_hidden_gallery_can_refresh_before_its_parent_has_a_layout(qtbot, temp_data_dir, qtlog):
+    """隐藏视口尺寸不足时不提交负高度，进入页面后仍能恢复正常布局。"""
+    from PySide6.QtWidgets import QStackedWidget
+
+    stack = QStackedWidget()
+    qtbot.addWidget(stack)
+    stack.resize(100, 30)
+    widget = GalleryPage(stack)
+    try:
+        widget.resize(100, 30)
+        widget._scroll_area.viewport().resize(20, 10)
+        widget._check_and_refresh_layout()
+
+        assert not [record.message for record in qtlog.records if "Negative sizes" in record.message]
+
+        stack.addWidget(widget)
+        stack.resize(900, 600)
+        stack.show()
+        qtbot.waitUntil(lambda: widget._loading_panel.height() > 100)
+        assert widget._loading_panel.isVisible()
+    finally:
+        widget.close()
 
 
 def test_pending_gallery_shows_loading_through_probe_and_decode(qtbot, mm, page, tmp_path, monkeypatch):
