@@ -1,11 +1,33 @@
 import gc
+import os
+import subprocess
+import sys
 import weakref
+from pathlib import Path
 
 import pytest
 import shiboken6
 from PySide6.QtCore import QObject, Qt
 
 from src.utils.qt_timers import call_later
+
+
+@pytest.mark.parametrize("owner_kind", ["widget", "object"])
+@pytest.mark.parametrize("outcome", ["return", "raise", "destroy_context", "cancel_timer", "cancel_context"])
+def test_last_context_reference_is_released_without_reentrant_native_deletion(owner_kind, outcome):
+    """原生重复析构会直接终止进程，独立子进程须同时验证回调结果和退出状态。"""
+    probe = Path(__file__).with_name("_qt_timer_release_probe.py")
+    result = subprocess.run(
+        [sys.executable, "-B", str(probe), owner_kind, outcome],
+        cwd=probe.parents[2],
+        env=dict(os.environ, QT_QPA_PLATFORM="offscreen", PYTHONIOENCODING="utf-8"),
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=15,
+    )
+    assert result.returncode == 0, f"child exited {result.returncode:#x}\n{result.stdout}\n{result.stderr}"
 
 
 class Receiver(QObject):
@@ -72,6 +94,29 @@ def test_callback_exception_does_not_leave_a_timer_behind(qtbot):
     assert len(exceptions) == 1
     assert str(exceptions[0][1]) == "deferred failure"
     assert owner.children() == []
+
+
+def test_stale_timer_event_keeps_context_cancellation(qapp):
+    """重启前已排队的旧事件不能解除新定时器的父子关系，使关窗取消仍然生效。"""
+    from PySide6.QtCore import QCoreApplication, QTimerEvent
+
+    calls = []
+    owner = Receiver(calls)
+    timer = call_later(60_000, owner, owner.run)
+    previous_id = timer.timerId()
+    timer.start(60_001)
+    assert timer.timerId() != previous_id
+    try:
+        QCoreApplication.sendEvent(timer, QTimerEvent(previous_id))
+        assert timer.parent() is owner
+        shiboken6.delete(owner)
+        assert not shiboken6.isValid(timer)
+        assert calls == []
+    finally:
+        if shiboken6.isValid(timer):
+            shiboken6.delete(timer)
+        if shiboken6.isValid(owner):
+            shiboken6.delete(owner)
 
 
 @pytest.mark.parametrize(

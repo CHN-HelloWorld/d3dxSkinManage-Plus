@@ -2,7 +2,20 @@
 
 from collections.abc import Callable
 
-from PySide6.QtCore import QObject, Qt, QThread, QTimer
+from PySide6.QtCore import QEvent, QObject, Qt, QThread, QTimer
+
+
+class _ContextTimer(QTimer):
+    """等待期间归上下文所有，执行或取消时解除可能重入析构的父子关系。"""
+
+    def event(self, event: QEvent) -> bool:
+        """在回调或延迟销毁释放上下文最后引用前，将自身移出上下文的子对象列表。"""
+        kind = event.type()
+        if kind == QEvent.Type.DeferredDelete or (
+            kind == QEvent.Type.Timer and self.isActive() and event.timerId() == self.timerId()
+        ):
+            self.setParent(None)
+        return super().event(event)
 
 
 def call_later(delay_ms: int, context: QObject, callback: Callable[[], object]) -> QTimer:
@@ -13,7 +26,7 @@ def call_later(delay_ms: int, context: QObject, callback: Callable[[], object]) 
     包括回调抛出异常或销毁所有者的情况。"""
     if QThread.currentThread() != context.thread():
         raise RuntimeError("Deferred work must be scheduled on its context thread")
-    timer = QTimer(context)
+    timer = _ContextTimer(context)
     timer.setSingleShot(True)
     # 保持 QTimer.singleShot 的精度策略，短延迟回调不得提前触发。
     timer.setTimerType(Qt.TimerType.PreciseTimer if delay_ms < 2000 else Qt.TimerType.CoarseTimer)
