@@ -1,6 +1,9 @@
 import ast
 import hashlib
+import importlib.util
 import json
+import os
+import py_compile
 import zipfile
 from pathlib import Path
 
@@ -61,6 +64,34 @@ def test_prepare_embeds_version_and_repository_in_the_build(release_source):
     assert metadata["tag"] == "v1.2.3"
     assert metadata["title"] == '版本 1.2.3 · "更新体验"'
     assert metadata["notes"] == "## 更新内容\n- 支持中文说明\n- 保留 `code` 和 $(example)"
+
+
+def test_same_second_version_change_invalidates_existing_bytecode(release_source, monkeypatch):
+    from scripts.release import github_release
+
+    github_release.prepare_release(release_source, release_inputs(version="1.2.3"), "maintainer/mod-manager")
+    constants = release_source / "src/utils/constants.py"
+    py_compile.compile(str(constants), doraise=True)
+    original_stat = constants.stat()
+    write_text = Path.write_text
+
+    def write_in_same_second(path, *args, **kwargs):
+        """固定常量文件的时间戳，稳定复现等长版本修改命中旧字节码的条件。"""
+        result = write_text(path, *args, **kwargs)
+        if path == constants:
+            os.utime(path, ns=(original_stat.st_atime_ns, original_stat.st_mtime_ns))
+        return result
+
+    monkeypatch.setattr(Path, "write_text", write_in_same_second)
+
+    github_release.prepare_release(release_source, release_inputs(version="1.2.4"), "maintainer/mod-manager")
+
+    assert constants.stat().st_size == original_stat.st_size
+    assert constants.stat().st_mtime_ns == original_stat.st_mtime_ns
+    spec = importlib.util.spec_from_file_location("release_version_fixture", constants)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    assert module.APP_VERSION == "1.2.4"
 
 
 @pytest.mark.parametrize(

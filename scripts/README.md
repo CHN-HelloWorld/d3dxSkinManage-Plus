@@ -5,7 +5,7 @@ Windows 使用 `.venv\Scripts\python.exe`，其他平台可替换为当前环境
 
 | 目录 | 职责与入口 |
 | --- | --- |
-| `release/` | [build.py](release/build.py) 构建和打包发行文件；[github_release.py](release/github_release.py) 准备云端发行版本、独立视频资源和发布附件；[release_licenses.py](release/release_licenses.py) 收集运行依赖许可；[nuitka-package.config.yml](release/nuitka-package.config.yml) 配置 Nuitka 包处理规则。 |
+| `release/` | [release.py](release/release.py) 统一本地和云端的一键发行、版本同步与校验；[build.py](release/build.py) 提供常规主程序构建；[github_release.py](release/github_release.py) 维护共用版本规则、独立视频资源和发行附件；[release_licenses.py](release/release_licenses.py) 收集运行依赖许可；[nuitka-package.config.yml](release/nuitka-package.config.yml) 配置 Nuitka 包处理规则。 |
 | `tutorials/` | [build.py](tutorials/build.py) 生成离线教程，由发行构建自动调用；[verify.py](tutorials/verify.py) 核验文档、配图与语言导航；截图和标注工具用于维护教程素材。 |
 | `quality/` | [check_repository.py](quality/check_repository.py) 检查文本编码、源码说明、文档链接和 C++ 格式。 |
 | `i18n/` | [i18n_catalog.py](i18n/i18n_catalog.py) 提取翻译原文、创建语言包并校验占位符。 |
@@ -30,6 +30,9 @@ Windows 使用 `.venv\Scripts\python.exe`，其他平台可替换为当前环境
 ## 常用命令
 
 ```powershell
+.venv\Scripts\python.exe scripts/release/release.py --version 1.0.1
+.venv\Scripts\python.exe scripts/release/release.py --version 1.0.1 --prepare-only
+.venv\Scripts\python.exe scripts/release/release.py --version 1.0.1 --dry-run
 .venv\Scripts\python.exe scripts/release/build.py --dry-run
 .venv\Scripts\python.exe scripts/release/github_release.py pack-media
 .venv\Scripts\python.exe scripts/tutorials/build.py

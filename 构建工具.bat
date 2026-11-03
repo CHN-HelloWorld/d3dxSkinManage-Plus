@@ -13,7 +13,7 @@ set "D3DX_BUILD_MENU_UTF8="
 cd /d "%~dp0"
 title d3dxSkinManage-Plus 构建工具
 
-REM 构建菜单将参数传递给 scripts/release/build.py，成品保存到项目 build 目录。
+REM 常规构建使用 build.py，版本管理与完整发行使用 release.py，成品保存到项目 build 目录。
 REM 主程序使用 Nuitka，原生更新器使用 updater/tools/build.py。
 REM 可通过 PYTHON 环境变量指定构建解释器。
 
@@ -31,6 +31,7 @@ REM 带参数时直接执行非交互构建。
 if not "%~1"=="" goto passthrough
 
 :menu
+set "OUTPUT_HINT=%ROOT%build\"
 cls
 echo ============================================================
 echo            d3dxSkinManage-Plus  -  构建工具菜单
@@ -42,20 +43,21 @@ echo.
 echo  [1] 标准构建      standalone 文件夹（启动快，推荐）
 echo  [2] 单文件构建    onefile 单个 exe（便于分发，启动略慢）
 echo  [3] 调试构建      standalone + 保留控制台（闪退排错用）
-echo  [4] 发行构建      标准构建 + 更新器 + 打包 zip
-echo  [5] C++ 更新器    查看 Visual Studio 构建入口
+echo  [4] 发行构建      输入版本号，自动编译主程序和更新器并打包
+echo  [5] C++ 更新器    自动编译原生 Release x64 更新器
 echo.
 echo  [6] 检查构建环境  验证 Nuitka 和运行依赖
 echo  [7] 配置构建环境  安装构建和运行依赖
 echo  [8] 清理构建输出  删 build\ 里的成品 + 编译暂存目录
 echo  [9] 打开输出目录
+echo  [V] 修改版本号    同步主程序、Python 包和更新器，不编译
 echo  [0] 退出
 echo.
 echo ============================================================
 echo.
 
 set "choice="
-set /p choice=请选择操作 [0-9]:
+set /p choice=请选择操作 [0-9/V]:
 
 if "%choice%"=="1" goto build_standalone
 if "%choice%"=="2" goto build_onefile
@@ -66,6 +68,7 @@ if "%choice%"=="6" goto check_env
 if "%choice%"=="7" goto setup_env
 if "%choice%"=="8" goto clean_output
 if "%choice%"=="9" goto open_output
+if /i "%choice%"=="V" goto change_version
 if "%choice%"=="0" goto end
 
 echo.
@@ -109,26 +112,42 @@ goto done
 :build_release
 cls
 echo ============================================================
-echo  发行构建（请先在 VS 中生成 Release x64 更新器）
-echo    1. standalone 主程序   ==^>  build\d3dxSkinManage-Plus\
-echo    2. 更新器 updater.exe  ==^>  成品的 Updater\ 子目录
-echo    3. 打包发布压缩包      ==^>  build\*-win64.zip
+echo  发行构建（输入一次版本号，自动完成全部步骤）
+echo    1. 同步主程序、Python 包和更新器版本
+echo    2. 自动编译原生更新器与 standalone 主程序
+echo    3. 生成发行 ZIP 和 SHA256  ==^>  build\release\
+echo  版本号留空时使用当前源码版本。
 echo ============================================================
 echo.
-"%PY%" scripts\release\build.py --with-updater --zip
+"%PY%" -X utf8 scripts\release\release.py --interactive
 set "RC=%errorlevel%"
+set "OUTPUT_HINT=%ROOT%build\release\"
 goto done
 
 :build_updater
 cls
 echo ============================================================
-echo  C++17 原生 x64 更新器 - Visual Studio 2022
-echo  打开: %ROOT%updater\updater.sln
-echo  选择 Release ^| x64，然后生成解决方案。
-echo  需要 MSVC v143 和 Windows 10/11 SDK。
-echo  产物: Updater\bin\x64\Release\updater.exe
-echo  自动复制到 build\Updater\updater.exe
+echo  C++17 原生 x64 更新器
+echo  自动查找 Visual Studio 或 Build Tools 的 C++ 工具集。
+echo  产物: updater\bin\x64\Release\updater.exe
 echo ============================================================
+echo.
+"%PY%" -X utf8 updater\tools\build.py --updater-only
+set "RC=%errorlevel%"
+set "OUTPUT_HINT=%ROOT%updater\bin\x64\Release\"
+goto done
+
+:change_version
+cls
+echo ============================================================
+echo  修改源码版本号（不执行编译）
+echo  同步主程序、Python 包、更新器资源与清单中的版本。
+echo ============================================================
+echo.
+"%PY%" -X utf8 scripts\release\release.py --interactive --prepare-only
+set "RC=%errorlevel%"
+echo.
+if not "%RC%"=="0" echo [X] 修改版本失败（退出码 %RC%），请查看错误输出。
 echo.
 pause
 goto menu
@@ -181,7 +200,7 @@ goto menu
 echo.
 if "%RC%"=="0" (
     echo ============================================================
-    echo  [OK] 完成，成品在  %ROOT%build\
+    echo  [OK] 完成，成品在  %OUTPUT_HINT%
     echo ============================================================
 ) else (
     echo ============================================================

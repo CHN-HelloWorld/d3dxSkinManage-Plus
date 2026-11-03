@@ -13,7 +13,7 @@ on:
         default: publish
         required: true
       version:
-        description: 版本号，例如 0.1.1（可带 v 前缀）
+        description: 版本号，例如 1.0.1（可带 v 前缀）
         type: string
         required: true
       release_title:
@@ -55,7 +55,7 @@ jobs:
           cache-dependency-path: pyproject.toml
       - name: 准备版本、更新来源和发布说明
         id: prepare
-        run: python scripts/release/github_release.py prepare
+        run: python scripts/release/release.py --from-workflow --prepare-only
       - name: 检查发布目标
         if: inputs.mode == 'publish'
         uses: actions/github-script@v7
@@ -98,7 +98,6 @@ jobs:
             throw "请先在资源 Release 中上传 d3dxSkinManage-Plus-story-media.zip，详见 docs/构建指南.md 的首次配置。"
           }
           python scripts/release/github_release.py restore-media --archive "$env:RUNNER_TEMP/story-media/d3dxSkinManage-Plus-story-media.zip"
-      - uses: microsoft/setup-msbuild@v2
       - name: 恢复 Nuitka 编译缓存
         uses: actions/cache@v4
         with:
@@ -107,12 +106,8 @@ jobs:
           restore-keys: nuitka-windows-x64-python314-
       - name: 安装运行和打包依赖
         run: python -m pip install -e ".[build]"
-      - name: 构建原生更新器
-        run: msbuild updater/updater.vcxproj /m /p:Configuration=Release /p:Platform=x64 /p:DeployUpdater=false /verbosity:minimal
-      - name: 构建主程序和完整发行 ZIP
-        run: python scripts/release/build.py --with-updater --zip -- --msvc=latest --jobs=2 --lto=no
-      - name: 整理附件、正文和 SHA256
-        run: python scripts/release/github_release.py bundle
+      - name: 构建更新器、主程序并校验发行附件
+        run: python scripts/release/release.py --from-workflow -- --msvc=latest --jobs=2 --lto=no
       - name: 保存可下载的构建产物
         uses: actions/upload-artifact@v4
         with:

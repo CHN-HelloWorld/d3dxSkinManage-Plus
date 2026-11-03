@@ -14,6 +14,15 @@
 python updater/tools/build.py
 ```
 
+只构建用于发行的更新器时执行：
+
+```powershell
+python updater/tools/build.py --updater-only
+```
+
+根目录构建菜单 `[5]` 使用这一入口。菜单 `[4]` 及云端发行工作流会在同步版本后自动执行，
+无需单独预编译更新器。脚本构建关闭部署复制，由主程序发行步骤将更新器加入程序包。
+
 在开发者命令提示符中也可执行：
 
 ```bat

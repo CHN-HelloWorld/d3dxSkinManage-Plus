@@ -254,6 +254,8 @@ def clean_outputs() -> int:
         PROJECT_BUILD / EXE_NAME,
         PROJECT_BUILD / "files.manifest",
         PROJECT_BUILD / "nuitka-report.xml",
+        PROJECT_BUILD / "release",
+        PROJECT_BUILD / "release-inputs.json",
         PROJECT_BUILD / "config" / "languages",
         PROJECT_BUILD / "plugins",
         PROJECT_BUILD / "resources" / "about" / "story",

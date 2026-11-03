@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import subprocess
 from pathlib import Path
 
 
-def main() -> None:
-    """发现本机 MSVC 工具集并依次构建更新器、预览工具和原生测试，任一构建失败时停止。"""
+def main(argv: list[str] | None = None) -> None:
+    """发现本机 MSVC 工具集并构建所需项目，发行模式仅编译更新器。"""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--updater-only", action="store_true", help="只构建发行更新器，不生成预览工具和原生测试")
+    args = parser.parse_args(argv)
     root = Path(__file__).resolve().parents[2]
     vswhere = Path(os.environ.get("ProgramFiles(x86)", "C:/Program Files (x86)")) / (
         "Microsoft Visual Studio/Installer/vswhere.exe"
@@ -45,11 +49,10 @@ def main() -> None:
     toolset = "v143" if "v143" in toolsets else max(toolsets)
     # MSBuild 不接受大小写不同的重复环境变量，仅为构建子进程规范化变量名。
     environment = {key.upper(): value for key, value in os.environ.items()}
-    for project in (
-        "updater/updater.vcxproj",
-        "updater/tools/capture_ui.vcxproj",
-        "updater/tests/updater_tests.vcxproj",
-    ):
+    projects = ["updater/updater.vcxproj"]
+    if not args.updater_only:
+        projects.extend(("updater/tools/capture_ui.vcxproj", "updater/tests/updater_tests.vcxproj"))
+    for project in projects:
         subprocess.run(
             [
                 str(msbuild),

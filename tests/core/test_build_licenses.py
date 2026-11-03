@@ -255,6 +255,10 @@ def test_build_includes_notices_in_manifest_and_zip(license_environment, monkeyp
     product.mkdir(exist_ok=True)
     executable = product / build.EXE_NAME
     executable.write_bytes(b"program")
+    dictionaries = output / "run_app.dist/pypinyin"
+    dictionaries.mkdir(parents=True)
+    for name in ("pinyin_dict.json", "phrases_dict.json"):
+        (dictionaries / name).write_text("{}", encoding="utf-8")
     monkeypatch.setattr(build, "PROJECT_BUILD", output)
     monkeypatch.setattr(build, "OUTPUT_DIR", output)
     monkeypatch.setattr(build, "STAGING_DIR", output)

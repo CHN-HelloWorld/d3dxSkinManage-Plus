@@ -1,9 +1,10 @@
-"""准备 GitHub 云端发行版本、独立视频资源和可供主程序识别的发布包。"""
+"""准备本地与云端发行版本、独立视频资源和可供主程序识别的发布包。"""
 
 from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -40,12 +41,9 @@ def replace_once(source: str, pattern: str, replacement: str, label: str) -> str
     return result
 
 
-def prepare_release(root: Path, inputs: dict, repository: str) -> dict:
-    """校验手动输入，再同步写入主程序、包元数据和原生更新器的发行版本。"""
-    mode = inputs.get("mode", "publish")
-    if mode not in {"build", "publish"}:
-        raise ValueError("mode 只能为 build 或 publish。")
-    version = inputs.get("version", "").strip()
+def normalize_version(version: str) -> str:
+    """校验 Windows 支持的三段或四段版本号，并移除可选的 v 前缀。"""
+    version = version.strip()
     if version.startswith(("v", "V")):
         version = version[1:]
     if not re.fullmatch(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){2,3}", version):
@@ -53,6 +51,15 @@ def prepare_release(root: Path, inputs: dict, repository: str) -> dict:
     parts = [int(part) for part in version.split(".")]
     if any(part > 65535 for part in parts):
         raise ValueError("Windows 版本号的每一段必须在 0–65535 之间。")
+    return version
+
+
+def release_metadata(inputs: dict, repository: str) -> dict:
+    """校验版本、更新来源和发布说明，生成元数据而不修改文件。"""
+    mode = inputs.get("mode", "publish")
+    if mode not in {"build", "publish"}:
+        raise ValueError("mode 只能为 build 或 publish。")
+    version = normalize_version(inputs.get("version", ""))
     if not re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository):
         raise ValueError("更新仓库必须使用 owner/repo 格式。")
 
@@ -67,6 +74,23 @@ def prepare_release(root: Path, inputs: dict, repository: str) -> dict:
         raise ValueError("发布标题应为单行文本。")
     if SHA256_PATTERN.search(notes):
         raise ValueError("正文中不要填写 SHA256 校验值；工作流会根据本次 ZIP 自动生成。")
+
+    return {
+        "mode": mode,
+        "version": version,
+        "tag": f"v{version}",
+        "title": title or f"v{version}",
+        "notes": notes,
+        "repository": repository,
+        "asset_name": f"{PROJECT_NAME}-v{version}-win64.zip",
+    }
+
+
+def prepare_release(root: Path, inputs: dict, repository: str) -> dict:
+    """校验手动输入，再同步写入主程序、包元数据和原生更新器的发行版本。"""
+    metadata = release_metadata(inputs, repository)
+    version = metadata["version"]
+    parts = [int(part) for part in version.split(".")]
 
     windows_parts = parts + [0] * (4 - len(parts))
     windows_version = ".".join(map(str, windows_parts))
@@ -93,20 +117,34 @@ def prepare_release(root: Path, inputs: dict, repository: str) -> dict:
         for pattern, replacement in replacements:
             source = replace_once(source, pattern, replacement, relative)
         prepared[path] = source
+    # 同秒修改等长版本时，时间戳与大小无法让旧字节码失效；写入前清除各优化级别的常量缓存。
+    constants = root / "src/utils/constants.py"
+    cache_directory = Path(importlib.util.cache_from_source(str(constants))).parent
+    for cached in cache_directory.glob("constants.*.pyc"):
+        cached.unlink(missing_ok=True)
     for path, source in prepared.items():
         path.write_text(source, encoding="utf-8", newline="\n")
 
-    metadata = {
-        "mode": mode,
-        "version": version,
-        "tag": f"v{version}",
-        "title": title or f"v{version}",
-        "notes": notes,
-        "repository": repository,
-        "asset_name": f"{PROJECT_NAME}-v{version}-win64.zip",
-    }
     write_json(root / "build/release-inputs.json", metadata)
     return metadata
+
+
+def read_workflow_inputs(event_path: Path | None) -> dict:
+    """读取手动触发事件，并在写入版本前拒绝缺失或格式错误的输入。"""
+    if not event_path:
+        raise ValueError("需要 GITHUB_EVENT_PATH 或 --event 指定手动触发事件。")
+    event = json.loads(event_path.read_text(encoding="utf-8"))
+    if not isinstance(event, dict) or not isinstance(event.get("inputs"), dict):
+        raise ValueError("手动触发事件缺少 inputs 对象。")
+    return event["inputs"]
+
+
+def write_workflow_outputs(metadata: dict) -> None:
+    """将已校验的版本、tag 和附件名交给后续工作流步骤。"""
+    if output := os.environ.get("GITHUB_OUTPUT"):
+        with Path(output).open("a", encoding="utf-8", newline="\n") as target:
+            for name in ("version", "tag", "asset_name"):
+                target.write(f"{name}={metadata[name]}\n")
 
 
 def media_manifest(root: Path) -> tuple[dict, Path]:
@@ -199,14 +237,8 @@ def main() -> int:
     args = parser.parse_args()
     try:
         if args.command == "prepare":
-            if not args.event:
-                raise ValueError("需要 GITHUB_EVENT_PATH 或 --event 指定手动触发事件。")
-            event = json.loads(args.event.read_text(encoding="utf-8"))
-            metadata = prepare_release(ROOT, event["inputs"], args.repository)
-            if output := os.environ.get("GITHUB_OUTPUT"):
-                with Path(output).open("a", encoding="utf-8", newline="\n") as target:
-                    for name in ("version", "tag", "asset_name"):
-                        target.write(f"{name}={metadata[name]}\n")
+            metadata = prepare_release(ROOT, read_workflow_inputs(args.event), args.repository)
+            write_workflow_outputs(metadata)
             print(f"已准备 {metadata['tag']}，更新来源：{metadata['repository']}")
         elif args.command == "pack-media":
             print(pack_media(ROOT))

@@ -65,6 +65,10 @@ def documentation_environment(tmp_path, monkeypatch):
         if "nuitka" not in command:
             return run_process(command, **kwargs)
         compiled.write_text("compiled", encoding="utf-8")
+        _write_files(
+            staging / "run_app.dist",
+            {"pypinyin/pinyin_dict.json": "{}", "pypinyin/phrases_dict.json": "{}"},
+        )
         product = staging if "--onefile" in command else staging / "run_app.dist"
         _write_files(
             product,
@@ -132,14 +136,17 @@ def test_build_distributes_current_tutorials_in_product_manifest_and_zip(
             assert (product / "docs" / name).read_text(encoding="utf-8") == content
         manifest = (product / "files.manifest").read_text(encoding="utf-8")
         managed, preserve = manifest.split("[preserve]")
-        assert set(managed.splitlines()) - {"", "[managed]"} == {
+        expected_files = {
             build.EXE_NAME,
             *(f"docs/{name}" for name in DOCUMENT_NAMES),
         }
+        if not onefile:
+            expected_files.update({"pypinyin/pinyin_dict.json", "pypinyin/phrases_dict.json"})
+        assert set(managed.splitlines()) - {"", "[managed]"} == expected_files
         assert "docs/" not in preserve.splitlines()
         with ZipFile(next(env.output.glob("*.zip"))) as archive:
             entries = {name.split("/", 1)[1]: name for name in archive.namelist()}
-            assert set(entries) == {build.EXE_NAME, "files.manifest", *(f"docs/{name}" for name in DOCUMENT_NAMES)}
+            assert set(entries) == expected_files | {"files.manifest"}
             for name, content in documents.items():
                 assert archive.read(entries[f"docs/{name}"]).decode("utf-8") == content
 
@@ -199,6 +206,26 @@ def test_clean_removes_generated_documentation_but_preserves_sources(documentati
     assert not (env.output / "docs").exists()
     assert (env.source / "docs/构建指南.md").read_text(encoding="utf-8") == "build guide"
     assert (env.source / "scripts/tutorials/build.py").is_file()
+    assert (env.output / "unrelated.txt").read_text(encoding="utf-8") == "retained"
+
+
+def test_clean_removes_release_bundle_and_input_metadata(documentation_environment):
+    env = documentation_environment
+    _write_files(
+        env.output,
+        {
+            "release/d3dxSkinManage-Plus-v1.2.3-win64.zip": "archive",
+            "release/d3dxSkinManage-Plus-v1.2.3-win64.zip.sha256": "checksum",
+            "release/release.json": "{}",
+            "release-inputs.json": "{}",
+            "unrelated.txt": "retained",
+        },
+    )
+
+    assert env.build.clean_outputs() == 0
+
+    assert not (env.output / "release").exists()
+    assert not (env.output / "release-inputs.json").exists()
     assert (env.output / "unrelated.txt").read_text(encoding="utf-8") == "retained"
 
 
