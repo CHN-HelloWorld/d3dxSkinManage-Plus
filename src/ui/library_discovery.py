@@ -15,6 +15,7 @@ from src.core.mod_storage import ModStorage
 from src.core.preview_cache_index import capture_source_version
 from src.utils import fs
 from src.utils.logger import logger
+from src.utils.runtime_metrics import MetricSamples
 
 
 @dataclass(frozen=True)
@@ -276,7 +277,15 @@ class LibraryDiscoveryController(QObject):
         self.closing = False
         self.planning = False
         self._source_generation = 0
-        self.metrics = dict(started=0, completed=0, discarded=0, capture_ms=[], worker_ms=[], planning_slice_ms=[])
+        self.metrics = dict(
+            started=0,
+            completed=0,
+            discarded=0,
+            capture_ms=MetricSamples(),
+            capture_slice_ms=MetricSamples(),
+            worker_ms=MetricSamples(),
+            planning_slice_ms=MetricSamples(),
+        )
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._plan_slice)
@@ -506,7 +515,7 @@ class LibraryDiscoveryController(QObject):
             logger.exception("Could not capture library discovery snapshot")
             self._retry(delay=1000)
         finally:
-            self.metrics.setdefault("capture_slice_ms", []).append((time.perf_counter() - start) * 1000)
+            self.metrics["capture_slice_ms"].append((time.perf_counter() - start) * 1000)
 
     def _start_worker(self, request):
         """启动持有快照的发现线程，并仅为仍有效的请求转发观察路径。"""

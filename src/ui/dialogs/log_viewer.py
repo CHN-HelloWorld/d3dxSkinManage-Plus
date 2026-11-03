@@ -38,15 +38,30 @@ class LogViewerDialog(QDialog):
     """只读日志查看器。由工具页「查看日志」按钮触发。"""
 
     def __init__(self, parent=None) -> None:
-        """创建只读查看器，列出日志会话并立即加载当前选中文件的末尾内容。"""
+        """创建可复用的只读控件，日志正文仅在窗口显示期间保留。"""
         super().__init__(parent)
         anim.install_intro_fade(self)
         self.setWindowTitle(t("日志查看器"))
         self.resize(840, 560)
         self._raw_lines: list[str] = []
         self._build_ui()
+
+    def showEvent(self, event) -> None:
+        """每次显示时更新主题、会话列表和正文，保留已有级别及滚动偏好。"""
+        self._retheme()
         self._reload_file_list()
         self._refresh()
+        super().showEvent(event)
+
+    def hideEvent(self, event) -> None:
+        """关闭或拒绝后释放日志行和文本内容，仅保留可复用控件及筛选偏好。"""
+        self._raw_lines.clear()
+        self._view.clear()
+        self._status.clear()
+        self._file_combo.blockSignals(True)
+        self._file_combo.clear()
+        self._file_combo.blockSignals(False)
+        super().hideEvent(event)
 
     # 界面构建。
 
@@ -98,17 +113,21 @@ class LogViewerDialog(QDialog):
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPointSize(10)
         self._view.setFont(font)
+        root.addWidget(self._view, 1)
+
+        self._status = QLabel("")
+        root.addWidget(self._status)
+        self._retheme()
+
+    def _retheme(self) -> None:
+        """就地刷新缓存控件的内联主题色，避免重建日志文本控件。"""
         self._view.setStyleSheet(
             f"QPlainTextEdit {{ background: {theme.color('bg.subtle')}; "
             f"color: {theme.color('text.primary')}; "
             f"border: 1px solid {theme.color('stroke.card')}; "
             f"border-radius: {theme.radius('control')}px; padding: 6px; }}"
         )
-        root.addWidget(self._view, 1)
-
-        self._status = QLabel("")
         self._status.setStyleSheet(f"color: {theme.color('text.tertiary')};")
-        root.addWidget(self._status)
 
     # 数据
 

@@ -5,6 +5,9 @@
 
 from __future__ import annotations
 
+from functools import partial
+from weakref import WeakSet, ref
+
 from PySide6.QtCore import (
     Property,
     QEasingCurve,
@@ -138,7 +141,8 @@ class _ShimmerDriver:
     def __init__(self) -> None:
         """初始化共享微光相位、活动控件集合和统一刷新定时器。"""
         self.phase = 0.0
-        self._widgets: set = set()
+        self._widgets: WeakSet = WeakSet()
+        self._connected_widgets: WeakSet = WeakSet()
         self._timer = QTimer()
         self._timer.setInterval(20)  # ~50fps，丝滑且开销可控
         self._timer.timeout.connect(self._tick)
@@ -152,10 +156,15 @@ class _ShimmerDriver:
             try:
                 w.update()
             except RuntimeError:  # C++ 对象已销毁
-                self._widgets.discard(w)
+                self.unregister(w)
+        if not self._widgets:
+            self._timer.stop()
 
     def register(self, widget) -> None:
         """将可见骨架控件加入共享刷新集合，并在允许动画时启动统一计时器。"""
+        if widget not in self._connected_widgets:
+            self._connected_widgets.add(widget)
+            widget.destroyed.connect(partial(self._destroyed, ref(widget)))
         self._widgets.add(widget)
         if anim.is_enabled() and not self._timer.isActive():
             self._timer.start()
@@ -164,6 +173,15 @@ class _ShimmerDriver:
         """移除骨架控件，在没有活动控件时停止共享刷新计时器。"""
         self._widgets.discard(widget)
         if not self._widgets and self._timer.isActive():
+            self._timer.stop()
+
+    def _destroyed(self, widget_ref, *_args) -> None:
+        """子控件直接销毁时立即注销；回调只持弱引用，显隐复用不重复连接。"""
+        widget = widget_ref()
+        if widget is not None:
+            self._connected_widgets.discard(widget)
+            self.unregister(widget)
+        elif not self._widgets:
             self._timer.stop()
 
 

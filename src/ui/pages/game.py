@@ -13,8 +13,9 @@ from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
 from pathlib import Path
 
+import shiboken6
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, QPainter
+from PySide6.QtGui import QColor, QDragEnterEvent, QDragMoveEvent, QDropEvent, QIcon, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -1237,29 +1238,51 @@ class GamePage(QWidget):
         g = self._svc.get_game(game_id)
         if not g:
             return
-        menu = QMenu(self)
+        actions = []
         is_active = self._svc.has_active_game() and game_id == self._svc.current_game_id
         if not is_active:
-            act_enable = menu.addAction(icons.get_icon("status/enabled"), tr("启用此游戏"))
-            act_enable.triggered.connect(lambda: self._on_activate(game_id))
-            menu.addSeparator()
-        act_del = menu.addAction(icons.get_icon("actions/remove", "danger"), tr("删除"))
-        act_del.triggered.connect(lambda: self._on_delete(game_id))
-        menu.exec(global_pos)
+            actions.append((icons.get_icon("status/enabled"), tr("启用此游戏"), lambda: self._on_activate(game_id)))
+            actions.append(None)
+        actions.append((icons.get_icon("actions/remove", "danger"), tr("删除"), lambda: self._on_delete(game_id)))
+        self._exec_context_menu(global_pos, actions)
 
     def _show_blank_context_menu(self, global_pos) -> None:
         """空白处右键菜单：添加游戏 + 卡片/列表视图切换。"""
-        menu = QMenu(self)
-        act_add = menu.addAction(icons.get_icon("actions/add"), tr("添加游戏"))
-        act_add.triggered.connect(self._on_add)
-        menu.addSeparator()
+        actions = [(icons.get_icon("actions/add"), tr("添加游戏"), self._on_add), None]
         if self._view_mode == "grid":
-            act_view = menu.addAction(icons.get_icon("actions/list-view"), tr("切换到列表视图"))
-            act_view.triggered.connect(lambda: self._set_view("list"))
+            actions.append((icons.get_icon("actions/list-view"), tr("切换到列表视图"), lambda: self._set_view("list")))
         else:
-            act_view = menu.addAction(icons.get_icon("actions/card-view"), tr("切换到卡片视图"))
-            act_view.triggered.connect(lambda: self._set_view("grid"))
-        menu.exec(global_pos)
+            actions.append((icons.get_icon("actions/card-view"), tr("切换到卡片视图"), lambda: self._set_view("grid")))
+        self._exec_context_menu(global_pos, actions)
+
+    def _exec_context_menu(self, global_pos, actions: list[tuple[QIcon, str, Callable[[], None]] | None]) -> None:
+        """游戏及空白区域共用一个菜单，清空旧动作后再派发当前选择，允许回调安全重开。"""
+        if getattr(self, "_context_menu_active", False):
+            return
+        menu = getattr(self, "_context_menu", None)
+        if menu is None or not shiboken6.isValid(menu):
+            menu = QMenu(self)
+            self._context_menu = menu
+        self._context_menu_active = True
+        callbacks = {}
+        callback = None
+        try:
+            menu.clear()
+            for item in actions:
+                if item is None:
+                    menu.addSeparator()
+                else:
+                    icon, title, action = item
+                    callbacks[menu.addAction(icon, title)] = action
+            chosen = menu.exec(global_pos)
+            callback = callbacks.get(chosen)
+        finally:
+            callbacks.clear()
+            if shiboken6.isValid(menu):
+                menu.clear()
+            self._context_menu_active = False
+        if callback is not None:
+            callback()
 
     def _on_activate(self, game_id: str) -> None:
         """确认未保存修改后切换游戏激活状态；草稿需先保存，再次激活当前游戏则取消激活。"""

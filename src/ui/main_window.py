@@ -656,27 +656,44 @@ class MainWindow(QMainWindow):
             pass
 
     def _show_plugin_command_menu(self) -> None:
-        """导航「插件命令」按钮：弹出所有插件命令（global 菜单位置）。"""
+        """复用导航命令菜单，每次读取当前贡献并在退出菜单后执行已选回调。"""
+        import shiboken6
         from PySide6.QtWidgets import QMenu
 
+        if getattr(self, "_plugin_command_menu_active", False):
+            return
         actions = self._build_mod_context_actions("global", "")
         if not actions:
             return
-        menu = QMenu(self)
+        menu = getattr(self, "_plugin_command_menu", None)
+        if menu is None or not shiboken6.isValid(menu):
+            menu = QMenu(self)
+            self._plugin_command_menu = menu
+        self._plugin_command_menu_active = True
         act_map = {}
-        for title, cb in actions:
-            act_map[menu.addAction(title)] = cb
+        callback = None
         try:
-            from src.ui import win_effects
+            menu.clear()
+            for title, cb in actions:
+                act_map[menu.addAction(title)] = cb
+            try:
+                from src.ui import win_effects
 
-            menu.winId()
-            win_effects.apply_rounded_corners(menu, small=True)
-        except Exception:
-            pass
-        btn = self._plugin_cmd_btn
-        chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
-        if chosen in act_map:
-            act_map[chosen]()
+                menu.winId()
+                win_effects.apply_rounded_corners(menu, small=True)
+            except Exception:
+                pass
+            btn = self._plugin_cmd_btn
+            chosen = menu.exec(btn.mapToGlobal(btn.rect().bottomLeft()))
+            callback = act_map.get(chosen)
+        finally:
+            act_map.clear()
+            if shiboken6.isValid(menu):
+                menu.clear()
+            self._plugin_command_menu_active = False
+        # QAction 已释放；回调可同步重开菜单，不会覆盖当前选择或保留旧贡献。
+        if callback is not None:
+            callback()
 
     # UI 构建
 
@@ -3394,11 +3411,15 @@ class MainWindow(QMainWindow):
             return
 
         dlg = RebuildProgressDialog(self._mod_manager, gid, self)
-        dlg.exec()
-        if dlg.error:
-            QMessageBox.warning(self, tr("重建索引"), tr("重建失败：{error}", error=dlg.error))
+        try:
+            dlg.exec()
+            error, report = dlg.error, dlg.report
+        finally:
+            # 模态循环等待任务收尾；后续报告弹窗可能投递删除事件，先复制结果。
+            dlg.deleteLater()
+        if error:
+            QMessageBox.warning(self, tr("重建索引"), tr("重建失败：{error}", error=error))
             return
-        report = dlg.report
         if report is not None:
             invalid_summary = self._invalid_metadata_summary(report.invalid_metadata)
             QMessageBox.information(
@@ -4939,10 +4960,20 @@ class MainWindow(QMainWindow):
             call_later(0, self, self.close)
 
     def _on_view_logs(self) -> None:
-        """打开应用内日志查看器（只读，排查问题用）。"""
+        """复用只读日志查看器，显示时重新读取日志，已有窗口可见时只激活。"""
+        import shiboken6
+
         from src.ui.dialogs.log_viewer import LogViewerDialog
 
-        LogViewerDialog(self).exec()
+        dialog = getattr(self, "_log_viewer_dialog", None)
+        if dialog is None or not shiboken6.isValid(dialog):
+            dialog = LogViewerDialog(self)
+            self._log_viewer_dialog = dialog
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
+        dialog.exec()
 
     # 辅助
 

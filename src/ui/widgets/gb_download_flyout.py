@@ -93,6 +93,7 @@ class _DownloadRow(QFrame):
         super().__init__(parent)
         self._manager = manager
         self._task = task
+        self._menu: QMenu | None = None
         self._can_open_mod = can_open_mod or (lambda task: task.archive_path.is_file())
         self.setFrameShape(QFrame.Shape.StyledPanel)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -390,7 +391,10 @@ class _DownloadRow(QFrame):
     # 右键菜单
     def _build_menu(self) -> QMenu:
         """按任务状态和完整或部分文件的存在情况构建可用操作菜单。"""
-        menu = QMenu(self)
+        if self._menu is None:
+            self._menu = QMenu(self)
+        menu = self._menu
+        menu.clear()
         state = self._task.state
         path = self._task.archive_path
         # 进行中的任务仅有部分下载文件，删除可用性不能只检查最终归档路径。

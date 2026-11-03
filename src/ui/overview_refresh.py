@@ -6,6 +6,7 @@ from collections import OrderedDict
 from PySide6.QtCore import QObject, Qt, QTimer
 
 from src.utils.logger import logger
+from src.utils.runtime_metrics import MetricSamples
 
 
 class OverviewRefreshController(QObject):
@@ -47,7 +48,7 @@ class OverviewRefreshController(QObject):
         self._timer.setSingleShot(True)
         self._timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._timer.timeout.connect(self._slice)
-        self.metrics = dict(completed=0, discarded=0, slice_ms=[])
+        self.metrics = dict(completed=0, discarded=0, slice_ms=MetricSamples())
 
     def schedule(self):
         """安排当前范围刷新；准备失败时取消任务并通知错误回调，保留现有视图。"""

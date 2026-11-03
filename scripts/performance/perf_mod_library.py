@@ -708,11 +708,17 @@ def gui_case(manager, root, count, options):
                 raise RuntimeError("Qt callback failed:\n" + "\n".join(errors))
             assert actions["scroll"] and actions["selection"]
             metrics_after = copy.deepcopy(getattr(window, "_library_probe_metrics", {}))
+            from src.utils.runtime_metrics import dropped_metric_samples, metric_samples_since
+
             metrics_delta = {}
+            metrics_dropped = {}
             for key, value in metrics_after.items():
                 previous_value = metrics_before.get(key)
                 if isinstance(value, list):
-                    metrics_delta[key] = value[len(previous_value or []) :]
+                    metrics_delta[key] = metric_samples_since(value, previous_value)
+                    dropped = dropped_metric_samples(value, previous_value)
+                    if dropped:
+                        metrics_dropped[key] = dropped
                 elif isinstance(value, (float, int)) and key != "max_active":
                     metrics_delta[key] = value - (previous_value or 0)
                 else:
@@ -733,6 +739,7 @@ def gui_case(manager, root, count, options):
                     "interactions": dict(actions),
                     "library_probe_metrics": metrics_after,
                     "library_probe_metrics_during_round": metrics_delta,
+                    "library_probe_metric_samples_dropped": metrics_dropped,
                     **meter.result(),
                 }
             )

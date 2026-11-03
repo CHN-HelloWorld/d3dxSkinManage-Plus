@@ -81,10 +81,12 @@ class LeftoverIntakeDialog(QDialog):
         # 不允许保留的场景中，关闭或按 Esc 均采用界面已说明的永久删除决定。
         self._action = ACTION_KEEP if allow_keep else ACTION_DELETE
         self._apply_all = False
+        self._allow_keep = allow_keep
+        self._allow_apply_all = allow_apply_all
+        self._reason = reason
         anim.install_intro_fade(self)
-        title, summary, detail = _REASON_TEXT.get(reason, _REASON_TEXT[REASON_STOPPED])
-        title, detail = tr(title), tr(detail)
-        self.setWindowTitle(title)
+        title = _REASON_TEXT.get(reason, _REASON_TEXT[REASON_STOPPED])[0]
+        self.setWindowTitle(tr(title))
         self.setModal(True)
         self.setMinimumWidth(420)
 
@@ -92,16 +94,12 @@ class LeftoverIntakeDialog(QDialog):
         root.setContentsMargins(20, 18, 20, 16)
         root.setSpacing(10)
 
-        # 剩余数量使用 total 减 index，包含当前项，须在提示中明确范围。
-        headline = tr(summary, n=remaining)
-        if total > 1:
-            headline += tr("（含当前项，本批共 {total} 个）", total=total)
-        lead = QLabel(f"{headline}。{detail}")
+        lead = self._lead = QLabel()
         lead.setWordWrap(True)
         lead.setStyleSheet(f"color:{theme.color('text.primary')}; font-size:13px;")
         root.addWidget(lead)
 
-        current = QLabel(tr("当前项：{name}", name=name))
+        current = self._current = QLabel()
         current.setTextFormat(Qt.TextFormat.PlainText)
         current.setWordWrap(True)
         current.setStyleSheet(f"color:{theme.color('text.secondary')}; font-size:12px;")
@@ -141,7 +139,23 @@ class LeftoverIntakeDialog(QDialog):
             row.addWidget(btn)
         root.addLayout(row)
 
+        self.set_item(name, remaining=remaining, total=total)
         acrylic.apply_dialog_acrylic(self)
+
+    def set_item(self, name: str, *, remaining: int, total: int) -> None:
+        """复用批次窗口显示下一项，同时重置取消默认值、复选框及上一项的 Qt 结果。"""
+        self._action = ACTION_KEEP if self._allow_keep else ACTION_DELETE
+        self._apply_all = False
+        self.setResult(QDialog.DialogCode.Rejected)
+        self._apply_all_box.setChecked(False)
+        self._apply_all_box.setVisible(self._allow_apply_all and remaining > 1)
+        _, summary, detail = _REASON_TEXT.get(self._reason, _REASON_TEXT[REASON_STOPPED])
+        # 剩余数量包含当前项，批次总量保持不变。
+        headline = tr(summary, n=remaining)
+        if total > 1:
+            headline += tr("（含当前项，本批共 {total} 个）", total=total)
+        self._lead.setText(f"{headline}。{tr(detail)}")
+        self._current.setText(tr("当前项：{name}", name=name))
 
     def _choose(self, action: str) -> None:
         """保存显式选择及是否应用到后续项目，然后接受对话框。"""
@@ -175,22 +189,32 @@ def resolve_leftover_paths(
     decisions: dict[str, str] = {}
     sticky: str | None = None
     total = len(paths)
-    for index, path in enumerate(paths):
-        remaining = total - index
-        if sticky is not None:
-            decisions[str(path)] = sticky
-            continue
-        dlg = LeftoverIntakeDialog(
-            Path(path).name,
-            remaining=remaining,
-            total=total,
-            allow_apply_all=True,
-            allow_keep=allow_keep,
-            reason=reason,
-            parent=parent,
-        )
-        dlg.exec()
-        decisions[str(path)] = dlg.action
-        if dlg.apply_to_all:
-            sticky = dlg.action
+    if not paths:
+        return decisions
+    dlg = LeftoverIntakeDialog(
+        Path(paths[0]).name,
+        remaining=total,
+        total=total,
+        allow_apply_all=True,
+        allow_keep=allow_keep,
+        reason=reason,
+        parent=parent,
+    )
+    try:
+        for index, path in enumerate(paths):
+            if sticky is not None:
+                decisions[str(path)] = sticky
+                continue
+            if index:
+                dlg.set_item(Path(path).name, remaining=total - index, total=total)
+            dlg.exec()
+            decisions[str(path)] = dlg.action
+            if dlg.apply_to_all:
+                sticky = dlg.action
+    finally:
+        try:
+            dlg.deleteLater()
+        except RuntimeError:
+            # 宿主可在模态循环中销毁整棵窗口树。
+            pass
     return decisions

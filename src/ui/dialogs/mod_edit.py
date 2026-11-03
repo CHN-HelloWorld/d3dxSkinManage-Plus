@@ -685,8 +685,10 @@ class ModEditDialog(QDialog):
         if self._collect_fields() == self._original_fields and not self.tag_picker.is_dirty:
             super().reject()
             return
-        self.discard_dialog = _DiscardDialog(self)
-        self.discard_dialog.accepted.connect(lambda: self.done(QDialog.DialogCode.Rejected))
+        if self.discard_dialog is None:
+            self.discard_dialog = _DiscardDialog(self)
+            self.discard_dialog.accepted.connect(lambda: self.done(QDialog.DialogCode.Rejected))
+        self.discard_dialog.setResult(QDialog.DialogCode.Rejected)
         self.discard_dialog.open()
 
     def keyPressEvent(self, event) -> None:

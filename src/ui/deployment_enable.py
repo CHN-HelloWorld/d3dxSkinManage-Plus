@@ -14,6 +14,7 @@ from src.ui.worker_lifecycle import manage_page_worker
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 from src.utils.qt_timers import call_later
+from src.utils.runtime_metrics import MetricSamples
 
 
 class _EnableIO(QThread):
@@ -53,7 +54,7 @@ class EnablePublicationController(QObject):
         self._active = None
         self._worker = None
         self._restore_queue = deque()
-        self.metrics = {"capture_ms": [], "worker_ms": [], "publish_ms": []}
+        self.metrics = {"capture_ms": MetricSamples(), "worker_ms": MetricSamples(), "publish_ms": MetricSamples()}
 
     @property
     def busy(self):

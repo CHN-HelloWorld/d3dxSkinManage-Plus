@@ -5,11 +5,36 @@ from __future__ import annotations
 from functools import partial
 from weakref import WeakSet
 
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Slot
 
 _owned_workers: WeakSet[QThread] = WeakSet()
 _retiring_workers: set[QThread] = set()
 _connected_apps: WeakSet[QCoreApplication] = WeakSet()
+
+
+class _WorkerOwner(QObject):
+    """仅在工作线程有效期间保活，线程销毁后解除宿主上的信号连接。"""
+
+    def __init__(self, owner: QObject, worker: QThread) -> None:
+        """以宿主为父对象，分别连接宿主退出和线程销毁的清理入口。"""
+        super().__init__(owner)
+        self._worker: QThread | None = worker
+        owner.destroyed.connect(self.retire)
+        worker.destroyed.connect(self.release)
+
+    @Slot()
+    def retire(self) -> None:
+        """宿主销毁时将仍有效的工作移交给独立退休集合。"""
+        if self._worker is not None:
+            _retire(self._worker)
+
+    @Slot()
+    def release(self) -> None:
+        """原生线程对象销毁后释放结果及回调引用，并移除宿主清理接收者。"""
+        worker, self._worker = self._worker, None
+        if worker is not None:
+            _owned_workers.discard(worker)
+        self.deleteLater()
 
 
 def _finished(worker: QThread) -> None:
@@ -58,11 +83,11 @@ def manage_page_worker(owner: QObject, worker: QThread) -> None:
     """所有者销毁时停止工作，但不销毁运行中的线程。
 
     结束中的线程由独立集合保留，完成后释放引用并在界面线程删除对象。
-    应用退出钩子不持有页面，可在事件循环停止后完成等待。
+    线程销毁时解除宿主的保活关系，应用退出钩子不持有页面。
     """
     worker.setParent(None)
     _owned_workers.add(worker)
-    owner.destroyed.connect(partial(_retire, worker))
+    _WorkerOwner(owner, worker)
     app = QCoreApplication.instance()
     if app is not None and app not in _connected_apps:
         _connected_apps.add(app)

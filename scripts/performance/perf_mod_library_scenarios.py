@@ -322,6 +322,8 @@ class ScenarioRunner:
 
     def step(self, name, entry, operation, *, controlled_barrier=False):
         """执行单个操作场景，保存心跳及后台指标差值，异常路径也记录操作尾部采样。"""
+        from src.utils.runtime_metrics import dropped_metric_samples, metric_samples_since
+
         self.wait_idle(f"before {name}")
         before = len(self.samples)
         phases_before = len(self.phase_events)
@@ -358,17 +360,39 @@ class ScenarioRunner:
                 key: after[key] - metrics_before[key] for key in ("started", "completed", "discarded")
             }
             item["max_active_periodic_workers"] = after["max_active"]
-            item["periodic_snapshot_ms"] = after["snapshot_ms"][len(metrics_before["snapshot_ms"]) :]
-            item["periodic_apply_slice_ms"] = after["apply_slice_ms"][len(metrics_before["apply_slice_ms"]) :]
-            item["periodic_slow_items"] = after["slow_items"][len(metrics_before["slow_items"]) :]
+            item["periodic_snapshot_ms"] = metric_samples_since(after["snapshot_ms"], metrics_before["snapshot_ms"])
+            item["periodic_apply_slice_ms"] = metric_samples_since(
+                after["apply_slice_ms"], metrics_before["apply_slice_ms"]
+            )
+            item["periodic_slow_items"] = metric_samples_since(after["slow_items"], metrics_before["slow_items"])
             discovery_after = self.window._library_discovery.metrics
             item["discovery"] = {
-                key: (value - discovery_before[key] if isinstance(value, int) else value[len(discovery_before[key]) :])
+                key: (
+                    value - discovery_before[key]
+                    if isinstance(value, int)
+                    else metric_samples_since(value, discovery_before[key])
+                )
                 for key, value in discovery_after.items()
             }
             item["overview_refresh"] = {
-                key: (value - overview_before[key] if isinstance(value, int) else value[len(overview_before[key]) :])
+                key: (
+                    value - overview_before[key]
+                    if isinstance(value, int)
+                    else metric_samples_since(value, overview_before[key])
+                )
                 for key, value in self.window._overview_refresh.metrics.items()
+            }
+            item["metric_samples_dropped"] = {
+                group: {
+                    key: count
+                    for key, value in current.items()
+                    if isinstance(value, list) and (count := dropped_metric_samples(value, previous.get(key)))
+                }
+                for group, current, previous in (
+                    ("periodic", after, metrics_before),
+                    ("discovery", discovery_after, discovery_before),
+                    ("overview_refresh", self.window._overview_refresh.metrics, overview_before),
+                )
             }
             phases = {}
             for label, elapsed in self.phase_events[phases_before:]:

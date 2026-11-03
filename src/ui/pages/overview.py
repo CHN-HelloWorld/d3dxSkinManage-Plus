@@ -9,6 +9,7 @@ from html import escape
 from pathlib import Path
 from time import perf_counter
 
+import shiboken6
 from PySide6.QtCore import (
     QCollator,
     QEvent,
@@ -553,34 +554,56 @@ class CharacterDialog(QDialog):
         all_character_names: list[str] | None = None,
         parent=None,
     ):
-        """创建顶层所属的分类编辑窗口，准备重名检查集合，编辑时排除自身并回填名称和图片。"""
+        """创建可复用的顶层分类表单，并绑定首次打开时的名称校验和预览。"""
         # 原生对话框归顶层窗口所有，避免使总览子控件和祖先原生化而影响视频绘制。
         super().__init__(parent.window() if parent is not None else None)
         self._data = char_data
         self._result = None
         self._thumbnail_path = ""
-        # 同级已有名称列表，用于类别重名检测。
-        self._existing_names = [n.lower() for n in (existing_names or [])]
-        # 全局角色/对象名称列表，用于角色重名检测。
-        self._all_character_names = [n.lower() for n in (all_character_names or [])]
-        # 编辑时排除自身
-        if char_data and char_data.get("name"):
-            own = char_data["name"].lower()
-            self._existing_names = [n for n in self._existing_names if n != own]
-            self._all_character_names = [n for n in self._all_character_names if n != own]
-        is_edit = char_data is not None
-        self._is_edit = is_edit
-        self.setWindowTitle(t("编辑类别") if is_edit else t("新建类别"))
+        self._existing_names: set[str] = set()
+        self._all_character_names: set[str] = set()
+        self._is_edit = char_data is not None
+        self._built_theme = theme.current_theme()
         self.setFixedSize(520, 480)
         self.setModal(True)
         self._setup_ui()
         acrylic.apply_dialog_acrylic(self)
-        if is_edit and char_data:
-            self._name_input.setText(char_data.get("name", ""))
-            self._name_en_input.setText(char_data.get("name_en", ""))
-            if char_data.get("thumbnail", ""):
-                self._thumbnail_path = char_data["thumbnail"]
-                self._update_thumbnail_preview()
+        self.prepare_for_open(char_data, existing_names, all_character_names)
+
+    def prepare_for_open(self, char_data=None, existing_names=None, all_character_names=None) -> None:
+        """保留表单控件，重新绑定当前分类、校验范围和预览，并清除上次草稿及错误样式。"""
+        self._data = char_data
+        self._is_edit = char_data is not None
+        self._result = None
+        self.setResult(QDialog.DialogCode.Rejected)
+        self._existing_names = {name.lower() for name in (existing_names or ())}
+        self._all_character_names = {name.lower() for name in (all_character_names or ())}
+        if char_data and char_data.get("name"):
+            own = char_data["name"].lower()
+            self._existing_names.discard(own)
+            self._all_character_names.discard(own)
+        self.setWindowTitle(t("编辑类别") if self._is_edit else t("新建类别"))
+        self._heading.setText(self.windowTitle())
+        self._confirm_button.setText(tr("保存") if self._is_edit else tr("确认"))
+        self._type_section.setVisible(not self._is_edit)
+        self._type_combo.setCurrentIndex(1 if char_data and char_data.get("node_type") == "character" else 0)
+        self._name_input.setStyleSheet("")
+        self._name_input.setText(char_data.get("name", "") if char_data else "")
+        self._name_en_input.setText(char_data.get("name_en", "") if char_data else "")
+        self._on_clear_thumbnail()
+        if char_data and char_data.get("thumbnail"):
+            self._thumbnail_path = char_data["thumbnail"]
+            self._update_thumbnail_preview()
+        self._name_input.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def release_input(self) -> None:
+        """调用方取走结果后释放当前分类、名称集合和图片，保留可复用的空表单。"""
+        self._data = self._result = None
+        self._existing_names.clear()
+        self._all_character_names.clear()
+        self._name_input.clear()
+        self._name_en_input.clear()
+        self._on_clear_thumbnail()
 
     def _setup_ui(self):
         """构建分类名称、英文名和图片表单，新建时显示节点类型选择，并连接确认与取消操作。"""
@@ -589,7 +612,7 @@ class CharacterDialog(QDialog):
         layout.setSpacing(16)
 
         # 标题区
-        header = QLabel(tr("新建类别") if not self._data else tr("编辑类别"))
+        header = self._heading = QLabel(tr("新建类别") if not self._data else tr("编辑类别"))
         header.setStyleSheet(
             f"font-size: 18px; font-weight: bold; color: {theme.color('text.primary')}; padding-bottom: 4px;"
         )
@@ -617,11 +640,7 @@ class CharacterDialog(QDialog):
         self._thumb_preview.setFixedSize(140, 180)
         self._thumb_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._thumb_preview.setAcceptDrops(True)
-        self._thumb_preview.setStyleSheet(
-            f"QLabel {{ border: 2px dashed {theme.color('stroke.control')}; border-radius: 8px; "
-            f"background-color: {theme.color('bg.card')}; color: {theme.color('text.tertiary')}; font-size: 12px; }}"
-        )
-        self._thumb_preview.setText(tr("点击选择\n或拖拽图片"))
+        self._on_clear_thumbnail()
         self._thumb_preview.setCursor(Qt.CursorShape.PointingHandCursor)
         self._thumb_preview.mousePressEvent = lambda e: self._on_select_thumbnail()
         # 拖拽图片支持
@@ -716,7 +735,7 @@ class CharacterDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         btn_layout.addWidget(cancel_btn)
 
-        ok_btn = QPushButton(tr("确认") if not self._data else tr("保存"))
+        ok_btn = self._confirm_button = QPushButton(tr("确认") if not self._data else tr("保存"))
         ok_btn.setFixedSize(90, 36)
         ok_btn.setDefault(True)
         ok_btn.setProperty("accent", True)
@@ -757,10 +776,14 @@ class CharacterDialog(QDialog):
         event.ignore()
 
     def _on_clear_thumbnail(self):
-        """清除待保存的类别图片路径，并恢复图片选择提示。"""
+        """清除待保存的类别图片路径，并恢复图片选择提示和默认边框。"""
         self._thumbnail_path = ""
         self._thumb_preview.clear()
         self._thumb_preview.setText(tr("点击选择\n或拖拽图片"))
+        self._thumb_preview.setStyleSheet(
+            f"QLabel {{ border: 2px dashed {theme.color('stroke.control')}; border-radius: 8px; "
+            f"background-color: {theme.color('bg.card')}; color: {theme.color('text.tertiary')}; font-size: 12px; }}"
+        )
 
     def _update_thumbnail_preview(self):
         """读取仍存在的有效图片，按比例缩放到预览区域并显示已选择样式。"""
@@ -1434,6 +1457,7 @@ class OverviewPage(QWidget):
         self._current_parent_id: str = ""  # 当前导航层级
         self._current_game_id: str = ""
         self._batch_add_dialog: BatchAddCharacterDialog | None = None
+        self._character_dialog: CharacterDialog | None = None
         self._presented_view: _PresentedOverviewView | None = None
         self._view_positions: dict[tuple[str, str, str], tuple[tuple, int]] = {}
         self._pending_view: tuple[int, str, str, str] | None = None
@@ -3498,6 +3522,8 @@ class OverviewPage(QWidget):
         try:
             if self._batch_add_dialog is not None:
                 self.prepare_batch_add_dialog()
+            if self._character_dialog is not None:
+                self.prepare_character_dialog()
             self._apply_breadcrumb_style()
             self._breadcrumb.retheme()
             self._apply_overview_table_style()
@@ -6396,16 +6422,25 @@ class OverviewPage(QWidget):
 
     def _on_add_character(self) -> None:
         """以同级和全局角色名称约束新建类别，确认后附加当前父目录并通知宿主添加。"""
+        dialog = self.prepare_character_dialog()
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
         # 收集同级已有名称。
         existing = [c.get("name", "") for c in self._characters]
         # 收集当前游戏中全部角色或对象名称。
         all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
-        dialog = CharacterDialog(existing_names=existing, all_character_names=all_char_names, parent=self)
-        if dialog.exec():
-            result = dialog.get_result()
-            if result:
-                result["parent_id"] = self._current_parent_id
-                self.character_add_requested.emit(result)
+        dialog.prepare_for_open(existing_names=existing, all_character_names=all_char_names)
+        try:
+            if dialog.exec():
+                result = dialog.get_result()
+                if result:
+                    result["parent_id"] = self._current_parent_id
+                    self.character_add_requested.emit(result)
+        finally:
+            if shiboken6.isValid(dialog):
+                dialog.release_input()
 
     def _on_edit_character(self, char_id: str) -> None:
         """查找当前目录中的目标类别，带入重名约束编辑，确认后向宿主提交字段变化。"""
@@ -6416,17 +6451,40 @@ class OverviewPage(QWidget):
                 break
         if not char_data:
             return
+        dialog = self.prepare_character_dialog()
+        if dialog.isVisible():
+            dialog.raise_()
+            dialog.activateWindow()
+            return
         # 收集同级已有名称。
         existing = [c.get("name", "") for c in self._characters]
         # 收集当前游戏中全部角色或对象名称。
         all_char_names = [c.get("name", "") for c in self._all_characters if c.get("node_type") == "character"]
-        dialog = CharacterDialog(
-            char_data=char_data, existing_names=existing, all_character_names=all_char_names, parent=self
-        )
-        if dialog.exec():
-            result = dialog.get_result()
-            if result:
-                self.character_edit_requested.emit(char_id, result)
+        dialog.prepare_for_open(char_data, existing, all_char_names)
+        try:
+            if dialog.exec():
+                result = dialog.get_result()
+                if result:
+                    self.character_edit_requested.emit(char_id, result)
+        finally:
+            if shiboken6.isValid(dialog):
+                dialog.release_input()
+
+    def prepare_character_dialog(self) -> CharacterDialog:
+        """按页面复用一个分类表单，关闭态的主题失效时重建，并绑定页面销毁清理。"""
+        dialog = self._character_dialog
+        if dialog is not None and not shiboken6.isValid(dialog):
+            dialog = None
+        if dialog is not None and not dialog.isVisible() and dialog._built_theme != theme.current_theme():
+            dialog.deleteLater()
+            dialog = None
+        if dialog is None:
+            dialog = CharacterDialog(parent=self)
+            self._character_dialog = dialog
+            # 原生窗口属于顶层，页面单独销毁时也须释放其缓存表单。
+            if self is not self.window():
+                self.destroyed.connect(dialog.deleteLater)
+        return dialog
 
     def prepare_batch_add_dialog(self) -> BatchAddCharacterDialog:
         """接受输入前准备静态表单，主题变化时更新局部颜色。"""
@@ -6785,7 +6843,10 @@ class OverviewPage(QWidget):
             edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
             export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
             delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
-            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            try:
+                action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            finally:
+                menu.deleteLater()
             if action == enter_act:
                 self._navigate_to(item_id)
             elif action == open_dir_act:
@@ -6818,7 +6879,10 @@ class OverviewPage(QWidget):
             export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
             menu.addSeparator()
             delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
-            action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            try:
+                action = menu.exec(self._table.viewport().mapToGlobal(pos))
+            finally:
+                menu.deleteLater()
             if action == toggle_act:
                 self.mod_toggle_requested.emit(item_id)
             elif action == edit_act:
@@ -6870,7 +6934,10 @@ class OverviewPage(QWidget):
             switch_view_act = menu.addAction(icons.get_icon("actions/list-view"), tr("进入列表视图"))
         else:
             switch_view_act = menu.addAction(icons.get_icon("actions/card-view"), tr("进入卡片视图"))
-        action = menu.exec(global_pos)
+        try:
+            action = menu.exec(global_pos)
+        finally:
+            menu.deleteLater()
         if action == back_act:
             self._navigate_back()
         elif action == import_act:
@@ -7016,7 +7083,10 @@ class OverviewPage(QWidget):
                 _a = menu.addAction(_title)
                 plugin_act_map[_a] = _cb
 
-        action = menu.exec(card.mapToGlobal(pos))
+        try:
+            action = menu.exec(card.mapToGlobal(pos))
+        finally:
+            menu.deleteLater()
         if action in plugin_act_map:
             plugin_act_map[action]()
             return

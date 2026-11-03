@@ -2,13 +2,29 @@
 
 from __future__ import annotations
 
+import weakref
 from pathlib import Path
 from typing import Any
 
 import httpx
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import SIGNAL, QCoreApplication, QObject, Qt, QThread, Signal, Slot
 
 from src.utils.logger import logger
+
+_running_downloads: set[DownloadWorker] = set()
+_connected_apps: weakref.WeakSet[QCoreApplication] = weakref.WeakSet()
+
+
+def _finish_downloads() -> None:
+    """应用退出前请求取消并等待原生下载线程，避免解释器销毁仍在运行的线程对象。"""
+    workers = list(_running_downloads)
+    for worker in workers:
+        worker.cancel()
+    for worker in workers:
+        try:
+            worker.wait()
+        except RuntimeError:
+            pass
 
 
 class DownloadWorker(QThread):
@@ -76,6 +92,7 @@ class DownloadWorker(QThread):
             logger.error("下载失败: %s", e)
             return False
 
+    @Slot()
     def cancel(self) -> None:
         """取消下载"""
         self._cancelled = True
@@ -111,7 +128,9 @@ class NetworkService(QObject):
         返回：
             下载线程对象
         """
-        worker = DownloadWorker(url, str(save_path), self, proxy=proxy)
+        # 服务可能先于网络读取结束；原生线程由活动集合保活，不随服务的 Qt 父子关系销毁。
+        worker = DownloadWorker(url, str(save_path), proxy=proxy)
+        self.destroyed.connect(worker.cancel)
 
         if on_progress:
             worker.progress.connect(on_progress)
@@ -120,14 +139,27 @@ class NetworkService(QObject):
         if on_error:
             worker.error.connect(on_error)
 
-        def cleanup():
-            """任务完成或失败后按下载地址移除活动记录。"""
-            if url in self._active_downloads:
-                del self._active_downloads[url]
+        service_ref = weakref.ref(self)
 
-        worker.finished.connect(cleanup)
-        worker.error.connect(cleanup)
+        def cleanup() -> None:
+            """原生线程退出后解除当前任务登记及保活，不影响同地址的后续下载。"""
+            service = service_ref()
+            if service is not None and service._active_downloads.get(url) is worker:
+                del service._active_downloads[url]
+            _running_downloads.discard(worker)
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+
+        # finished(str) 是业务结果，可能在 run 返回前发出；字符串签名显式选择 QThread 原生结束信号。
+        QObject.connect(worker, SIGNAL("finished()"), cleanup, Qt.ConnectionType.QueuedConnection)
 
         self._active_downloads[url] = worker
+        _running_downloads.add(worker)
+        app = QCoreApplication.instance()
+        if app is not None and app not in _connected_apps:
+            _connected_apps.add(app)
+            app.aboutToQuit.connect(_finish_downloads)
         worker.start()
         return worker

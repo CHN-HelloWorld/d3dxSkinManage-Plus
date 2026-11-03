@@ -1645,26 +1645,46 @@ class GameBananaStorePage(QWidget):
             self._show_download_flyout()
         except Exception:
             pass
-        task.state_changed.connect(
-            lambda s, fid=file.file_id, t=task: (
-                self._on_task_state(fid, s) if self._download_manager.get_task(fid) is t else None
-            )
-        )
-        task.progress.connect(
-            lambda d, total, fid=file.file_id, t=task: (
-                self._on_task_progress(fid, d, total) if self._download_manager.get_task(fid) is t else None
-            )
-        )
-        task.failed.connect(
-            lambda _msg, fid=file.file_id, t=task: (
-                self.detail_view.set_file_state(fid, "failed") if self._download_manager.get_task(fid) is t else None
-            )
-        )
-        task.finished.connect(
-            lambda path, f=file, p=profile, g=task.game_id, t=task: (
-                self._after_download(f, path, p, g) if self._download_manager.get_task(f.file_id) is t else None
-            )
-        )
+        page_ref = weakref.ref(self)
+        task_ref = weakref.ref(task)
+        file_id = file.file_id
+        download_game_id = task.game_id
+
+        def current_page() -> GameBananaStorePage | None:
+            """只接收仍属于当前任务的通知，闭包不强持有发送者或页面。"""
+            page, item = page_ref(), task_ref()
+            if page is None or item is None or not shiboken6.isValid(page):
+                return None
+            return page if page._download_manager.get_task(file_id) is item else None
+
+        def on_state_changed(state: str) -> None:
+            """把仍有效任务的状态送到当前详情。"""
+            page = current_page()
+            if page is not None:
+                page._on_task_state(file_id, state)
+
+        def on_progress(downloaded: int, total: int) -> None:
+            """只更新当前任务对应的文件进度。"""
+            page = current_page()
+            if page is not None:
+                page._on_task_progress(file_id, downloaded, total)
+
+        def on_failed(_message: str) -> None:
+            """旧任务移除或页面销毁后，不再更新详情的失败状态。"""
+            page = current_page()
+            if page is not None:
+                page.detail_view.set_file_state(file_id, "failed")
+
+        def on_finished(path: Path) -> None:
+            """保留本次安装元数据，但不让结果闭包反向持有下载任务。"""
+            page = current_page()
+            if page is not None:
+                page._after_download(file, path, profile, download_game_id)
+
+        task.state_changed.connect(on_state_changed)
+        task.progress.connect(on_progress)
+        task.failed.connect(on_failed)
+        task.finished.connect(on_finished)
 
     def _on_task_state(self, file_id: int, state: str) -> None:
         """将下载任务状态转换为详情文件行的显示状态。

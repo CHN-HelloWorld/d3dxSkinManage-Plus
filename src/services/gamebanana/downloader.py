@@ -18,12 +18,14 @@ import os
 import re
 import threading
 import time
+import weakref
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 
 import httpx
-from PySide6.QtCore import QObject, Signal
+import shiboken6
+from PySide6.QtCore import QObject, Qt, Signal
 
 from src.services.gamebanana import download_store
 from src.services.gamebanana.models import GbModFile, GbModProfile
@@ -478,6 +480,7 @@ class GbDownloadManager(QObject):
     task_added = Signal(GbDownloadTask)
     task_removed = Signal(int)
     queue_changed = Signal()
+    _task_settled = Signal(object)
 
     def __init__(self, base_dir: Path | None = None, parent: QObject | None = None) -> None:
         """索引现有归档、清理启动前残留分片、恢复展示记录，并建立下载事件循环。"""
@@ -489,6 +492,9 @@ class GbDownloadManager(QObject):
         self._consumers: dict[str, _DownloadConsumer] = {}
         self._pending_deletions: dict[Path, set[str]] = {}
         self._removed_running_tasks: set[GbDownloadTask] = set()
+        self._lifecycle_lock = threading.RLock()
+        self._shutting_down = False
+        self._task_settled.connect(self._on_task_settled, Qt.ConnectionType.QueuedConnection)
         # 加载持久化记录用于任务列表展示。
         # 历史记录只恢复界面所需字段，不包含完整的在线详情和文件对象。
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -498,13 +504,16 @@ class GbDownloadManager(QObject):
         self._start_loop()
 
     def shutdown(self) -> None:
-        """请求停止后台事件循环并最多等待线程两秒，不在此处等待活动下载完成。"""
-        if self._loop is not None:
-            try:
-                self._loop.call_soon_threadsafe(self._loop.stop)
-            except RuntimeError:
-                pass
-        if self._worker_thread is not None:
+        """首次请求取消并清理在途下载，后续调用只等待同一轮收尾，每次最多两秒。"""
+        with self._lifecycle_lock:
+            if not self._shutting_down:
+                self._shutting_down = True
+                if self._loop is not None:
+                    try:
+                        self._loop.call_soon_threadsafe(self._loop.stop)
+                    except RuntimeError:
+                        pass
+        if self._worker_thread is not None and self._worker_thread is not threading.current_thread():
             self._worker_thread.join(timeout=2)
 
     def _start_loop(self) -> None:
@@ -512,7 +521,7 @@ class GbDownloadManager(QObject):
         ready = threading.Event()
 
         def run():
-            """在线程中创建并运行下载事件循环，循环停止后关闭其资源。"""
+            """在线程中运行下载循环，停止后取消并收集剩余协程，再关闭循环资源。"""
             loop = asyncio.new_event_loop()
             # 将事件循环中未被调用方消费的异常交给本模块日志记录。
             loop.set_exception_handler(self._on_loop_error)
@@ -522,7 +531,14 @@ class GbDownloadManager(QObject):
             try:
                 loop.run_forever()
             finally:
-                loop.close()
+                try:
+                    pending = asyncio.all_tasks(loop)
+                    for task in pending:
+                        task.cancel()
+                    if pending:
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                finally:
+                    loop.close()
 
         self._worker_thread = threading.Thread(
             target=run,
@@ -797,7 +813,9 @@ class GbDownloadManager(QObject):
         game_id: str,
         consumer: str | None = None,
     ) -> GbDownloadTask | None:
-        """登记文件使用者并复用缓存或任务；缓存命中返回空值，否则创建或重试下载任务。"""
+        """登记文件使用者并复用缓存或任务；缓存命中或管理器已关闭时返回空值。"""
+        if self._shutting_down:
+            return None
         md5 = (file.md5_checksum or "").lower()
         previous = self._tasks.get(file.file_id)
         if previous is not None and previous.state == "done" and not previous.archive_path.is_file():
@@ -815,8 +833,23 @@ class GbDownloadManager(QObject):
         safe = _safe_name(file.file_name)
         archive = self._base / f"{md5 or 'nomd5'}__{file.file_id}__{safe}"
         task = GbDownloadTask(profile, file, archive, game_id=game_id)
-        task.finished.connect(lambda p, t=task: self._on_task_done(t, p))
-        task.state_changed.connect(lambda state, t=task: self._on_task_state_changed(t, state))
+        task_ref = weakref.ref(task)
+        manager_ref = weakref.ref(self)
+
+        def on_finished(path: Path) -> None:
+            """仅向仍有效的管理器转发结果，不让发送者的信号闭包反向持有任务。"""
+            manager, item = manager_ref(), task_ref()
+            if manager is not None and item is not None and shiboken6.isValid(manager):
+                manager._on_task_done(item, path)
+
+        def on_state_changed(state: str) -> None:
+            """通过任务弱引用处理状态变化，使移除记录后的任务能够正常回收。"""
+            manager, item = manager_ref(), task_ref()
+            if manager is not None and item is not None and shiboken6.isValid(manager):
+                manager._on_task_state_changed(item, state)
+
+        task.finished.connect(on_finished)
+        task.state_changed.connect(on_state_changed)
         self._tasks[file.file_id] = task
         self._bind_consumer_paths(file.file_id, archive)
         self.task_added.emit(task)
@@ -826,21 +859,31 @@ class GbDownloadManager(QObject):
 
     def _schedule(self, task: GbDownloadTask) -> None:
         """将任务绑定到下载循环并跨线程提交协程，通过完成回调消费未被等待的异常。"""
-        if self._loop is None:
-            logger.error("下载 loop 未就绪，任务无法调度：file_id=%s", task.file.file_id)
-            return
-        # 绑定事件循环后，等待响应头的任务也能接收取消请求。
-        task.bind_loop(self._loop)
 
         async def runner():
             """在下载管理器的事件循环中运行单个任务的下载协程。"""
             await task._run_async()
 
-        try:
-            fut = asyncio.run_coroutine_threadsafe(runner(), self._loop)
-        except RuntimeError as e:
-            logger.error("提交下载协程失败：%s", e)
-            return
+        # 关闭与提交使用同一把锁，保证 stop 之后不会再向正在收尾的循环提交工作。
+        with self._lifecycle_lock:
+            if self._shutting_down:
+                if task.state == "queued":
+                    task.cancel()
+                return
+            if self._loop is None or self._loop.is_closed():
+                logger.error("下载 loop 未就绪，任务无法调度：file_id=%s", task.file.file_id)
+                return
+            # 绑定事件循环后，等待响应头的任务也能接收取消请求。
+            task.bind_loop(self._loop)
+            coroutine = runner()
+            try:
+                fut = asyncio.run_coroutine_threadsafe(coroutine, self._loop)
+            except RuntimeError as e:
+                coroutine.close()
+                logger.error("提交下载协程失败：%s", e)
+                return
+
+        manager_ref = weakref.ref(self)
 
         def _log_result(f) -> None:
             """记录异步提交结果中未被调用方等待的异常。
@@ -853,8 +896,22 @@ class GbDownloadManager(QObject):
                 pass
             except Exception:
                 logger.exception("下载协程异常退出：file_id=%s", task.file.file_id)
+            finally:
+                manager = manager_ref()
+                if manager is not None:
+                    try:
+                        # 排队参数临时保活任务，直到先前的状态与完成通知都已投递。
+                        manager._task_settled.emit(task)
+                    except RuntimeError:
+                        pass
 
         fut.add_done_callback(_log_result)
+
+    def _on_task_settled(self, task: GbDownloadTask) -> None:
+        """协程和此前通知完成后释放退场记录，并重试因文件仍在写入而延后的清理。"""
+        if not task.is_running:
+            self._removed_running_tasks.discard(task)
+        self._delete_unused_archives()
 
     def _on_task_state_changed(self, task: GbDownloadTask, state: str) -> None:
         """终态时释放已移除任务的引用；失败或取消仅解除同一任务的占用，避免影响后续重试。"""
@@ -923,6 +980,8 @@ class GbDownloadManager(QObject):
 
     def resume(self, file_id: int) -> None:
         """恢复指定任务的运行状态并重新提交下载，任务不存在时忽略。"""
+        if self._shutting_down:
+            return
         task = self._tasks.get(file_id)
         if task is None:
             return
@@ -931,6 +990,8 @@ class GbDownloadManager(QObject):
 
     def retry(self, file_id: int) -> None:
         """仅对失败、取消或暂停的任务重置状态并重新调度。"""
+        if self._shutting_down:
+            return
         task = self._tasks.get(file_id)
         if task and task.state in ("failed", "canceled", "paused"):
             task.resume()

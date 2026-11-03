@@ -11,6 +11,7 @@ from PySide6.QtCore import QObject, QThread, QTimer, Signal
 from src.core.library_snapshot import ProbeResult, ProbeToken, probe_library
 from src.ui.library_work_budget import LibraryWorkBudget
 from src.utils.logger import logger
+from src.utils.runtime_metrics import MetricSamples
 
 
 class _LocalEventWindow:
@@ -138,10 +139,11 @@ class LibraryReconcileController(QObject):
             completed=0,
             discarded=0,
             max_active=0,
-            snapshot_ms=[],
-            apply_slice_ms=[],
-            worker_ms=[],
-            slow_items=[],
+            snapshot_ms=MetricSamples(),
+            snapshot_slice_ms=MetricSamples(),
+            apply_slice_ms=MetricSamples(),
+            worker_ms=MetricSamples(),
+            slow_items=MetricSamples(),
         )
         self._retry = QTimer(self)
         self._retry.setSingleShot(True)
@@ -365,7 +367,7 @@ class LibraryReconcileController(QObject):
             logger.exception("Could not capture library probe snapshot")
             self.pause(f"{type(error).__name__}: {error}")
         finally:
-            self.metrics.setdefault("snapshot_slice_ms", []).append((time.perf_counter() - start) * 1000)
+            self.metrics["snapshot_slice_ms"].append((time.perf_counter() - start) * 1000)
 
     def _valid(self, result):
         """检查探测结果令牌是否仍属于当前可发布请求。"""

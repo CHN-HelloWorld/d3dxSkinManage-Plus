@@ -12,9 +12,10 @@ import hmac
 import json
 import subprocess
 import time
+import weakref
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src.core.config import Config
@@ -35,6 +36,17 @@ from src.utils.paths import get_app_dir, is_frozen
 from src.utils.proxy import get_configured_proxy_url
 
 _THROTTLE_SECONDS = 24 * 3600  # 启动静默检查节流：24h
+_active_workers: set[QThread] = set()
+_connected_apps: weakref.WeakSet[QCoreApplication] = weakref.WeakSet()
+
+
+def _finish_update_workers() -> None:
+    """应用退出时等待更新准备线程，避免父窗口销毁后仍有线程访问原生对象。"""
+    for worker in list(_active_workers):
+        try:
+            worker.wait()
+        except RuntimeError:
+            pass
 
 
 class _CheckWorker(QThread):
@@ -136,6 +148,32 @@ class AppUpdateManager(QObject):
         if cleanup_retired_updaters(get_app_dir()) and self._retirement_attempts < 5:
             self._retirement_timer.start()
 
+    def _track_worker(self, worker: QThread) -> None:
+        """仅在原生工作期保活更新线程，允许管理器先销毁，并在结束后清除当前属性引用。"""
+        worker.setParent(None)
+        _active_workers.add(worker)
+        manager_ref = weakref.ref(self)
+
+        def cleanup() -> None:
+            """原生线程已退出时解除登记；旧检查的结束不能清除新检查或安装线程。"""
+            manager = manager_ref()
+            if manager is not None:
+                if manager._check_worker is worker:
+                    manager._check_worker = None
+                if manager._install_worker is worker:
+                    manager._install_worker = None
+            _active_workers.discard(worker)
+            try:
+                worker.deleteLater()
+            except RuntimeError:
+                pass
+
+        worker.finished.connect(cleanup, Qt.ConnectionType.QueuedConnection)
+        app = QCoreApplication.instance()
+        if app is not None and app not in _connected_apps:
+            _connected_apps.add(app)
+            app.aboutToQuit.connect(_finish_update_workers)
+
     # 对外入口
 
     def check_on_startup(self) -> None:
@@ -165,6 +203,7 @@ class AppUpdateManager(QObject):
             proxy=get_configured_proxy_url(self._config),
         )
         self._check_worker = _CheckWorker(checker, self)
+        self._track_worker(self._check_worker)
         self._check_worker.finished_ok.connect(self._on_check_finished)
         self._check_worker.start()
 
@@ -199,8 +238,14 @@ class AppUpdateManager(QObject):
     def _prompt_update(self, info: AppUpdateInfo) -> None:
         """显示版本说明并处理更新、跳过或稍后动作，只有发现新版本时才开始下载或保存跳过选择。"""
         dialog = UpdatePromptDialog(info.to_dict(), parent=self._win)
-        dialog.exec()
-        action = dialog.user_action
+        try:
+            dialog.exec()
+            action = dialog.user_action
+        finally:
+            try:
+                dialog.deleteLater()
+            except RuntimeError:
+                pass
         if action == "update" and info.has_update:
             self._start_download(info)
         elif action == "skip" and info.has_update:
@@ -322,7 +367,7 @@ class AppUpdateManager(QObject):
     def _on_download_cancel(self) -> None:
         """标记下载取消并停止速度定时器，向工作线程发出取消请求后解除忙碌状态。"""
         self._dl_cancelled = True
-        self._speed_timer.stop()
+        self._close_progress()
         if self._download_worker:
             try:
                 self._download_worker.cancel()
@@ -378,6 +423,7 @@ class AppUpdateManager(QObject):
 
         backup = bool(self._config.get("app_update.backup_before_update", True))
         self._install_worker = _InstallWorker(self._installer, backup, self)
+        self._track_worker(self._install_worker)
         self._install_worker.step.connect(self._on_install_step)
         self._install_worker.done.connect(self._on_install_done)
         self._install_worker.start()
@@ -443,11 +489,16 @@ class AppUpdateManager(QObject):
     def _close_install_progress(self) -> None:
         """结束安装进度框并解除持有引用，容忍对话框已经关闭或释放。"""
         if self._install_progress is not None:
+            dialog, self._install_progress = self._install_progress, None
             try:
-                self._install_progress.finish()
+                dialog.finish()
             except Exception:
                 pass
-            self._install_progress = None
+            finally:
+                try:
+                    dialog.deleteLater()
+                except RuntimeError:
+                    pass
 
     # 工具
 
@@ -482,11 +533,16 @@ class AppUpdateManager(QObject):
         """停止下载速度定时器并结束进度框，随后解除管理器持有的对话框引用。"""
         self._speed_timer.stop()
         if self._progress is not None:
+            dialog, self._progress = self._progress, None
             try:
-                self._progress.finish()
+                dialog.finish()
             except Exception:
                 pass
-            self._progress = None
+            finally:
+                try:
+                    dialog.deleteLater()
+                except RuntimeError:
+                    pass
 
     def _info_box(self, title: str, text: str) -> None:
         """以主窗口为父级同步显示更新信息通知。"""

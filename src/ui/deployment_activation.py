@@ -26,6 +26,7 @@ from src.ui.worker_lifecycle import manage_page_worker
 from src.utils import fs
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
+from src.utils.runtime_metrics import MetricSamples
 
 
 @dataclass(frozen=True)
@@ -191,7 +192,9 @@ class DeploymentActivationController(QObject):
         self._ready_key = None
         self._ready_sync = None
         self.closing = False
-        self.metrics = dict(capture_ms=[], worker_ms=[], publish_ms=[], discarded=0)
+        self.metrics = dict(
+            capture_ms=MetricSamples(), worker_ms=MetricSamples(), publish_ms=MetricSamples(), discarded=0
+        )
 
     @property
     def busy(self):

@@ -5,13 +5,12 @@ from __future__ import annotations
 import re
 from typing import Literal
 
-from PySide6.QtCore import Qt, QTimer, QUrl
+from PySide6.QtCore import Qt, QTimer, QUrl, Slot
 from PySide6.QtGui import QTextDocument
 from PySide6.QtWidgets import QLabel, QTextBrowser
 
 from src.services.gamebanana.cache import ImageCache
 from src.services.gamebanana.html_sanitizer import sanitize_html, theme_css
-from src.utils.qt_timers import call_later
 
 _IMG_RE = re.compile(r'<img[^>]+src="([^"]+)"', re.IGNORECASE)
 
@@ -27,7 +26,7 @@ class GbHtmlView(QTextBrowser):
         theme: Literal["dark", "light"] = "dark",
         parent=None,
     ) -> None:
-        """绑定图片加载与缓存服务，设置富文本主题，并创建合并图片重排的单次定时器。"""
+        """绑定图片加载与缓存服务，复用图片轮询及合并重排定时器，并设置富文本主题。"""
         super().__init__(parent)
         self._loader = image_loader
         self._cache = image_cache
@@ -35,7 +34,13 @@ class GbHtmlView(QTextBrowser):
         self._html_raw = ""
         # 本视图持有远程图像的 QLabel，按 URL 收集结果并合并触发 HTML 重绘。
         self._img_targets: dict[str, QLabel] = {}
+        self._spare_targets: list[QLabel] = []
+        self._image_generation = 0
         self._img_resources: dict[str, object] = {}  # url -> QImage
+        self._pending_images: dict[str, int] = {}
+        self._image_poll_timer = QTimer(self)
+        self._image_poll_timer.setInterval(60)
+        self._image_poll_timer.timeout.connect(self._poll_images)
         self._rerender_pending = False
         self._rerender_timer = QTimer(self)
         self._rerender_timer.setSingleShot(True)
@@ -63,14 +68,25 @@ class GbHtmlView(QTextBrowser):
         # 内容切换时清理上一轮图片及重绘状态，防止旧请求结果进入新文档。
         """保存原始内容、清空图片加载状态，清洗 HTML 后显示并请求其中的网络图片。"""
         self._html_raw = html or ""
+        self._image_generation += 1
+        self._image_poll_timer.stop()
+        self._pending_images.clear()
+        self._spare_targets.extend(self._img_targets.values())
         self._img_targets.clear()
+        for target in self._spare_targets:
+            self._loader.cancel_for(target)
+            target.clear()
         self._img_resources.clear()
         self._rerender_pending = False
         self._rerender_timer.stop()
         cleaned = sanitize_html(self._html_raw, theme=self._theme)
-        # 设置 HTML 前恢复同 URL 的已缓存图像资源。
+        # setHtml 保留手工加入的文档资源，切换内容前须显式清除上一页图片。
+        self.document().clear()
         self.setHtml(cleaned)
         self._fetch_all_images()
+        # 复用当前页所需的标签；额外只保留一个空标签，不让历史大文档扩大空闲池。
+        while len(self._spare_targets) > 1:
+            self._spare_targets.pop().deleteLater()
 
     def _fetch_all_images(self) -> None:
         """提取原始 HTML 中去重后的 HTTP 或 HTTPS 图片地址并启动加载。"""
@@ -87,33 +103,48 @@ class GbHtmlView(QTextBrowser):
         """
         if url in self._img_targets:
             return  # 已在抓取
-        target = QLabel(self)  # 标签归属于视图，随视图统一销毁。
+        target = self._spare_targets.pop() if self._spare_targets else QLabel(self)
         target.hide()
         self._img_targets[url] = target
         # 轮询图像结果，完成或超时后合并重绘。
         self._loader.load(url, target)
-        call_later(60, self, lambda u=url: self._collect_image(u))
+        self._pending_images[url] = 0
+        if not self._image_poll_timer.isActive():
+            self._image_poll_timer.start()
 
-    def _collect_image(self, url: str, _tries: int = 0) -> None:
+    @Slot()
+    def _poll_images(self) -> None:
+        """一个定时器收集当前文档的待完成图片，避免每张图片反复创建定时器和闭包。"""
+        generation = self._image_generation
+        for url, tries in tuple(self._pending_images.items()):
+            self._collect_image(url, tries, generation=generation)
+
+    def _collect_image(self, url: str, _tries: int = 0, *, generation: int | None = None) -> None:
         """轮询图片加载目标，取得有效像素图后注册文档资源并合并重排请求。
 
         每张图最多继续尝试三十二次；目标已移除或 Qt 对象失效时结束轮询。
         """
-        target = self._img_targets.get(url)
-        if target is None:
-            return  # 已被新一轮 set_html 清掉
-        pm = None
+        if generation is not None and generation != self._image_generation:
+            return
+        self._pending_images.pop(url, None)
         try:
-            pm = target.pixmap()
-        except RuntimeError:
-            return
-        if pm is not None and not pm.isNull():
-            self._img_resources[url] = pm.toImage()
-            self._schedule_rerender()
-            return
-        # 在有限时间内轮询，超时后停止该图片检查，不影响其他请求。
-        if _tries < 32:
-            call_later(60, self, lambda u=url, t=_tries + 1: self._collect_image(u, t))
+            target = self._img_targets.get(url)
+            if target is None:
+                return
+            try:
+                pm = target.pixmap()
+            except RuntimeError:
+                return
+            if pm is not None and not pm.isNull():
+                self._img_resources[url] = pm.toImage()
+                self._schedule_rerender()
+            elif _tries < 32:
+                self._pending_images[url] = _tries + 1
+        finally:
+            if not self._pending_images:
+                self._image_poll_timer.stop()
+            elif not self._image_poll_timer.isActive():
+                self._image_poll_timer.start()
 
     def _schedule_rerender(self) -> None:
         """合并图片完成通知，仅触发一次文档重绘。"""
