@@ -351,6 +351,23 @@ class ModStorage:
                     raise
                 time.sleep(min(0.05, remaining))
 
+    @classmethod
+    def _flatten_staged_deployment(cls, extracted: Path, partial: Path, should_cancel=None) -> None:
+        """展开解压根目录；内外层同名时先给外层分配不与成员冲突的短暂存名。"""
+        children = fs.list_children(extracted)
+        names = {os.path.normcase(child.name) for child in children}
+        if os.path.normcase(extracted.name) in names:
+            temporary = partial / ".unpack"
+            counter = 0
+            while os.path.normcase(temporary.name) in names or cls._deploy_path_exists(temporary):
+                counter += 1
+                temporary = partial / f".unpack_{counter}"
+            cls._rename_staged_deployment(extracted, temporary, should_cancel)
+            extracted = temporary
+        for child in children:
+            cls._rename_staged_deployment(extracted / child.name, partial / child.name, should_cancel)
+        fs.rmdir(extracted)
+
     @library_mutation
     def materialize_deployment(
         self,
@@ -400,9 +417,7 @@ class ModStorage:
                 if self._path_key(extracted_path) != self._path_key(partial_path):
                     if extracted_path.parent != partial_path:
                         raise OSError(f"archive escaped partial path: {extracted_path}")
-                    for child in list(extracted_path.iterdir()):
-                        self._rename_staged_deployment(child, partial_path / child.name, should_cancel)
-                    extracted_path.rmdir()
+                    self._flatten_staged_deployment(extracted_path, partial_path, should_cancel)
             else:
                 raise ValueError(f"unsupported deployment source: {source}")
             if cancelled():
