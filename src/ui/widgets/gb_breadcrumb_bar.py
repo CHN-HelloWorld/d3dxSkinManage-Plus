@@ -29,6 +29,7 @@ from src.ui.widgets.spinner import LoadingIndicator
 from src.ui.win_effects import acrylic_surface_alpha
 from src.utils.i18n import localize_category_name
 from src.utils.i18n import t as tr
+from src.utils.qt_timers import call_later
 
 
 class _ScrollableCategoryPicker(QWidget):
@@ -82,11 +83,9 @@ class _ScrollableCategoryPicker(QWidget):
         self._all: list[GbCategory] = []
 
     def set_categories(self, cats: list[GbCategory]) -> None:
-        # 数据到达后切换为同尺寸的列表页。
-        """保存分类列表，清空筛选条件并切换到可选分类视图。"""
+        """保存分类并应用当前筛选，异步返回数据时保留用户已输入的查询。"""
         self._all = list(cats)
-        self._search.clear()
-        self._rebuild_list(self._all)
+        self._on_filter(self._search.text())
         self._stack.setCurrentIndex(0)
 
     def set_loading(self) -> None:
@@ -135,8 +134,12 @@ class _ScrollableCategoryPicker(QWidget):
             self.picked.emit(cat)
 
     def focus_search(self) -> None:
-        """将键盘焦点移到分类筛选输入框。"""
-        self._search.setFocus()
+        """菜单显示后同步窗口与输入框焦点，使系统输入法向分类筛选框提交文字。"""
+        if not self.isVisible():
+            return
+        # Windows 默认不激活弹出菜单，仅设置控件焦点会让输入法仍指向主窗口的旧输入框。
+        self.window().activateWindow()
+        self._search.setFocus(Qt.FocusReason.PopupFocusReason)
 
 
 class GbBreadcrumbBar(QFrame):
@@ -307,7 +310,7 @@ class GbBreadcrumbBar(QFrame):
         else:
             picker.set_loading()  # 先显示加载状态，子分类返回后填充列表。
             self.children_requested.emit(parent_id)
-        picker.focus_search()
+        call_later(0, picker, picker.focus_search)
 
     def _retry_children(self, parent_id: int, picker: _ScrollableCategoryPicker) -> None:
         """将选择器恢复为加载状态并重新请求指定父分类的子项。"""

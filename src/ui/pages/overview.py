@@ -3357,10 +3357,15 @@ class OverviewPage(QWidget):
             self.mod_preview_reorder_requested.emit(mod_id, img_path)
 
     def _navigate_to(self, parent_id: str) -> None:
-        """导航到指定类别层级"""
+        """保存已呈现视图并结束旧搜索，再请求指定类别层级。"""
         self._flush_pending_preview_reorder()
         self._request_view_position(parent_id=parent_id)
         self.begin_loading()
+        # 连续导航也需取消加载期间新启动的搜索防抖。
+        self._search_timer.stop()
+        with QSignalBlocker(self._search_input):
+            self._search_input.clear()
+        self._pending_search_text = ""
         self._directory_intro_pending = anim.is_enabled()
         self._tag_filter.close_popup()
         self._tag_filter.clear(emit=False)

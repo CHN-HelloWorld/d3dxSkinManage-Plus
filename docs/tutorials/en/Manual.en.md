@@ -233,6 +233,8 @@ The search row provides searches by name, author, and tag; tag conditions; type 
 
 Click once to select an item, double-click a category to enter it, and double-click a Mod to toggle its enabled state. Click **All** in the breadcrumb to return to the category root.
 
+Search covers the current category and its subcategories. Entering a category, going up a level, or navigating through the breadcrumb clears the search text so you can browse the new folder's contents. Refreshing the current folder keeps the search text.
+
 ### 3.2 Categories and characters/objects
 
 <img src="../images/plusa/supplement/分类整理.webp" alt="Plusa organizing categories" width="280">
@@ -668,6 +670,8 @@ Local categories, importing, and deployment do not require a connection to GameB
 ### 5.2 Browsing, searching, and details
 
 The online page lets you browse by category, search for mods, change the sort order, and refresh the list. Sort options include **Default**, **Newest**, **Recently updated**, **Most liked**, **Most downloaded**, and **Most viewed**.
+
+The category dropdown's filter supports input methods such as Chinese and matches both original category names and their translations in the current language. Text entered while categories are loading remains active when they arrive. Reopening the dropdown starts with an empty filter.
 
 ![Online browsing with placeholder content](../images/guide-en/24-在线Mod.webp)
 
