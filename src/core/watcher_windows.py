@@ -215,6 +215,7 @@ class NativeContainerHandles:
             branch = parent.get("children", {}).pop(os.path.normcase(source.name), None) if parent else None
             if branch is None:
                 return
+            self._prune_empty(source.parent)
             target = self._node(destination.parent, True).setdefault("children", {})
             displaced = target.get(os.path.normcase(destination.name))
             if displaced is not None and displaced is not branch:
@@ -227,6 +228,23 @@ class NativeContainerHandles:
                         self.api.k.CloseHandle(record[0])
                     pending.extend(node.get("children", {}).values())
             target[os.path.normcase(destination.name)] = branch
+
+    def _prune_empty(self, path):
+        """持锁时从叶节点向上剪除空分支，保留活跃身份和仍有后代的共同祖先。"""
+        node, chain = self._paths, []
+        for part in Path(os.path.abspath(fs.normal_path(path))).parts:
+            key = os.path.normcase(part)
+            child = node.get("children", {}).get(key)
+            if child is None:
+                return
+            chain.append((node, key, child))
+            node = child
+        for parent, key, child in reversed(chain):
+            if child.get("record") or child.get("children"):
+                break
+            del parent["children"][key]
+            if not parent["children"]:
+                parent.pop("children")
 
     def containing_mod(self, path):
         """查询已登记的 Mod 祖先，不访问磁盘或遍历同级句柄。"""
@@ -339,6 +357,7 @@ class NativeContainerHandles:
                 del self._handles[handle]
                 node.pop("record", None)
                 api.k.CloseHandle(handle)  # 清理前释放最后的本地引用。
+                self._prune_empty(path)
                 return "delete_pending", "", identity
             buffer = c.create_unicode_buffer(32768)
             length = api.k.GetFinalPathNameByHandleW(handle, buffer, len(buffer), 0)

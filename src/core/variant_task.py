@@ -53,7 +53,7 @@ class VariantTask:
         self._watch_before = manager.variants._watch_context
         service._epoch = self._epoch
         service._ini_cache = dict(manager.variants._ini_cache)
-        service._default_cache = dict(manager.variants._default_cache)
+        service._default_cache = manager.variants._default_cache.copy()
         self._references_before = {pid: dict(preset.mod_variants) for pid, preset in self.preparation.presets.items()}
         if self.mutating:
             token = "variant-ui:" + uuid.uuid4().hex
@@ -113,7 +113,7 @@ class VariantTask:
         original = manager.variants
         if manager.current_game_id == self.game_id and original._epoch == self._epoch:
             original._ini_cache = dict(preparation.variants._ini_cache)
-            original._default_cache = dict(preparation.variants._default_cache)
+            original._default_cache = preparation.variants._default_cache.copy()
             if self.mutating:
                 original._epoch = preparation.variants._epoch
                 original._watch_context = preparation.variants._watch_context if self._started else self._watch_before

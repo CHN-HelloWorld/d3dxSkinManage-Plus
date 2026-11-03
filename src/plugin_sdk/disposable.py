@@ -54,6 +54,7 @@ class DisposableStore:
         """创建空的资源集合。"""
         self._items: list[DisposableLike] = []
         self._disposed = False
+        self._prune_at = 64
 
     @property
     def disposed(self) -> bool:
@@ -80,7 +81,16 @@ class DisposableStore:
             self._release(resource)
         else:
             self._items.append(resource)
+            if len(self._items) >= self._prune_at:
+                self._prune_disposed()
         return resource
+
+    def _prune_disposed(self) -> None:
+        """分批退役已关闭的 SDK 资源；按存活量增长阈值，避免大量活跃注册时反复全扫。"""
+        self._items = [
+            item for item in self._items if not (isinstance(item, (Disposable, DisposableStore)) and item.disposed)
+        ]
+        self._prune_at = max(64, len(self._items) * 2)
 
     @staticmethod
     def _release(resource: DisposableLike) -> None:

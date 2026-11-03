@@ -32,6 +32,7 @@ from src.core.persist_vars import (
     snapshot_variables,
 )
 from src.core.variant_configuration import configuration_changes, default_values
+from src.core.variant_default_cache import DefaultIniCache
 from src.core.variant_journal import RuntimePatch
 from src.core.variant_operation import FileChange, IniInventoryGuard, VariantOperation, digest, read_bytes
 from src.models.mod_variant import ModVariant
@@ -80,7 +81,7 @@ class ModVariantManager:
         self._epoch = uuid.uuid4().hex
         self._session = uuid.uuid4().hex
         self._ini_cache = {}
-        self._default_cache = {}
+        self._default_cache = DefaultIniCache()
         self._prepared = {}
         self._operations = {}
         self._recovering = False
@@ -91,6 +92,8 @@ class ModVariantManager:
 
     def _on_library_event(self, event, **payload):
         """根据库变化使声明缓存和监控身份失效；已准备的启用事件复用冻结上下文。"""
+        if event == "mod_deleted":
+            self._default_cache.discard(payload.get("mod_id", ""))
         prepared = self._prepared_enable_context
         if event == "mod_enabled" and prepared is not None and prepared[0] == payload.get("mod_id"):
             self._prepared_enable_context = None

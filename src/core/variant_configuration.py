@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from pathlib import Path
 
 from src.core import migoto_user_ini as user_ini
@@ -12,6 +13,7 @@ from src.core.mod_package import (
     read_body_ini_text,
 )
 from src.core.persist_vars import declaration_fingerprint, read_default_values, snapshot_variables
+from src.core.variant_default_cache import DefaultIniCache
 from src.core.variant_operation import FileChange
 from src.utils.i18n import t as tr
 
@@ -40,13 +42,12 @@ def original_inis(mod_path: str) -> tuple[tuple[str, str], ...]:
     return tuple(entries)
 
 
-def default_values(mod, index, cache: dict) -> dict[str, str]:
+def default_values(mod, index, cache: DefaultIniCache) -> dict[str, str]:
     """按正文路径、摘要、大小和修改时间缓存原始 INI，并从声明索引解析默认变量值。"""
     stat = Path(mod.path).stat()
     key = (mod.path, mod.content_hash, stat.st_size, stat.st_mtime_ns)
-    if key not in cache:
-        cache[key] = original_inis(mod.path)
-    return read_default_values(index, mod.mod_id, cache[key])
+    inis = cache.read(mod.mod_id, key, partial(original_inis, mod.path))
+    return read_default_values(index, mod.mod_id, inis)
 
 
 def configuration_changes(
