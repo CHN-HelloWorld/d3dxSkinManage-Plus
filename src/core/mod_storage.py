@@ -49,8 +49,8 @@ def write_ini_preserve_link(target: Path, text: str) -> bool:
     """
     target = Path(target)
     try:
-        target.parent.mkdir(parents=True, exist_ok=True)
-        with open(target, "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
+        fs.ensure_dir(target.parent)
+        with open(fs.native_path(target), "w", encoding="utf-8", errors="surrogateescape", newline="") as fh:
             fh.write(text)
         return True
     except OSError as e:
@@ -111,7 +111,7 @@ class ModStorage:
         """设置 3DMigoto Mods 部署目录"""
         p = Path(path)
         if p and str(p) not in ("", "."):
-            p.mkdir(parents=True, exist_ok=True)
+            fs.ensure_dir(p)
             self._migoto_mods_dir = p
             logger.info("3DMigoto Mods 目录设置为: %s", p)
         else:
@@ -151,7 +151,7 @@ class ModStorage:
     @classmethod
     def _deploy_path_exists(cls, path: Path) -> bool:
         """包含断链 symlink / junction 的部署路径存在性判断。"""
-        return os.path.lexists(str(path)) or path.is_symlink() or cls._is_junction(path)
+        return fs.lexists(path) or fs.is_symlink(path) or cls._is_junction(path)
 
     @staticmethod
     def _path_root_available(path: Path) -> bool:
@@ -210,9 +210,9 @@ class ModStorage:
         name = self.safe_deploy_name(deploy_name)
         for candidate in (name, f"{name[:180]}_{mod_id[:12]}", f"{name[:180]}_{mod_id}"):
             target = root / candidate
-            if not os.path.lexists(target):
+            if not fs.lexists(target):
                 return target
-            identity = read_deployment_identity(target) if target.is_dir() else None
+            identity = read_deployment_identity(target) if fs.is_dir(target) else None
             if identity is not None and identity["mod_id"] == mod_id:
                 return target
         raise IdentityConflict(tr("部署目录被其他内容占用：{name}", name=name))
@@ -290,7 +290,7 @@ class ModStorage:
                 return None
             if not self._deploy_path_exists(source):
                 return None
-            os.replace(str(source), str(parked))
+            os.replace(fs.native_path(source), fs.native_path(parked))
             if self._deploy_path_exists(source) or not self._deploy_path_exists(parked):
                 raise OSError("park invariant verification failed")
             logger.info("部署已停放: %s -> %s", source, parked)
@@ -317,7 +317,7 @@ class ModStorage:
                 return None
             if not self._deploy_path_exists(parked):
                 return None
-            os.replace(str(parked), str(target))
+            os.replace(fs.native_path(parked), fs.native_path(target))
             if self._deploy_path_exists(parked) or not self._deploy_path_exists(target):
                 raise OSError("restore invariant verification failed")
             logger.info("部署已恢复: %s -> %s", parked, target)
@@ -430,14 +430,14 @@ class ModStorage:
 
             write_deployment_identity(partial_path, mod_id, Mod.compute_sha1(source))
 
-            if not partial_path.is_dir():
+            if not fs.is_dir(partial_path):
                 raise OSError(f"partial deployment is not a directory: {partial_path}")
             with _DEPLOYMENT_PUBLISH_LOCK:
                 # 解压期间同名位置可能被其他 Mod 占用，发布时重新选择名称而不覆盖。
                 active_path = self.active_deployment_path(mod_id, deploy_name)
                 disabled_path = active_path.with_name(self._parked_deploy_name(mod_id, active_path.name))
                 target = active_path if active else disabled_path
-                if os.path.lexists(target):
+                if fs.lexists(target):
                     raise FileExistsError(f"deployment target is occupied: {target}")
                 self._rename_staged_deployment(partial_path, target, should_cancel)
             if self._deploy_path_exists(partial_path) or not self._deploy_path_exists(target):
@@ -490,8 +490,8 @@ class ModStorage:
             try:
                 op = override_path_for(str(src_body), rel)
                 target = Path(deploy_target) / rel
-                target.parent.mkdir(parents=True, exist_ok=True)
-                if op is not None and Path(op).is_file():
+                fs.ensure_dir(target.parent)
+                if op is not None and fs.is_file(op):
                     # 覆盖文件存在时建立链接，使部署与源覆盖文件共享内容。
                     self.link_ini(Path(op), target)
                     continue
@@ -514,11 +514,11 @@ class ModStorage:
         共享链接或内容相同时无需复制；内容不同时保留较新的版本，时间相同时采用部署内容。
         返回 False 表示必要写入失败，调用方须保留部署。
         """
-        src_body = Path(src_body)
-        deploy_target = Path(deploy_target)
+        src_body = Path(fs.normal_path(src_body))
+        deploy_target = Path(fs.normal_path(deploy_target))
 
         # junction/symlink 整目录部署：用户改部署就是改源本体，不存在独立副本丢失问题。
-        if not deploy_target.is_dir() or deploy_target.is_symlink() or self._is_junction(deploy_target):
+        if not fs.is_dir(deploy_target) or fs.is_symlink(deploy_target) or self._is_junction(deploy_target):
             return True
 
         from src.core.mod_package import (
@@ -547,7 +547,9 @@ class ModStorage:
         failures = 0
         captured = 0
         try:
-            deployed_inis = sorted(p for p in deploy_target.rglob("*") if p.is_file() and p.suffix.lower() == ".ini")
+            deployed_inis = sorted(
+                p for p in fs.iter_files(deploy_target) if p.suffix.lower() == ".ini" and fs.is_file(p)
+            )
         except OSError as e:
             logger.warning("扫描旧部署 ini 失败 (%s): %s", deploy_target, e)
             return False
@@ -562,7 +564,7 @@ class ModStorage:
             rel = rel_path.as_posix()
 
             try:
-                deployed_data = deployed.read_bytes()
+                deployed_data = fs.read_bytes(deployed)
             except OSError as e:
                 logger.warning("读取旧部署 ini 失败 (%s): %s", deployed, e)
                 failures += 1
@@ -575,19 +577,19 @@ class ModStorage:
             # 归档本体则以归档 mtime 作为整体版本时间。
             reference: Path | None = None
             op = override_path_for(str(src_body), rel)
-            if op is not None and Path(op).is_file():
+            if op is not None and fs.is_file(op):
                 reference = Path(op)
-            elif src_body.is_dir() and (src_body / rel_path).is_file():
+            elif fs.is_dir(src_body) and fs.is_file(src_body / rel_path):
                 reference = src_body / rel_path
-            elif src_body.is_file():
+            elif fs.is_file(src_body):
                 reference = src_body
 
             try:
-                deployed_mtime = deployed.stat().st_mtime_ns
+                deployed_mtime = os.stat(fs.native_path(deployed)).st_mtime_ns
             except OSError:
                 deployed_mtime = 0
             try:
-                reference_mtime = reference.stat().st_mtime_ns if reference else -1
+                reference_mtime = os.stat(fs.native_path(reference)).st_mtime_ns if reference else -1
             except OSError:
                 reference_mtime = -1
 
@@ -617,31 +619,31 @@ class ModStorage:
         deploy_path = Path(deploy_path)
         # 创建链接前移除现有目标。
         try:
-            if deploy_path.is_symlink() or deploy_path.exists():
-                deploy_path.unlink()
+            if fs.lexists(deploy_path):
+                fs.unlink(deploy_path)
         except OSError:
             try:
-                if deploy_path.exists():
-                    deploy_path.unlink()
+                if fs.exists(deploy_path):
+                    fs.unlink(deploy_path)
             except OSError:
                 pass
         # ① symlink 优先
         try:
-            os.symlink(str(override_path), str(deploy_path))
+            os.symlink(fs.native_path(override_path), fs.native_path(deploy_path))
             logger.debug("ini 已软链接: %s -> %s", deploy_path, override_path)
             return "symlink"
         except (OSError, NotImplementedError, AttributeError):
             pass
         # ② hardlink 回退（同卷）
         try:
-            os.link(str(override_path), str(deploy_path))
+            os.link(fs.native_path(override_path), fs.native_path(deploy_path))
             logger.debug("ini 已硬链接: %s == %s", deploy_path, override_path)
             return "hardlink"
         except OSError:
             pass
         # 链接不可用时复制内容；使用就地写入以保留可能存在的链接关系。
         try:
-            data = override_path.read_bytes()
+            data = fs.read_bytes(override_path)
             write_ini_preserve_link(deploy_path, data.decode("utf-8", errors="surrogateescape"))
             logger.debug("ini 链接不可用，回退复制: %s", deploy_path)
         except OSError as e:
@@ -657,8 +659,8 @@ class ModStorage:
             from src.core.mod_package import META_DIR
 
             meta = Path(target) / META_DIR
-            if meta.is_dir() and not meta.is_symlink():
-                shutil.rmtree(str(meta), ignore_errors=True)
+            if fs.is_dir(meta) and not fs.is_symlink(meta):
+                fs.rmtree(meta, ignore_errors=True)
         except Exception as e:
             logger.warning("清理部署产物 sidecar 失败: %s", e)
 
@@ -1059,13 +1061,13 @@ class ModStorage:
         isjunction = getattr(os.path, "isjunction", None)
         if callable(isjunction):
             try:
-                return bool(isjunction(str(path)))
+                return bool(isjunction(fs.native_path(path)))
             except OSError:
                 pass
         try:
-            st = os.lstat(str(path))
+            st = os.lstat(fs.native_path(path))
             attrs = getattr(st, "st_file_attributes", 0)
-            return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)) and not path.is_symlink()
+            return bool(attrs & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)) and not fs.is_symlink(path)
         except (OSError, ValueError, AttributeError):
             return False
 
@@ -1098,11 +1100,11 @@ class ModStorage:
 
         def _remove_child(path: Path) -> None:
             """按链接、联接、普通目录或文件类型移除子项，避免递归进入链接目标。"""
-            if path.is_symlink():
+            if fs.is_symlink(path):
                 _unlink_or_rmdir(path)
             elif cls._is_junction(path):
                 _unlink_or_rmdir(path, directory=True)
-            elif path.is_dir():
+            elif fs.is_dir(path):
                 fs.rmtree(path, onerror=_onerror)
             else:
                 _unlink_or_rmdir(path)
@@ -1149,17 +1151,17 @@ class ModStorage:
                     return True
                 if mod_id is not None:
                     cls._check_deployment_identity(deploy_path, mod_id)
-                if deploy_path.is_symlink():
-                    deploy_path.unlink()
+                if fs.is_symlink(deploy_path):
+                    fs.unlink(deploy_path)
                 elif cls._is_junction(deploy_path):
-                    os.rmdir(str(deploy_path))  # 仅移除重解析点，不遍历其目标目录。
-                elif deploy_path.is_dir():
+                    fs.rmdir(deploy_path)  # 仅移除重解析点，不遍历其目标目录。
+                elif fs.is_dir(deploy_path):
                     if mod_id is None:
-                        shutil.rmtree(str(deploy_path), onerror=_onerror)
+                        fs.rmtree(deploy_path, onerror=_onerror)
                     else:
                         _remove_owned_directory(mod_id)
                 else:
-                    deploy_path.unlink(missing_ok=True)
+                    fs.unlink(deploy_path, missing_ok=True)
                 if not cls._deploy_path_exists(deploy_path):
                     logger.info("已移除 3DMigoto 部署: %s", deploy_path)
                     return True

@@ -132,7 +132,7 @@ def scan_deployment_identities(roots, *, should_cancel=None) -> dict[str, Deploy
         if key in visited:
             continue
         visited.add(key)
-        for child in root.iterdir():
+        for child in fs.list_children(root):
             if should_cancel is not None and should_cancel():
                 raise InterruptedError("Deployment probe cancelled")
             name = child.name.casefold()

@@ -146,6 +146,16 @@ def exists(path: str | os.PathLike[str]) -> bool:
     return os.path.exists(native_path(path))
 
 
+def lexists(path: str | os.PathLike[str]) -> bool:
+    """通过原生路径检查目录项是否存在，包含目标缺失的链接。"""
+    return os.path.lexists(native_path(path))
+
+
+def is_symlink(path: str | os.PathLike[str]) -> bool:
+    """通过原生路径判断目录项是否为符号链接。"""
+    return os.path.islink(native_path(path))
+
+
 def is_file(path: str | os.PathLike[str]) -> bool:
     """通过原生路径判断目标是否为普通文件。"""
     return os.path.isfile(native_path(path))
