@@ -190,10 +190,12 @@ class _ImageTag(HTMLParser):
     """读取 Markdown 中带显示尺寸的单行图片，不透传其他 HTML 属性。"""
 
     def __init__(self):
+        """初始化图片属性，并启用 HTML 字符引用解码。"""
         super().__init__(convert_charrefs=True)
         self.attributes = None
 
     def handle_starttag(self, tag, attrs):
+        """记录图片标签的属性，供后续筛选允许输出的字段。"""
         if tag == "img":
             self.attributes = dict(attrs)
 

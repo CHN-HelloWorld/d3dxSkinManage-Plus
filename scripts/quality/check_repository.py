@@ -27,7 +27,7 @@ PUBLIC_ROOTS = (
     "plugins/example.preset-cycle",
     "plugins/example.preset-audit",
 )
-GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", "bin", "obj", "build", "dist"}
+GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".vs", "bin", "obj", "build", "dist"}
 TEXT_SUFFIXES = SOURCE_SUFFIXES | {
     ".md",
     ".rst",
