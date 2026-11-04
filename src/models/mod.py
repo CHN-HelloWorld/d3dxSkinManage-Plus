@@ -350,7 +350,6 @@ class Mod:
         import tempfile
 
         try:
-            import py7zr
             from py7zr.io import Py7zIO, WriterFactory
         except ImportError:
             return None
@@ -430,7 +429,9 @@ class Mod:
         try:
             check_continue()
             normalized_names = [name.replace("\\", "/") for name in names]
-            with py7zr.SevenZipFile(fs.native_path(path), mode="r") as archive:
+            from src.services.seven_zip import open_7z
+
+            with open_7z(path) as archive:
                 archive.extract(targets=names, factory=factory)
             check_continue()
             if factory.duplicate_name:

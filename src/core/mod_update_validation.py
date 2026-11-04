@@ -6,6 +6,7 @@ import zipfile
 from pathlib import Path
 
 from src.services import archive as archive_backend
+from src.services.seven_zip import open_7z
 from src.utils import fs
 from src.utils.i18n import t as tr
 
@@ -18,7 +19,7 @@ def _validate_7z(path: Path) -> None:
     """用 py7zr 完整解码压缩成员并丢弃输出，以验证数据完整性；缺少后端时抛出错误。"""
     if not archive_backend.PY7ZR_AVAILABLE:
         raise RuntimeError(tr("缺少可用的 7z 校验后端（py7zr）"))
-    with archive_backend.py7zr.SevenZipFile(fs.native_path(path), mode="r") as archive:
+    with open_7z(path) as archive:
         from py7zr.io import NullIOFactory
 
         # 完整解码并校验成员及数据流，不创建解压文件或保留内容缓冲。

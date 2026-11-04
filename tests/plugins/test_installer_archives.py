@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import gc
 import json
 import subprocess
 import zipfile
+from weakref import WeakSet
 
 import pytest
 
@@ -74,6 +76,33 @@ def test_installs_archive_layout_and_resources(tmp_path, kind, wrapped):
     assert (result.directory / "entry.py").is_file()
     assert not (result.directory / "README.txt").exists()
     assert [path.name for path in plugins.iterdir()] == ["test.archive"]
+
+
+def test_7z_plugin_install_releases_decoder_without_cyclic_gc(tmp_path, monkeypatch):
+    """插件安装关闭归档后立即释放解码字典，不累积到下一次垃圾回收。"""
+    pytest.importorskip("py7zr")
+    from py7zr.compressor import SevenZipDecompressor
+
+    package = _package(tmp_path, "7z")
+    live = WeakSet()
+    original = SevenZipDecompressor.__init__
+
+    def record(decoder, *args, **kwargs):
+        """通过弱引用观察真实解码器的释放时机。"""
+        original(decoder, *args, **kwargs)
+        live.add(decoder)
+
+    monkeypatch.setattr(SevenZipDecompressor, "__init__", record)
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        for index in range(3):
+            result = installer.install_from_archive(package, plugins_dir=tmp_path / str(index))
+            assert result.plugin_id == "test.archive"
+            assert not live, "插件安装结束后仍保留解码字典"
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 @pytest.mark.parametrize("kind", ["7z", "rar"])

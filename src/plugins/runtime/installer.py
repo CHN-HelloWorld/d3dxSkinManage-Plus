@@ -18,6 +18,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from src.plugins.runtime.manifest import ManifestError
 from src.plugins.runtime.validation import validate_package
 from src.services import archive as archive_service
+from src.services.seven_zip import open_7z
 from src.utils.constants import ARCHIVE_EXTENSIONS
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
@@ -97,7 +98,7 @@ def _unpack_archive(archive: Path, target: Path) -> str:
     if suffix == ".7z":
         if not archive_service.PY7ZR_AVAILABLE:
             raise InstallError(tr("无法解压 7z 插件包：缺少 py7zr"))
-        with archive_service.py7zr.SevenZipFile(archive, "r") as reader:
+        with open_7z(archive) as reader:
             names = []
             for info in reader.files:
                 name = _checked_member_name(info.filename)

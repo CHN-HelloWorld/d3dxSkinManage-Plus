@@ -7,6 +7,7 @@ import shutil
 import zipfile
 from pathlib import Path
 
+from src.services.seven_zip import open_7z
 from src.utils import fs
 from src.utils.constants import ARCHIVE_EXTENSIONS, META_DIR
 from src.utils.logger import logger
@@ -249,7 +250,7 @@ class ArchiveService:
         if extract_folder.exists():
             extract_folder = self._get_unique_path(extract_folder)
 
-        with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+        with open_7z(archive) as sz:
             top = self._single_top_directory((info.filename, info.is_directory) for info in sz.list())
             target = dest if top else extract_folder
             if not top:
@@ -773,7 +774,7 @@ class ArchiveService:
         arcname = arcname.replace("\\", "/")
         try:
             # 探测是否已存在同名成员，决定走「追加快路径」还是回退外置 sidecar
-            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+            with open_7z(archive) as sz:
                 existing = set(sz.getnames())
             if arcname in existing:
                 if not allow_rewrite:
@@ -799,7 +800,7 @@ class ArchiveService:
 
         tmpdir = Path(tempfile.mkdtemp(prefix="7z_inject_"))
         try:
-            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+            with open_7z(archive) as sz:
                 sz.extractall(path=str(tmpdir))
             target = tmpdir / arcname
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -832,11 +833,11 @@ class ArchiveService:
 
         tmpdir = Path(tempfile.mkdtemp(prefix="7z_strip_"))
         try:
-            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+            with open_7z(archive) as sz:
                 names = [n for n in sz.getnames()]
             if not any(pred(n) for n in names):
                 return True
-            with py7zr.SevenZipFile(str(archive), mode="r") as sz:
+            with open_7z(archive) as sz:
                 sz.extractall(path=str(tmpdir))
             tmp_out = archive.with_name(archive.stem + "_strip_tmp.7z")
             tmp_out.unlink(missing_ok=True)
@@ -948,7 +949,7 @@ class ArchiveService:
                 if not PY7ZR_AVAILABLE:
                     logger.error("py7zr 未安装，无法读取 .7z 文件")
                     return []
-                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                with open_7z(archive) as sz:
                     return [info.filename for info in sz.list() if not info.is_directory]
             elif suffix == ".rar":
                 if not RAR_AVAILABLE:
@@ -994,7 +995,7 @@ class ArchiveService:
             elif suffix == ".7z":
                 if not PY7ZR_AVAILABLE:
                     return None
-                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                with open_7z(archive) as sz:
                     infos = [i for i in sz.list() if not i.is_directory]
                     raw = [(i.filename, i.uncompressed, i.crc32) for i in infos]
             elif suffix == ".rar":
@@ -1051,7 +1052,7 @@ class ArchiveService:
                 # 仅提取 INI 成员到临时目录后读取，避免解压无关的大型纹理文件。
                 import tempfile
 
-                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                with open_7z(archive) as sz:
                     names = [n for n in sz.getnames() if _is_ini(n)]
                     if not names:
                         return {}
@@ -1105,7 +1106,7 @@ class ArchiveService:
 
                 tmpdir = Path(tempfile.mkdtemp(prefix="7z_read_"))
                 try:
-                    with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                    with open_7z(archive) as sz:
                         sz.extract(path=str(tmpdir), targets=[internal_path])
                     out = tmpdir / internal_path.replace("\\", "/")
                     return out.read_bytes() if out.is_file() else None
@@ -1153,7 +1154,7 @@ class ArchiveService:
             elif suffix == ".7z":
                 if not PY7ZR_AVAILABLE:
                     return []
-                with py7zr.SevenZipFile(fs.native_path(archive), mode="r") as sz:
+                with open_7z(archive) as sz:
                     sz.extract(path=fs.native_path(dest), targets=internal_paths)
                     for name in internal_paths:
                         p = dest / name
