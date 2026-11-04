@@ -4727,7 +4727,7 @@ class OverviewPage(QWidget):
         self._panel_preview.set_single_image_mode(False)
         self._panel_preview._add_btn.setText(tr("添加预览图"))
         self._panel_preview._add_btn.setVisible(True)
-        self._panel_preview._delete_btn.setText(tr("删除"))
+        self._panel_preview._delete_btn.setText(tr("移除预览"))
         for index in range(3):
             self._detail_scrollbar(index).setValue(self._detail_scroll_positions.get((mod.mod_id, index), 0))
         if changed_mod:
@@ -5431,8 +5431,8 @@ class OverviewPage(QWidget):
             mod_id = self._selected_mod.mod_id
             reply = QMessageBox.question(
                 self,
-                tr("确认删除预览图"),
-                tr("确定删除当前预览图吗？\n将删除对应的图片文件，此操作不可恢复。"),
+                tr("确认移除预览图"),
+                tr("移除当前预览图？\n仅清理预览缓存，Mod 资源文件保留；重建索引可恢复。"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )
@@ -5444,13 +5444,13 @@ class OverviewPage(QWidget):
             self.category_preview_dropped.emit(cat_id, "")  # 空路径表示删除预览图
 
     def _on_panel_delete_all(self) -> None:
-        """确认后向宿主请求删除当前 Mod 的全部预览图片。"""
+        """确认后向宿主请求移除全部预览并清理缓存，保留资源原图。"""
         if self._panel_mode == "mod" and self._selected_mod:
             mod_id = self._selected_mod.mod_id
             reply = QMessageBox.question(
                 self,
-                tr("确认删除所有预览图"),
-                tr("确定删除该 Mod 的所有预览图吗？\n将删除对应的图片文件，此操作不可恢复。"),
+                tr("确认移除全部预览"),
+                tr("移除全部预览图？\n仅清理预览缓存，Mod 资源文件保留；重建索引可恢复。"),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
                 QMessageBox.StandardButton.No,
             )

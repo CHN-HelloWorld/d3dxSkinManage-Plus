@@ -4,6 +4,15 @@
     "name": "English"
   },
   "messages": {
+    "移除预览": "Remove preview",
+    "移除全部预览": "Remove all previews",
+    "移除预览并清理缓存，保留 Mod 资源；重建索引可恢复": "Remove previews and clear their cache while keeping Mod resources; rebuild the index to restore previews",
+    "确认移除预览图": "Confirm preview removal",
+    "确认移除全部预览": "Confirm removal of all previews",
+    "移除当前预览图？\n仅清理预览缓存，Mod 资源文件保留；重建索引可恢复。": "Remove the current preview?\nOnly its cache will be cleared. Mod resources will be kept; rebuild the index to restore previews.",
+    "移除全部预览图？\n仅清理预览缓存，Mod 资源文件保留；重建索引可恢复。": "Remove all previews?\nOnly their cache will be cleared. Mod resources will be kept; rebuild the index to restore previews.",
+    "只移除预览，图片资源仍会完整导入；重建索引可恢复": "Remove previews only; all image resources will still be imported. Rebuild the index to restore previews",
+    "移除全部 {count} 张预览图？\n图片资源仍会完整导入，重建索引可恢复预览。": "Remove all {count} previews?\nAll image resources will still be imported. Rebuild the index to restore previews.",
     "命令快捷键": "Command shortcuts",
     "预设不存在或不属于当前游戏": "The preset is missing or belongs to another game",
     "预设名称不能为空": "The preset name cannot be empty",

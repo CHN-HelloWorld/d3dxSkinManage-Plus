@@ -294,8 +294,8 @@ class PreviewWidget(QWidget):
     image_dropped = Signal(str)  # 拖入的图片路径
     image_clicked = Signal(str)  # 点击图片
     preview_changed = Signal(int)  # 当前预览图索引变更
-    delete_current_requested = Signal(int)  # 删除当前预览图（删除文件）
-    delete_all_requested = Signal()  # 删除所有预览图（删除文件）
+    delete_current_requested = Signal(int)  # 移除当前预览并清理缓存
+    delete_all_requested = Signal()  # 移除全部预览并清理缓存
 
     # 面板预览先限制工作分辨率，减少边框检测、缩放及像素缓存开销。
     # 独立图片查看器仍从源文件读取完整分辨率。
@@ -383,19 +383,19 @@ class PreviewWidget(QWidget):
         self._add_btn.clicked.connect(self._browse_images)
         mgmt_layout.addWidget(self._add_btn)
 
-        self._delete_btn = QPushButton(tr("删除"))
+        self._delete_btn = QPushButton(tr("移除预览"))
         icons.apply_icon(self._delete_btn, "actions/remove")
         self._delete_btn.setIconSize(QSize(16, 16))
         self._delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._delete_btn.setToolTip(tr("删除当前预览图（删除文件）"))
+        self._delete_btn.setToolTip(tr("移除预览并清理缓存，保留 Mod 资源；重建索引可恢复"))
         self._delete_btn.clicked.connect(self._on_delete_current)
         mgmt_layout.addWidget(self._delete_btn)
 
-        self._delete_all_btn = QPushButton(tr("删除所有"))
+        self._delete_all_btn = QPushButton(tr("移除全部预览"))
         icons.apply_icon(self._delete_all_btn, "actions/remove")
         self._delete_all_btn.setIconSize(QSize(16, 16))
         self._delete_all_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._delete_all_btn.setToolTip(tr("删除所有预览图（删除文件）"))
+        self._delete_all_btn.setToolTip(tr("移除预览并清理缓存，保留 Mod 资源；重建索引可恢复"))
         self._delete_all_btn.clicked.connect(self._on_delete_all)
         mgmt_layout.addWidget(self._delete_all_btn)
 
@@ -628,12 +628,12 @@ class PreviewWidget(QWidget):
             self.preview_changed.emit(self._current_index)
 
     def _on_delete_current(self) -> None:
-        """删除当前预览图（删除文件）"""
+        """请求移除当前预览引用，由宿主清理对应缓存。"""
         if self._images and 0 <= self._current_index < len(self._images):
             self.delete_current_requested.emit(self._current_index)
 
     def _on_delete_all(self) -> None:
-        """删除所有预览图（删除文件）"""
+        """请求移除全部预览引用，资源原图保持不变。"""
         if self._images:
             self.delete_all_requested.emit()
 

@@ -473,19 +473,19 @@ class ModImportDialog(QDialog):
         preview_mgmt_row.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         preview_mgmt_row.setContentsMargins(0, 8, 0, 8)
 
-        self._delete_preview_btn = QPushButton(tr("移除"))
+        self._delete_preview_btn = QPushButton(tr("移除预览"))
         icons.apply_icon(self._delete_preview_btn, "actions/remove")
         self._delete_preview_btn.setIconSize(QSize(16, 16))
         self._delete_preview_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._delete_preview_btn.setToolTip(tr("从本次导入中移除此预览图，保留原始文件"))
+        self._delete_preview_btn.setToolTip(tr("只移除预览，图片资源仍会完整导入；重建索引可恢复"))
         self._delete_preview_btn.clicked.connect(self._delete_current_preview)
         preview_mgmt_row.addWidget(self._delete_preview_btn)
 
-        self._delete_all_previews_btn = QPushButton(tr("全部移除"))
+        self._delete_all_previews_btn = QPushButton(tr("移除全部预览"))
         icons.apply_icon(self._delete_all_previews_btn, "actions/remove")
         self._delete_all_previews_btn.setIconSize(QSize(16, 16))
         self._delete_all_previews_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._delete_all_previews_btn.setToolTip(tr("从本次导入中移除全部预览图，保留原始文件"))
+        self._delete_all_previews_btn.setToolTip(tr("只移除预览，图片资源仍会完整导入；重建索引可恢复"))
         self._delete_all_previews_btn.clicked.connect(self._delete_all_previews)
         preview_mgmt_row.addWidget(self._delete_all_previews_btn)
 
@@ -911,7 +911,7 @@ class ModImportDialog(QDialog):
                 self._update_preview_nav()
 
     def _update_preview_nav(self) -> None:
-        """按当前条目的图片数量和页码启用导航及移除按钮，保留控件占位以稳定布局。"""
+        """按当前条目的图片数量和页码更新导航，仅多图时显示全部移除按钮。"""
         row = self._table.currentRow()
         total = 0
         if 0 <= row < len(self._entries):
@@ -926,7 +926,7 @@ class ModImportDialog(QDialog):
         self._next_preview_btn.setVisible(True)
         self._preview_page_label.setVisible(True)
         self._delete_preview_btn.setVisible(True)
-        self._delete_all_previews_btn.setVisible(True)
+        self._delete_all_previews_btn.setVisible(total > 1)
         self._prev_preview_btn.setEnabled(has_previews and self._current_preview_index > 0)
         self._next_preview_btn.setEnabled(has_previews and self._current_preview_index < total - 1)
         self._delete_preview_btn.setEnabled(has_previews)
@@ -951,7 +951,7 @@ class ModImportDialog(QDialog):
                 self._update_preview_count_cell(row, entry)
 
     def _delete_all_previews(self) -> None:
-        """从本次导入中排除全部已列出的预览图。"""
+        """取消本次导入中全部图片的预览用途，保留资源文件。"""
         row = self._table.currentRow()
         if 0 <= row < len(self._entries):
             entry = self._entries[row]
@@ -960,7 +960,9 @@ class ModImportDialog(QDialog):
             reply = QMessageBox.question(
                 self,
                 tr("确认移除"),
-                tr("将此 Mod 的全部 {count} 张预览图从本次导入中移除？\n原始文件会保留。", count=len(entry.previews)),
+                tr(
+                    "移除全部 {count} 张预览图？\n图片资源仍会完整导入，重建索引可恢复预览。", count=len(entry.previews)
+                ),
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply == QMessageBox.StandardButton.Yes:
