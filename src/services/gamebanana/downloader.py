@@ -34,6 +34,8 @@ from src.utils.paths import get_gb_download_dir, resolve_stored_path, to_stored_
 
 # 下载队列版本标记用于诊断；读取时按字段校验，缺失字段使用默认值。
 QUEUE_SCHEMA_VERSION = 1
+_DOWNLOAD_HISTORY_LIMIT = 50
+_RETRYABLE_HISTORY_LIMIT = _DOWNLOAD_HISTORY_LIMIT
 
 _INVALID = re.compile(r'[<>:"/\\|?*\x00-\x1f]')
 
@@ -492,6 +494,7 @@ class GbDownloadManager(QObject):
         self._consumers: dict[str, _DownloadConsumer] = {}
         self._pending_deletions: dict[Path, set[str]] = {}
         self._removed_running_tasks: set[GbDownloadTask] = set()
+        self._retryable_history_ids: dict[int, None] = {}
         self._lifecycle_lock = threading.RLock()
         self._shutting_down = False
         self._task_settled.connect(self._on_task_settled, Qt.ConnectionType.QueuedConnection)
@@ -501,6 +504,9 @@ class GbDownloadManager(QObject):
         self._worker_thread: threading.Thread | None = None
         self._scan_cache(clean_partials=True)
         self._restore_history()
+        # 磁盘队列按最新优先恢复，内存顺序统一为最旧到最新，便于独立于写盘结果限制会话历史。
+        self._history_file_ids: dict[int, None] = dict.fromkeys(reversed(self._tasks))
+        self._recorded_done_ids = set(self._history_file_ids)
         self._start_loop()
 
     def shutdown(self) -> None:
@@ -742,7 +748,36 @@ class GbDownloadManager(QObject):
     def release(self, owner: str) -> None:
         """释放一个消费者；最后一个占用释放后执行此前登记的删包请求。"""
         self._consumers.pop(owner, None)
+        self._prune_terminal_history()
         self._delete_unused_archives()
+
+    def _prune_terminal_history(self) -> None:
+        """淘汰超出历史上限且没有显式消费者的终态任务。
+
+        已完成任务按本会话完成次序保留；失败和取消任务保留最近可重试记录。
+        默认下载所有权随历史记录一起释放；更新或安装等显式消费者仍在使用时延后退场。
+        归档文件不属于任务对象生命周期，不在此删除。
+        """
+        retained_retryable = set(list(self._retryable_history_ids)[-_RETRYABLE_HISTORY_LIMIT:])
+        for file_id, task in list(self._tasks.items()):
+            if task.state == "done":
+                retained = file_id in self._history_file_ids or file_id not in self._recorded_done_ids
+            elif task.state in {"failed", "canceled"}:
+                retained = file_id in retained_retryable
+            else:
+                continue
+            if retained:
+                continue
+            default_owner = f"download:{file_id}"
+            if self.has_other_consumers(file_id, {default_owner}):
+                continue
+            if self._tasks.get(file_id) is not task:
+                continue
+            self._tasks.pop(file_id)
+            self._recorded_done_ids.discard(file_id)
+            self._retryable_history_ids.pop(file_id, None)
+            self._consumers.pop(default_owner, None)
+            self.task_removed.emit(file_id)
 
     def has_other_consumers(self, file_id: int, owners: set[str]) -> bool:
         """同一网络任务是否还有 owners 之外的消费者（网络任务按 file ID 共享）。"""
@@ -915,12 +950,17 @@ class GbDownloadManager(QObject):
 
     def _on_task_state_changed(self, task: GbDownloadTask, state: str) -> None:
         """终态时释放已移除任务的引用；失败或取消仅解除同一任务的占用，避免影响后续重试。"""
+        file_id = task.file.file_id
+        if self._tasks.get(file_id) is task:
+            self._retryable_history_ids.pop(file_id, None)
+            if state in {"failed", "canceled"}:
+                self._retryable_history_ids[file_id] = None
         if state in TASK_TERMINAL_STATES:
             self._removed_running_tasks.discard(task)
         if state in ("failed", "canceled"):
             # 被删除的旧任务晚到的信号不能释放同 file ID 的新任务占用。
-            if self._tasks.get(task.file.file_id) is task:
-                self.release(f"download:{task.file.file_id}")
+            if self._tasks.get(file_id) is task:
+                self.release(f"download:{file_id}")
             else:
                 self._delete_unused_archives()
 
@@ -943,10 +983,17 @@ class GbDownloadManager(QObject):
         profile: GbModProfile,
         game_id: str,
     ) -> None:
-        """把一条完成的下载写进 queue.json（始终带版本号与全部字段）。"""
+        """登记本会话完成次序，并把下载写进带版本号及完整字段的 queue.json。"""
+        file_id = int(file.file_id)
+        self._history_file_ids.pop(file_id, None)
+        self._history_file_ids[file_id] = None
+        self._recorded_done_ids.add(file_id)
+        while len(self._history_file_ids) > _DOWNLOAD_HISTORY_LIMIT:
+            oldest = next(iter(self._history_file_ids))
+            self._history_file_ids.pop(oldest)
         entry = {
             "mod_id": getattr(profile, "mod_id", 0),
-            "file_id": file.file_id,
+            "file_id": file_id,
             "md5": (file.md5_checksum or "").lower(),
             "name": file.file_name,
             "path": str(path),
@@ -956,7 +1003,9 @@ class GbDownloadManager(QObject):
         }
         items = [e for e in self._read_queue_items() if not (isinstance(e, dict) and e.get("file_id") == file.file_id)]
         items.insert(0, entry)
-        self._write_queue_items(items[:50])  # 历史记录上限 50
+        items = items[:_DOWNLOAD_HISTORY_LIMIT]
+        self._write_queue_items(items)
+        self._prune_terminal_history()
 
     def _drop_from_history(self, file_id: int) -> None:
         """从持久化队列移除指定文件的记录，仅在内容确有变化时写回。"""
@@ -1003,6 +1052,9 @@ class GbDownloadManager(QObject):
         活动协程负责退出时清理文件，界面线程不等待其结束。
         """
         task = self._tasks.pop(file_id, None)
+        self._history_file_ids.pop(file_id, None)
+        self._recorded_done_ids.discard(file_id)
+        self._retryable_history_ids.pop(file_id, None)
         if task is None:
             self.release(f"download:{file_id}")
             return
@@ -1028,12 +1080,17 @@ class GbDownloadManager(QObject):
     def clear_completed(self, *, game_id: str | None = None) -> None:
         """清理已结束的任务记录；指定 game_id 时仅处理该游戏，与面板过滤范围一致。"""
         done = [
-            fid
-            for fid, t in self._tasks.items()
-            if t.state in TASK_TERMINAL_STATES and (game_id is None or t.game_id == game_id)
+            (fid, task)
+            for fid, task in self._tasks.items()
+            if task.state in TASK_TERMINAL_STATES and (game_id is None or task.game_id == game_id)
         ]
-        for fid in done:
-            del self._tasks[fid]
+        for fid, task in done:
+            if self._tasks.get(fid) is not task or task.state not in TASK_TERMINAL_STATES:
+                continue
+            self._tasks.pop(fid)
+            self._history_file_ids.pop(fid, None)
+            self._recorded_done_ids.discard(fid)
+            self._retryable_history_ids.pop(fid, None)
             self.release(f"download:{fid}")
             self._drop_from_history(fid)
             self.task_removed.emit(fid)
