@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from threading import Event
+from uuid import uuid4
 
 from PySide6.QtCore import QObject, QRect, QRunnable, QSize, Qt, QThread, QThreadPool, Signal, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QImage, QPixmap
@@ -34,9 +36,11 @@ from src.ui import acrylic, anim, icons, theme
 from src.ui.widgets.image_utils import load_scaled_qimage_file
 from src.ui.widgets.preview import ImageViewerDialog
 from src.ui.widgets.tag_chip import TagFlowLayout
+from src.ui.worker_lifecycle import manage_page_worker
 from src.utils.constants import ARCHIVE_EXTENSIONS, IMAGE_EXTENSIONS
 from src.utils.i18n import N_, t
 from src.utils.i18n import t as tr
+from src.utils.logger import logger
 from src.utils.paths import get_data_dir
 from src.utils.qt_timers import call_later
 
@@ -101,7 +105,7 @@ def _detect_previews(folder: Path) -> list[str]:
 
 
 def _detect_keys_from_archive(archive_path: Path) -> list[str]:
-    """读取归档内前二十个 INI 文件并汇总按键名称，读取失败时保留已解析结果。"""
+    """读取前二十个 INI；7z 批量提取，其他格式保留不依赖落盘文件名的读取。"""
     from src.core.ini_keys import extract_key_names, parse_ini_text
 
     bindings = []
@@ -109,21 +113,33 @@ def _detect_keys_from_archive(archive_path: Path) -> list[str]:
         svc = ArchiveService()
         contents = svc.list_contents(archive_path)
         ini_files = [n for n in contents if n.lower().endswith(".ini")][:20]
-        for ini_name in ini_files:
-            data = svc.read_file(archive_path, ini_name)
-            if data is None:
-                continue
-            try:
-                text = data.decode("utf-8", errors="ignore")
-            except Exception:
-                continue
-            bindings.extend(parse_ini_text(text, ini_name))
+        if not ini_files:
+            return []
+        if archive_path.suffix.lower() != ".7z":
+            for ini_name in ini_files:
+                data = svc.read_file(archive_path, ini_name)
+                if data is not None:
+                    bindings.extend(parse_ini_text(data.decode("utf-8", errors="ignore"), ini_name))
+            return extract_key_names(bindings)
+        # 固实归档只解码一遍，临时成员逐个解析后随扫描上下文清理。
+        with tempfile.TemporaryDirectory(prefix="import_keys_") as directory:
+            root = Path(directory)
+            extracted = set(svc.extract_files(archive_path, ini_files, root))
+            for ini_name in ini_files:
+                path = root / ini_name
+                if path not in extracted:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8", errors="ignore")
+                except OSError:
+                    continue
+                bindings.extend(parse_ini_text(text, ini_name))
     except Exception:
         pass
     return extract_key_names(bindings)
 
 
-def _detect_previews_from_archive(archive_path: Path) -> list[str]:
+def _detect_previews_from_archive(archive_path: Path, temp_dir: Path | None = None) -> list[str]:
     """将归档内前十张支持的非 DDS 图片提取到扫描缓存，返回存在的路径，异常时返回空列表。"""
     ext_set = {e.lower() for e in IMAGE_EXTENSIONS} - {".dds"}
     try:
@@ -132,7 +148,8 @@ def _detect_previews_from_archive(archive_path: Path) -> list[str]:
         image_files = [n for n in contents if os.path.splitext(n)[1].lower() in ext_set][:10]
         if not image_files:
             return []
-        temp_dir = get_data_dir() / "temp" / "preview_scan" / archive_path.stem
+        if temp_dir is None:
+            temp_dir = get_data_dir() / "temp" / "preview_scan" / archive_path.stem
         temp_dir.mkdir(parents=True, exist_ok=True)
         extracted = svc.extract_files(archive_path, image_files, temp_dir)
         return [str(p) for p in extracted if p.exists()]
@@ -156,11 +173,16 @@ class _ImportEntry:
         self.selected_preview_path: str = ""
         self.age_rating: str = "G"  # 默认全年龄
         self._scanned = False
+        self._preview_scan_root: Path | None = None
 
     def preview_name(self, preview_path: str) -> str:
         """返回相对于来源目录或归档扫描缓存的预览身份，路径不在对应根目录内时抛出 ValueError。"""
         source = Path(self.source_path)
-        root = source if source.is_dir() else get_data_dir() / "temp" / "preview_scan" / source.stem
+        root = (
+            source
+            if source.is_dir()
+            else self._preview_scan_root or get_data_dir() / "temp" / "preview_scan" / source.stem
+        )
         return Path(preview_path).relative_to(root).as_posix()
 
     def ensure_scanned(self) -> None:
@@ -176,7 +198,7 @@ class _ImportEntry:
                 self.selected_preview_path = self.previews[0]
         elif self.is_archive:
             self.keys = _detect_keys_from_archive(p)
-            self.previews = _detect_previews_from_archive(p)
+            self.previews = _detect_previews_from_archive(p, self._preview_scan_root)
             if self.previews:
                 self.selected_preview_path = self.previews[0]
 
@@ -184,40 +206,59 @@ class _ImportEntry:
 class _ScanWorker(QThread):
     """后台顺序扫描输入的按键和预览，结果经信号交回界面线程更新条目。"""
 
-    entry_scanned = Signal(int, list, list)  # row, keys, previews
+    entry_scanned = Signal(object, list, list)  # entry, keys, previews
 
-    def __init__(self, entries: list[tuple[int, _ImportEntry]]):
-        """保存行索引与条目快照列表，创建由导入窗口保存引用的无父对象扫描线程。"""
+    def __init__(
+        self,
+        entries: list[tuple[int, _ImportEntry]],
+        *,
+        preview_cache: tempfile.TemporaryDirectory[str] | None = None,
+    ):
+        """保存条目快照与缓存所有权，线程真正结束后才释放缓存引用。"""
         super().__init__()
+        self.setObjectName("ModImportPreviewScan")
         self._entries = entries
-        self._cancelled = False
+        self._cancelled = Event()
+        self._preview_cache = preview_cache
+        self.finished.connect(self._release_preview_cache)
 
     def cancel(self) -> None:
         """请求扫描在条目间或按键、预览阶段边界停止，不中断当前归档调用。"""
-        self._cancelled = True
+        self._cancelled.set()
+
+    def stop(self) -> None:
+        """在宿主销毁或应用退出时通过共用线程管理器请求协作取消。"""
+        self.cancel()
+
+    @Slot()
+    def _release_preview_cache(self) -> None:
+        """文件读取结束后在界面线程释放缓存，关闭的窗口无需继续存活。"""
+        self._preview_cache = None
 
     def run(self) -> None:
-        """顺序检测未扫描输入的按键和预览，通过原行索引回传结果；取消后停止后续扫描及结果发送。"""
-        for idx, entry in self._entries:
-            if self._cancelled:
+        """顺序扫描并携带条目身份回传结果，取消后停止后续读取及结果发送。"""
+        for _idx, entry in self._entries:
+            if self._cancelled.is_set():
                 break
             if entry._scanned:
                 continue
             p = Path(entry.source_path)
-            if p.is_dir():
-                keys = _detect_keys(p)
-                if self._cancelled:
-                    break
-                previews = _detect_previews(p)
-                if not self._cancelled:
-                    self.entry_scanned.emit(idx, keys, previews)
-            elif entry.is_archive:
-                keys = _detect_keys_from_archive(p)
-                if self._cancelled:
-                    break
-                previews = _detect_previews_from_archive(p)
-                if not self._cancelled:
-                    self.entry_scanned.emit(idx, keys, previews)
+            keys, previews = [], []
+            try:
+                if p.is_dir():
+                    keys = _detect_keys(p)
+                    if self._cancelled.is_set():
+                        break
+                    previews = _detect_previews(p)
+                elif entry.is_archive:
+                    keys = _detect_keys_from_archive(p)
+                    if self._cancelled.is_set():
+                        break
+                    previews = _detect_previews_from_archive(p, entry._preview_scan_root)
+            except Exception:
+                logger.exception("导入预扫描失败: %s", p.name)
+            if not self._cancelled.is_set():
+                self.entry_scanned.emit(entry, keys, previews)
 
 
 _AGE_RATING_OPTIONS: list[tuple[str, str]] = [
@@ -295,6 +336,9 @@ class ModImportDialog(QDialog):
         self._preview_request_id = 0
         self._preview_cancelled = Event()
         self._scan_worker: _ScanWorker | None = None
+        self._scan_cache: tempfile.TemporaryDirectory[str] | None = None
+        self._import_pending = False
+        self._closed = False
         self._import_col_ratios = (0.16, 0.56, 0.18, 0.10)
         self._import_col_min_widths = (110, 280, 150, 86)
         self._import_syncing_widths = False
@@ -465,18 +509,34 @@ class ModImportDialog(QDialog):
         cancel_btn.clicked.connect(self.reject)
         bottom.addWidget(cancel_btn)
 
-        import_btn = QPushButton(t("确认导入"))
-        import_btn.setProperty("accent", True)
-        import_btn.clicked.connect(self._on_import)
-        bottom.addWidget(import_btn)
+        self._import_btn = QPushButton(t("确认导入"))
+        self._import_btn.setProperty("accent", True)
+        self._import_btn.clicked.connect(self._on_import)
+        bottom.addWidget(self._import_btn)
+        self._input_widgets = (add_file_btn, add_folder_btn, remove_btn, content_splitter)
+
+    def _create_entry(self, path: str) -> _ImportEntry:
+        """为归档分配窗口专属缓存中的独立目录，避免同名压缩包互相覆盖。"""
+        entry = _ImportEntry(path)
+        if entry.is_archive:
+            if self._scan_cache is None:
+                cache_parent = get_data_dir() / "temp" / "preview_scan"
+                cache_parent.mkdir(parents=True, exist_ok=True)
+                self._scan_cache = tempfile.TemporaryDirectory(
+                    prefix="import_", dir=cache_parent, ignore_cleanup_errors=True
+                )
+            entry._preview_scan_root = Path(self._scan_cache.name) / uuid4().hex
+        return entry
 
     def _add_entry(self, path: str, auto_select: bool = False) -> None:
         """按来源路径字符串去重后添加一项并重建表格，可自动选择新加入项。"""
+        if self._closed or self._import_pending:
+            return
         # 避免重复
         for e in self._entries:
             if e.source_path == path:
                 return
-        entry = _ImportEntry(path)
+        entry = self._create_entry(path)
         self._entries.append(entry)
         self._refresh_table()
         if auto_select:
@@ -486,11 +546,13 @@ class ModImportDialog(QDialog):
 
     def _add_entries_batch(self, paths: list[str], auto_select_last: bool = False) -> None:
         """批量添加条目，仅在全部添加完后刷新一次表格（避免 O(n²) 重建）"""
+        if self._closed or self._import_pending:
+            return
         existing = {e.source_path for e in self._entries}
         added = False
         for p in paths:
             if p not in existing:
-                entry = _ImportEntry(p)
+                entry = self._create_entry(p)
                 self._entries.append(entry)
                 existing.add(p)
                 added = True
@@ -501,19 +563,12 @@ class ModImportDialog(QDialog):
             self._update_preview_nav()
 
     def _refresh_table(self) -> None:
-        """取消旧扫描并最多等待二百毫秒，然后屏蔽重绘和信号重建各行，为未扫描项目启动新线程。"""
-        # 取消进行中的后台扫描
-        if self._scan_worker is not None:
-            self._scan_worker.cancel()
-            self._scan_worker.wait(200)
-            self._scan_worker = None
-
+        """重建列表并排队扫描新增条目，在途扫描仍保留到原生线程结束。"""
         # 禁用 UI 更新 + 信号，避免每行设置时触发重绘
         self._table.setUpdatesEnabled(False)
         self._table.blockSignals(True)
         try:
             self._table.setRowCount(len(self._entries))
-            unscanned: list[tuple[int, _ImportEntry]] = []
             for i, entry in enumerate(self._entries):
                 name_item = QTableWidgetItem(entry.name)
                 self._table.setItem(i, 0, name_item)
@@ -522,9 +577,6 @@ class ModImportDialog(QDialog):
                 src_item.setToolTip(entry.source_path)
                 src_item.setFlags(src_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
                 self._table.setItem(i, 1, src_item)
-
-                if not entry._scanned:
-                    unscanned.append((i, entry))
 
                 # 年龄分级列嵌入下拉框，避免单元格文本与委托编辑器重叠或样式不一致。
                 rating_code = _normalize_age_rating(entry.age_rating)
@@ -542,13 +594,48 @@ class ModImportDialog(QDialog):
             self._table.blockSignals(False)
             self._table.setUpdatesEnabled(True)
 
-        # 启动后台线程扫描未扫描的条目
-        if unscanned:
-            self._scan_worker = _ScanWorker(unscanned)
-            self._scan_worker.entry_scanned.connect(self._on_entry_scanned)
-            self._scan_worker.start()
-
+        self._start_scan_worker()
         self._apply_import_column_widths(force_ratio=not self._import_user_resized)
+
+    def _start_scan_worker(self) -> None:
+        """仅在前一线程已结束时启动未完成条目，限制同一窗口的归档读取并发。"""
+        if self._closed or self._scan_worker is not None:
+            return
+        unscanned = [(row, entry) for row, entry in enumerate(self._entries) if not entry._scanned]
+        if not unscanned:
+            return
+        worker = _ScanWorker(unscanned, preview_cache=self._scan_cache)
+        self._scan_worker = worker
+        manage_page_worker(self, worker)
+        worker.entry_scanned.connect(self._on_scan_entry, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(self._on_scan_finished, Qt.ConnectionType.QueuedConnection)
+        worker.finished.connect(worker.deleteLater, Qt.ConnectionType.QueuedConnection)
+        logger.debug("导入预扫描开始: %d 项", len(unscanned))
+        worker.start()
+
+    @Slot(object, list, list)
+    def _on_scan_entry(self, entry: _ImportEntry, keys: list, previews: list) -> None:
+        """按条目身份定位当前行，丢弃取消、窗口关闭或条目移除后的迟到结果。"""
+        worker = self.sender()
+        if self._closed or worker is not self._scan_worker or worker._cancelled.is_set():
+            return
+        for row, current in enumerate(self._entries):
+            if current is entry:
+                self._on_entry_scanned(row, keys, previews)
+                return
+
+    @Slot()
+    def _on_scan_finished(self) -> None:
+        """原生线程结束后交接新增扫描或待确认导入，界面线程不等待归档 IO。"""
+        if self.sender() is not self._scan_worker:
+            return
+        self._scan_worker = None
+        logger.debug("导入预扫描结束")
+        if self._closed:
+            return
+        self._start_scan_worker()
+        if self._import_pending and self._scan_worker is None:
+            self._complete_import()
 
     def _on_entry_scanned(self, row: int, keys: list, previews: list) -> None:
         """按原行索引写回扫描结果并过滤已排除图片，选中行完成时刷新预览和导航。"""
@@ -611,6 +698,8 @@ class ModImportDialog(QDialog):
 
     def _remove_selected(self) -> None:
         """仅从本次导入列表移除选中行并重置预览，无选择时提示；不删除输入文件。"""
+        if self._closed or self._import_pending:
+            return
         rows = set()
         for item in self._table.selectedItems():
             rows.add(item.row())
@@ -686,8 +775,12 @@ class ModImportDialog(QDialog):
         self._preview_label.setPixmap(pixmap)
 
     def done(self, result: int) -> None:
-        """在任何对话框结束路径使异步预览请求失效，再交由 Qt 设置结果和隐藏窗口。"""
+        """使待提交操作及预览请求失效，扫描线程保活至结束后再清理其缓存。"""
+        self._closed = True
+        self._import_pending = False
+        self._stop_scan_worker()
         self._cancel_preview_request()
+        self._cleanup_preview_scan_temp()
         super().done(result)
 
     def _apply_import_column_widths(self, force_ratio: bool = False, preferred_col: int = 1) -> None:
@@ -887,17 +980,23 @@ class ModImportDialog(QDialog):
         self._table.setItem(row, 3, prev_item)
 
     def _on_import(self) -> None:
-        """停止后台扫描并同步补齐未扫描项，收集名称、分级和预览相对路径后发送导入确认。
-
-        排除的预览通过可选附加参数传递，源文件不变；发送信号后尝试清理扫描缓存并接受对话框。
-        """
-        if not self._entries:
+        """记录一次导入请求并等待后台扫描，禁用重复操作但保留取消入口。"""
+        if not self._entries or self._closed or self._import_pending:
             return
-        # 停止后台扫描
-        self._stop_scan_worker()
-        # 对尚未扫描的条目同步扫描（用户已点击导入，不可跳过）
-        for entry in self._entries:
-            entry.ensure_scanned()
+        self._import_pending = True
+        self._import_btn.setEnabled(False)
+        for widget in self._input_widgets:
+            widget.setEnabled(False)
+        self._start_scan_worker()
+        if self._scan_worker is not None:
+            self._import_btn.setText(tr("扫描中…"))
+            return
+        self._complete_import()
+
+    def _complete_import(self) -> None:
+        """扫描线程结束后收集导入参数，仅提交一次已确认且未取消的操作。"""
+        if self._closed or not self._import_pending:
+            return
         # 以表格当前名称生成导入参数，空白名称保留条目原值。
         for i, entry in enumerate(self._entries):
             name_item = self._table.item(i, 0)
@@ -934,34 +1033,18 @@ class ModImportDialog(QDialog):
                 item += ({"excluded_previews": tuple(dict.fromkeys(e.excluded_previews))},)
             items.append(item)
         self.import_confirmed.emit(items, char_id)
-        self._cleanup_preview_scan_temp()
         self.accept()
 
     def _cleanup_preview_scan_temp(self) -> None:
-        """尝试删除应用数据目录中的整个预览扫描缓存，清理异常不阻止窗口结束。"""
-        import shutil
-
-        temp_dir = get_data_dir() / "temp" / "preview_scan"
-        if temp_dir.exists():
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except Exception:
-                pass
+        """放弃本窗口的缓存所有权，在途线程保留另一份引用直至归档读取结束。"""
+        self._scan_cache = None
 
     # 拖拽支持
 
     def _stop_scan_worker(self) -> None:
-        """请求当前扫描线程取消并最多等待五百毫秒，然后释放窗口保存的线程引用。"""
+        """只请求协作取消，保留线程引用并由 finished 信号完成回收。"""
         if self._scan_worker is not None:
             self._scan_worker.cancel()
-            self._scan_worker.wait(500)
-            self._scan_worker = None
-
-    def reject(self) -> None:
-        """请求停止扫描并尝试清理预览扫描临时目录，再经对话框结束路径取消预览请求。"""
-        self._stop_scan_worker()
-        self._cleanup_preview_scan_temp()
-        super().reject()
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         """只检查拖放是否声明 URL 格式，不在进入事件中读取实际数据，以减少系统拖放通信阻塞。"""
