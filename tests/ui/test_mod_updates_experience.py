@@ -269,6 +269,21 @@ def test_reopening_ongoing_check_restores_its_latest_progress(qtbot, temp_data_d
     service.finish()
 
 
+def test_reopening_update_center_reuses_the_cached_window(qtbot, temp_data_dir):
+    host = make_host(qtbot, Config())
+    dialogs = []
+
+    for _ in range(4):
+        host._open_mod_updates_center()
+        dialog = host._mod_updates_dialog
+        dialogs.append(dialog)
+        dialog.reject()
+
+    assert host._mod_updates_dialog is None
+    assert len({id(dialog) for dialog in dialogs}) == 1
+    assert host.findChildren(ModUpdatesDialog) == [dialogs[0]]
+
+
 def test_check_progress_remains_visible_when_partial_results_arrive(qtbot):
     dialog = ModUpdatesDialog([], enable_actions=True)
     keep_dialog(qtbot, dialog)

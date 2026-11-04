@@ -1,12 +1,15 @@
 from types import SimpleNamespace
 
 import pytest
+import shiboken6
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QLabel, QPushButton
 
 from src.models.mod import Mod, ModStatus
+from src.ui.mod_variant_controller import _VariantDialog
 from src.ui.pages.overview import OverviewPage
 from tests.ui.test_mod_variant_panel import row, state, variant
+from tests.ui.test_transient_ui_reuse import _flush
 
 pytestmark = pytest.mark.usefixtures("temp_data_dir", "native_qt_teardown")
 
@@ -138,6 +141,22 @@ def test_update_lists_references_and_delete_does_not(qtbot):
     assert service.reference_reads == references_before
     assert "Mod 默认" in dialog.description.text()
     dialog.reject()
+
+
+def test_repeated_variant_dialogs_release_closed_widgets(qapp, qtbot):
+    page, controller, _service, _ = harness(qtbot)
+    dialogs = []
+
+    for _ in range(4):
+        page._variant_panel.save_requested.emit("mod-one")
+        dialog = controller._dialog
+        dialogs.append(dialog)
+        dialog.reject()
+        _flush(qapp)
+
+    assert controller._dialog is None
+    assert not page.findChildren(_VariantDialog)
+    assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
 
 
 def test_copy_selects_new_row_without_applying_it(qtbot):

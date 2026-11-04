@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import shiboken6
 from PySide6.QtWidgets import QMessageBox, QWidget
 
 from src.models.mod import Mod
 from src.ui.dialogs.delete_progress import DeleteProgressDialog, delete_mod_with_fallback
+from src.ui.main_window import MainWindow
 from src.utils import fs
+from tests.qt_dialogs import interact
+from tests.ui.test_transient_ui_reuse import _flush
 
 
 class _FailingRecycleManager:
@@ -84,3 +88,33 @@ def test_batch_timer_pauses_during_recycle_fallback(qtbot, monkeypatch):
     assert dialog._timer.isActive()
     assert dialog._current_index == 1
     dialog._timer.stop()
+
+
+def test_batch_delete_entrypoint_releases_finished_progress_dialogs(qapp, temp_data_dir):
+    host = QWidget()
+    manager = type("Manager", (), {"get_mod": lambda _self, _mod_id: None})()
+    host._mod_manager = manager
+    host._preset_apply_worker = None
+    host._overview_page = type("Overview", (), {"_selected_mod": None})()
+    host._extract_gb_mod_id = lambda _mod: None
+    host._configured_mod_delete_method = lambda: "permanent"
+    host._on_batch_delete_finished = lambda *_args: None
+    dialogs = []
+
+    def cancel(dialog):
+        """记录真实进度窗口并通过模态取消路径结束本轮操作。"""
+        dialogs.append(dialog)
+        dialog.reject()
+
+    try:
+        for index in range(4):
+            with interact(DeleteProgressDialog, cancel):
+                MainWindow._on_overview_mod_batch_delete(host, [f"missing-{index}"])
+            _flush(qapp)
+
+        assert len(dialogs) == 4
+        assert not host.findChildren(DeleteProgressDialog)
+        assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
+    finally:
+        host.deleteLater()
+        _flush(qapp)

@@ -1,12 +1,18 @@
 import gc
 import weakref
+from types import SimpleNamespace
 
+import pytest
+import shiboken6
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QTableWidgetItem
+from PySide6.QtWidgets import QTableWidgetItem, QWidget
 
 from src.ui.dialogs.mod_import import ModImportDialog
+from src.ui.main_window import MainWindow
 from src.ui.widgets.tag_chip import TagFlowLayout
 from src.utils.i18n import t
+from tests.qt_dialogs import interact
+from tests.ui.test_transient_ui_reuse import _flush
 
 
 def test_closed_import_dialog_can_be_collected_without_callback_errors(qapp, qtbot, temp_data_dir):
@@ -26,6 +32,38 @@ def test_closed_import_dialog_can_be_collected_without_callback_errors(qapp, qtb
             assert all(reference() is None for reference in references)
 
     assert exceptions == []
+
+
+@pytest.mark.parametrize("entrypoint", ["button", "drop"])
+def test_main_window_import_entrypoints_release_closed_dialogs(qapp, temp_data_dir, entrypoint):
+    host = QWidget()
+    host._do_import_overview = lambda *_args: None
+    host._game_service = SimpleNamespace(has_active_game=lambda: True)
+    host._import_active = False
+    host._preset_apply_worker = None
+    host._overview_page = SimpleNamespace(_current_parent_id="target")
+    dialogs = []
+
+    def reject(dialog):
+        """记录真实模态窗口并通过用户取消路径退出事件循环。"""
+        dialogs.append(dialog)
+        dialog.reject()
+
+    try:
+        for _ in range(4):
+            with interact(ModImportDialog, reject):
+                if entrypoint == "button":
+                    MainWindow._on_overview_import_requested(host)
+                else:
+                    MainWindow._show_overview_import_dialog(host, [], "target")
+            _flush(qapp)
+
+        assert len(dialogs) == 4
+        assert not host.findChildren(ModImportDialog)
+        assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
+    finally:
+        host.deleteLater()
+        _flush(qapp)
 
 
 def test_blank_import_table_click_clears_selection(qapp, qtbot, temp_data_dir):

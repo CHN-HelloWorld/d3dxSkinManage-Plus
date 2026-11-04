@@ -1,10 +1,14 @@
 from types import SimpleNamespace
 
 import pytest
+import shiboken6
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import QApplication, QDialog, QMessageBox, QPlainTextEdit, QPushButton, QWidget
 
+from src.ui.dialogs.game_delete import GameDeleteDialog, GameDeleteReportDialog
 from src.ui.pages.game import GamePage
+from tests.qt_dialogs import interact
+from tests.ui.test_transient_ui_reuse import _flush
 
 
 @pytest.mark.parametrize("action", ["enter", "escape", "close"])
@@ -80,6 +84,75 @@ def test_game_page_keeps_second_confirmation_after_summary(
     QTimer.singleShot(50, choose_delete)
     assert GamePage._confirm_delete(page, SimpleNamespace(id="game_a", name="示例游戏甲")) is expected
     assert answers == [QMessageBox.StandardButton.No]
+
+
+def test_game_delete_confirmation_consumes_scan_result_then_releases_dialog(qapp, qtbot, temp_data_dir, monkeypatch):
+    from src.core.mod_manager import ModManager
+
+    info = dict(mods=0, characters=0, presets=0, deployed=0, library_size=0, library_dir="")
+    monkeypatch.setattr(ModManager, "describe_game_data", lambda *_args, **_kwargs: info)
+    host = QWidget()
+    host._svc = SimpleNamespace(get_resource_dir=lambda _game_id: "game_a")
+    dialogs = []
+
+    def confirm(dialog):
+        """等待真实扫描线程发布摘要，再点击明确删除按钮返回结果。"""
+        dialogs.append(dialog)
+        qtbot.waitUntil(lambda: dialog.findChild(QPushButton, "confirmGameDelete") is not None)
+        dialog.findChild(QPushButton, "confirmGameDelete").click()
+
+    try:
+        for _ in range(4):
+            with interact(GameDeleteDialog, confirm):
+                assert GamePage._confirm_delete(host, SimpleNamespace(id="game_a", name="示例游戏甲"))
+            _flush(qapp)
+
+        assert not host.findChildren(GameDeleteDialog)
+        assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
+    finally:
+        host.deleteLater()
+        _flush(qapp)
+
+
+def test_game_delete_receipt_is_released_after_user_closes_it(qapp, temp_data_dir, monkeypatch):
+    from src.core.mod_manager import ModManager
+
+    monkeypatch.setattr(
+        ModManager,
+        "purge_game_data",
+        lambda *_args, **_kwargs: {"errors": ["locked"], "deployed_removed": 0, "presets": 0},
+    )
+    host = QWidget()
+    game = SimpleNamespace(id="game_a", name="示例游戏甲")
+    host._selected_id = ""
+    host._svc = SimpleNamespace(
+        get_game=lambda _game_id: game,
+        current_game_id="other",
+        get_resource_dir=lambda _game_id: "game_a",
+        delete_game=lambda _game_id: None,
+    )
+    host._confirm_delete = lambda _game: True
+    host.reload = lambda: None
+    host.games_changed = SimpleNamespace(emit=lambda: None)
+    host.game_changed = SimpleNamespace(emit=lambda _game_id: None)
+    dialogs = []
+
+    def close(dialog):
+        """记录真实清理报告并通过关闭路径结束模态循环。"""
+        dialogs.append(dialog)
+        dialog.reject()
+
+    try:
+        for _ in range(4):
+            with interact(GameDeleteReportDialog, close):
+                GamePage._on_delete(host, "game_a")
+            _flush(qapp)
+
+        assert not host.findChildren(GameDeleteReportDialog)
+        assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
+    finally:
+        host.deleteLater()
+        _flush(qapp)
 
 
 def test_cleanup_receipt_keeps_all_remaining_paths_copyable(qtbot):

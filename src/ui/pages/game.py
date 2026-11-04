@@ -1174,7 +1174,11 @@ class GamePage(QWidget):
         if errors:
             from src.ui.dialogs.game_delete import GameDeleteReportDialog
 
-            GameDeleteReportDialog(g.name, stats, self).exec()
+            report = GameDeleteReportDialog(g.name, stats, self)
+            try:
+                report.exec()
+            finally:
+                report.deleteLater()
 
     def _confirm_delete(self, g: GameConfig) -> bool:
         """统一确认游戏删除范围，明确展示配置与数据的处理后果后再执行。"""
@@ -1187,9 +1191,13 @@ class GamePage(QWidget):
         dialog = GameDeleteDialog(
             g.name, None, self, scan=partial(manager.describe_game_data, g.id, self._svc.get_resource_dir(g.id))
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted:
+        try:
+            accepted = dialog.exec() == QDialog.DialogCode.Accepted
+            info = dict(dialog.info or {}) if accepted else {}
+        finally:
+            dialog.deleteLater()
+        if not accepted:
             return False
-        info = dialog.info
         lib = info.get("library_dir") or ""
         has_data = bool(lib) or info.get("mods", 0) or info.get("deployed", 0)
         if not has_data:

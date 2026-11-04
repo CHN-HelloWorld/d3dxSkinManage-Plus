@@ -1798,12 +1798,17 @@ class GameBananaStorePage(QWidget):
                 category_name=category_name,
                 parent=self.window(),
             )
-            if dlg.exec() != dlg.DialogCode.Accepted:
+            try:
+                accepted = dlg.exec() == dlg.DialogCode.Accepted
+                target_id = dlg.selected_character_id() if accepted else None
+                remember_name_en = dlg.remember_name_en() if accepted else False
+            finally:
+                dlg.deleteLater()
+            if not accepted:
                 return
-            target_id = dlg.selected_character_id()
             if not target_id:
                 return
-            if dlg.remember_name_en():
+            if remember_name_en:
                 self._backfill_character_name_en(mm, target_id, category_name)
         # 有详情预览时使用首图，并关闭归档自动预览扫描，避免将纹理文件识别为展示图。
         # 详情无预览时才使用归档扫描；未匹配到图片时保留为空。

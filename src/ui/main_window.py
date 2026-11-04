@@ -1433,9 +1433,12 @@ class MainWindow(QMainWindow):
                 local_original_name=original,
                 parent=getattr(self, "_mod_updates_dialog", None) or self,
             )
-            if not picker.exec():
-                return
-            chosen = picker.selected_file()
+            try:
+                if not picker.exec():
+                    return
+                chosen = picker.selected_file()
+            finally:
+                picker.deleteLater()
         self._start_mod_update(local_mod_id, chosen_file=chosen)
 
     def _start_mod_update(self, local_mod_id: str, *, chosen_file=None) -> None:
@@ -1474,9 +1477,12 @@ class MainWindow(QMainWindow):
                 mod = self._mod_manager.get_mod(info.local_mod_id)
                 original_names[info.local_mod_id] = mod.folder_name if mod is not None else ""
             picker = ModUpdateBatchFileDialog(infos, local_original_names=original_names, parent=dlg or self)
-            if not picker.exec():
-                return
-            chosen = picker.selected_files()
+            try:
+                if not picker.exec():
+                    return
+                chosen = picker.selected_files()
+            finally:
+                picker.deleteLater()
         # 选择文件期间可能刷新或切换游戏，不能将旧选择用于新版本，也不能启动不完整批次。
         if game_id != self._mod_manager.current_game_id:
             return
@@ -3027,7 +3033,10 @@ class MainWindow(QMainWindow):
             lambda count: self._on_batch_delete_finished(count, selected_mod_id, mod_ids, gb_mod_ids)
         )
         dialog.start_deletion()
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _on_batch_delete_finished(
         self,
@@ -3620,7 +3629,10 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dialog.import_confirmed.connect(self._do_import_overview)
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _do_import_overview(self, items: list, node_id: str) -> None:
         """从 OverviewPage 启动通用导入流程。
@@ -3642,7 +3654,10 @@ class MainWindow(QMainWindow):
             parent=self,
         )
         dialog.import_confirmed.connect(self._do_import_overview)
-        dialog.exec()
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     @_invalidates_library_probe
     def _on_items_move(self, cat_ids: list, mod_ids: list, target_parent: str) -> None:

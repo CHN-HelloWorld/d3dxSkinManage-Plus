@@ -2,12 +2,16 @@ import subprocess
 import sys
 
 import pytest
+import shiboken6
 from PySide6.QtCore import Qt
 from PySide6.QtTest import QSignalSpy
-from PySide6.QtWidgets import QLabel, QListWidget, QPushButton, QTextBrowser
+from PySide6.QtWidgets import QLabel, QListWidget, QPushButton, QTextBrowser, QWidget
 
 from src.services.app_update.checker import AppUpdateInfo
 from src.ui.dialogs.app_update_dialog import UpdatePromptDialog
+from src.ui.dialogs.app_update_widgets import UpdateNoticeDialog
+from tests.qt_dialogs import interact
+from tests.ui.test_transient_ui_reuse import _flush
 
 pytestmark = pytest.mark.usefixtures("temp_data_dir")
 
@@ -193,3 +197,30 @@ def test_download_speed_is_visible_even_when_total_size_is_unknown(qtbot):
     assert "2.5 MB/s" in dialog.findChild(QLabel, "downloadSpeed").text()
     dialog.setDownloadSpeed(0)
     assert "0 B/s" in dialog.findChild(QLabel, "downloadSpeed").text()
+
+
+@pytest.mark.parametrize("kind", ["info", "error"])
+def test_update_notices_release_closed_dialogs(qapp, temp_data_dir, kind):
+    from src.services.app_update.manager import AppUpdateManager
+
+    host = QWidget()
+    manager = AppUpdateManager(host)
+    dialogs = []
+
+    def close(dialog):
+        """记录真实更新通知并通过关闭路径退出模态循环。"""
+        dialogs.append(dialog)
+        dialog.reject()
+
+    try:
+        for _ in range(4):
+            with interact(UpdateNoticeDialog, close):
+                getattr(manager, f"_{kind}_box")("标题", "正文")
+            _flush(qapp)
+
+        assert not host.findChildren(UpdateNoticeDialog)
+        assert all(not shiboken6.isValid(dialog) for dialog in dialogs)
+    finally:
+        manager.deleteLater()
+        host.deleteLater()
+        _flush(qapp)

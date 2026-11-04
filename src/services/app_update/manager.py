@@ -546,8 +546,16 @@ class AppUpdateManager(QObject):
 
     def _info_box(self, title: str, text: str) -> None:
         """以主窗口为父级同步显示更新信息通知。"""
-        UpdateNoticeDialog(title, text, self._win).exec()
+        dialog = UpdateNoticeDialog(title, text, self._win)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
 
     def _error_box(self, title: str, text: str) -> None:
         """以错误样式同步显示更新失败通知，关闭后返回调用流程。"""
-        UpdateNoticeDialog(title, text, self._win, error=True).exec()
+        dialog = UpdateNoticeDialog(title, text, self._win, error=True)
+        try:
+            dialog.exec()
+        finally:
+            dialog.deleteLater()
