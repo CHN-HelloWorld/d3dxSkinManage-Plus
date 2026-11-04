@@ -4414,6 +4414,28 @@ class ModManager:
         """
         return self._storage.get_deploy_dir() is not None
 
+    def get_mod_deployment_path(self, mod: Mod) -> Path | None:
+        """核验当前游戏中已登记的部署副本，包括禁用后保留的目录。
+
+        只读取当前副本的身份标记；改名后的路径由现有后台对账更新，预览不扫描部署根目录。
+        """
+        root = self._storage.get_deploy_dir()
+        if root is None or mod.game_id != self.current_game_id or not mod.deployed_path:
+            return None
+        path = Path(fs.normal_path(mod.deployed_path))
+        name = path.name.casefold()
+        if name.startswith(".") or name.endswith(".partial") or name.startswith("disabled_.update_"):
+            return None
+        try:
+            if self._storage._path_key(path.parent.resolve()) != self._storage._path_key(root.resolve()):
+                return None
+            if not fs.is_dir(path):
+                return None
+            identity = read_deployment_identity(path)
+        except (OSError, ValueError):
+            return None
+        return path if identity is not None and identity["mod_id"] == mod.mod_id else None
+
     def describe_game_data(self, game_id: str, resource_dir: str, *, cancelled=None, progress=None) -> dict:
         """列出「删除该游戏」会一并抹掉的东西（供确认对话框把后果讲清楚）。
 

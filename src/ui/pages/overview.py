@@ -1952,7 +1952,11 @@ class OverviewPage(QWidget):
         self._panel_rating_label.setVisible(False)
         title_row.addWidget(self._panel_rating_label)
         header_layout.addLayout(title_row)
-        status_row = QHBoxLayout()
+        status = QWidget()
+        status.setObjectName("modPreviewStatus")
+        status.setFixedHeight(28)
+        status_row = QHBoxLayout(status)
+        status_row.setContentsMargins(0, 0, 0, 0)
         status_row.setSpacing(7)
         self._panel_status_label = QLabel()
         status_row.addWidget(self._panel_status_label)
@@ -1961,7 +1965,17 @@ class OverviewPage(QWidget):
         self._panel_variant_label.setTextFormat(Qt.TextFormat.PlainText)
         self._panel_variant_label.hide()
         status_row.addWidget(self._panel_variant_label, 1)
-        header_layout.addLayout(status_row)
+        self._panel_deploy_btn = QPushButton(tr("查看部署"))
+        self._panel_deploy_btn.setObjectName("previewDeploymentButton")
+        self._panel_deploy_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._panel_deploy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._panel_deploy_btn.setFixedHeight(26)
+        icons.apply_icon(self._panel_deploy_btn, "actions/folder-open", "accent")
+        self._panel_deploy_btn.setIconSize(QSize(16, 16))
+        self._panel_deploy_btn.clicked.connect(self._on_panel_view_deployment)
+        self._panel_deploy_btn.hide()
+        status_row.addWidget(self._panel_deploy_btn)
+        header_layout.addWidget(status)
         self._panel_deploy_hint = QLabel()
         self._panel_deploy_hint.setTextFormat(Qt.TextFormat.PlainText)
         self._panel_deploy_hint.setWordWrap(True)
@@ -2148,7 +2162,7 @@ class OverviewPage(QWidget):
         self._panel_delete_btn.clicked.connect(self._on_panel_delete)
         self._panel_btn_layout.addWidget(self._panel_delete_btn)
         for button in (self._panel_toggle_btn, self._panel_edit_btn, self._panel_open_btn, self._panel_delete_btn):
-            button.setStyleSheet("font-size: 12px; padding: 5px 8px; min-width: 0;")
+            button.setStyleSheet("font-size: 12px; padding: 5px 4px; min-width: 0;")
 
         # 在线查找按钮（仅类别模式可见，受 Config 开关控制）
         self._panel_gb_search_btn = QPushButton(tr("在线查找"))
@@ -3241,6 +3255,7 @@ class OverviewPage(QWidget):
 
     def _refresh_panel_mod_status(self) -> None:
         """选择另一行再返回、刷新或换肤时，详情也能恢复当前部署状态。"""
+        self._refresh_panel_deployment_button()
         mod = self._selected_mod
         if not mod or self._panel_mode != "mod":
             self._panel_deploy_hint.hide()
@@ -3271,6 +3286,17 @@ class OverviewPage(QWidget):
             self._panel_deploy_hint.setStyleSheet(hint_style)
         self._panel_deploy_hint.setVisible(bool(hint))
         self._variant_panel.set_busy(busy)
+
+    def _refresh_panel_deployment_button(self) -> Path | None:
+        """按当前选择核验部署位置，同步轻量入口并返回本次有效路径。"""
+        mod = self._selected_mod
+        resolve = getattr(self._mod_manager, "get_mod_deployment_path", None)
+        path = None
+        if self._panel_mode == "mod" and mod and mod.mod_id not in self._deploying_frac and resolve is not None:
+            path = resolve(mod)
+        self._panel_deploy_btn.setVisible(path is not None)
+        self._panel_deploy_btn.setToolTip(tr("在资源管理器中定位部署目录：\n{path}", path=path) if path else "")
+        return path
 
     def _attach_deploy_overlay(self, mod_id: str) -> None:
         """为可见 Mod 卡片创建或复用部署进度覆盖层。
@@ -3435,7 +3461,7 @@ class OverviewPage(QWidget):
         """统一设置详情标签页、字段标题和空状态样式，保持各滚动区域背景透明。"""
         ink = theme.surface_text_color("text.secondary")
         self._panel_details.setStyleSheet(
-            "#modPreviewDetails, #modPreviewHeader, #modPreviewTabs,"
+            "#modPreviewDetails, #modPreviewHeader, #modPreviewStatus, #modPreviewTabs,"
             " #modPreviewTabs QTabBar, #modPreviewTabs QStackedWidget,"
             " #modPreviewTabs QScrollArea, #modPreviewTabs QScrollArea > QWidget { background: transparent; }"
             "#modPreviewTabs::pane { border: none; background: transparent; }"
@@ -3445,6 +3471,11 @@ class OverviewPage(QWidget):
             f" border-top: 1px solid {theme.color('stroke.divider')}; font-size: 12px;"
             " font-weight: 600; padding-top: 10px; margin-top: 4px; background: transparent; }"
             "#modPreviewDetails QLabel { background: transparent; }"
+            "#previewDeploymentButton { background: transparent; border: 1px solid transparent;"
+            f" color: {theme.color('accent')}; border-radius: 4px; font-size: 12px; padding: 3px 5px; min-width: 0; }}"
+            f"#previewDeploymentButton:hover {{ background: {theme.color('bg.hover')}; }}"
+            f"#previewDeploymentButton:pressed {{ background: {theme.color('bg.pressed')}; }}"
+            f"#previewDeploymentButton:focus {{ border-color: {theme.color('accent')}; }}"
         )
         self._panel_keys_host.setStyleSheet("background: transparent;")
         self._panel_source_label.setStyleSheet(f"color: {ink}; font-size: 11px;")
@@ -4601,6 +4632,7 @@ class OverviewPage(QWidget):
     def _show_category_panel(self, cat: dict) -> None:
         """显示右侧类别预览面板。"""
         self._panel_mode = "category"
+        self._refresh_panel_deployment_button()
         self._clear_variant_context()
         self._detail_tabs.setCurrentIndex(0)
         self._detail_tabs.show()
@@ -5167,6 +5199,7 @@ class OverviewPage(QWidget):
     def _hide_panel(self) -> None:
         """取消选中时显示预览栏空状态；用户可通过分割线手动收起。"""
         self._panel_mode = "none"
+        self._refresh_panel_deployment_button()
         self._clear_variant_context()
         self._panel_deploy_hint.hide()
         self._panel_status_label.setToolTip("")
@@ -5200,6 +5233,7 @@ class OverviewPage(QWidget):
     def _show_multi_select_panel(self) -> None:
         """多选时显示汇总信息，不显示具体预览"""
         self._panel_mode = "multi"
+        self._refresh_panel_deployment_button()
         self._clear_variant_context()
         self._panel_deploy_hint.hide()
         self._panel_tags.hide()
@@ -5251,6 +5285,24 @@ class OverviewPage(QWidget):
             self._on_edit_character(self._selected_category.get("id", ""))
         elif self._panel_mode == "mod" and self._selected_mod:
             self.mod_edit_requested.emit(self._selected_mod.mod_id)
+
+    def _on_panel_view_deployment(self) -> None:
+        """点击时重新核验部署身份，避免在目录被移除或替换后打开旧位置。"""
+        import os
+        import subprocess
+
+        path = self._refresh_panel_deployment_button()
+        if path is None:
+            self._status_label.setText(tr("无法定位该 Mod 的部署目录，请刷新后重试。"))
+            return
+        try:
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", str(path)])
+            elif not QDesktopServices.openUrl(QUrl.fromLocalFile(str(path))):
+                self._status_label.setText(tr("无法打开部署目录：{path}", path=path))
+        except OSError as error:
+            logger.warning("打开部署目录失败 (%s): %s", path, error)
+            self._status_label.setText(tr("无法打开部署目录：{path}", path=path))
 
     def _on_panel_open_folder(self) -> None:
         """按详情模式定位 Mod 源项或打开分类目录，解析分类路径时不创建缺失目录。"""
