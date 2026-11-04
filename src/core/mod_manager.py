@@ -3645,6 +3645,7 @@ class ModManager:
                 content_hash=item["content_hash"],
                 source_version=item["source_version"],
                 cache_index=cache_index,
+                ignore_selection=True,
             )
             or []
         )
@@ -4216,6 +4217,7 @@ class ModManager:
         content_hash: str | None = None,
         source_version: tuple | None = None,
         cache_index: PreviewCacheIndex | None = None,
+        ignore_selection: bool = False,
     ) -> list[str]:
         """收集本体原始预览和容器补充预览。
 
@@ -4224,18 +4226,22 @@ class ModManager:
         """
         path = Path(folder_path)
         results: list[str] = []
+        try:
+            sidecar = read_sidecar(path) or {}
+        except InvalidManagedMetadataError:
+            sidecar = {}
+        local = sidecar.get("local") or {}
+        # 用户选择由 restore_preview_references 恢复，普通刷新不补入其他资源图片。
+        if local.get("preview_selection_locked") is True and not ignore_selection:
+            return []
 
         # ① 本体自带原始预览图
         if fs.is_file(path) and is_resident_archive(path):
             # 压缩档（zip/7z/rar）：从包内查找并提取到中心 cache（list_contents/extract_files 三格式通用）。
             ext_set = {e.lower() for e in IMAGE_EXTENSIONS} - {".dds"}
-            try:
-                sidecar = read_sidecar(path) or {}
-            except InvalidManagedMetadataError:
-                sidecar = {}
-            excluded = {
-                os.path.normcase(name) for name in (sidecar.get("local") or {}).get("excluded_archive_previews", [])
-            }
+            excluded = {os.path.normcase(name) for name in local.get("excluded_archive_previews", [])}
+            if ignore_selection:
+                excluded.clear()
             cache_id = mod_id or path.stem
             cache_dir = get_data_dir() / (resource_dir or self._res_dir()) / "preview_cache" / cache_id
             # 重建和导入提供当前内容指纹及资源观察。
@@ -4265,6 +4271,8 @@ class ModManager:
             cached = self._cached_archive_previews(
                 mod_id, resource_dir, ext_set, content_hash=content_hash, cache_index=cache_index, excluded=excluded
             )
+            if ignore_selection and (local.get("preview_selection_locked") or local.get("excluded_archive_previews")):
+                cached = []
             if cached:
                 if capture_source_version(path) == source_version:
                     results.extend(cached)

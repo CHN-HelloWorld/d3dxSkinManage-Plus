@@ -116,7 +116,7 @@ class IntakePlanningSnapshot:
 
 @dataclass(frozen=True)
 class IntakeRequest:
-    """描述导入来源及可选原始文件名、目标和元数据，并携带来源版本和去重依据。"""
+    """描述导入来源及目标、元数据和版本依据；excluded_previews 仅排除预览用途。"""
 
     source_path: Path
     game_id: str
@@ -603,17 +603,27 @@ class ModIntakeService:
             if request.node_id:
                 preview_roots.append(("node", body.parent.parent))
             references = []
+            kept_images = []
             for path in mod.preview_images:
                 for scope, root in preview_roots:
                     try:
                         relative = Path(path).relative_to(root).as_posix()
                     except ValueError:
                         continue
-                    references.append({"scope": scope, "path": relative})
+                    reference = {"scope": scope, "path": relative}
+                    if reference in prepared_source.excluded_preview_references:
+                        if scope == "preview_cache":
+                            fs.unlink(path, missing_ok=True)
+                    else:
+                        references.append(reference)
+                        kept_images.append(path)
                     break
                 else:
                     raise IntakeError(f"preview has no local logical location: {path}")
             local["preview_references"] = references
+            mod.preview_images = kept_images
+            if request.excluded_previews:
+                local["preview_selection_locked"] = True
             sidecar = build_local_manifest(local_meta_from_mod(mod), local)
             if not write_sidecar(mod.path, sidecar):
                 raise IntakeError("failed to write current sidecar")

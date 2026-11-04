@@ -51,11 +51,12 @@ def test_missing_source_blocks_preview_deletion_and_reports_failure(mm, tmp_path
     assert any(event == "operation_failed" for event, _ in events)
 
 
-def test_zip_deletes_only_selected_exact_members_and_updates_source_identity(mm, tmp_path):
+def test_preview_removal_keeps_zip_members_and_source_identity(mm, tmp_path):
     from src.core.operation_preflight import confirm_source
     from src.models.mod import Mod
 
     mod = imported(mm, tmp_path)
+    original_bytes = Path(mod.path).read_bytes()
     selected = mod.preview_images[:2]
     assert delete(mm, mod.mod_id, selected)
     current = mm.get_mod(mod.mod_id)
@@ -65,9 +66,10 @@ def test_zip_deletes_only_selected_exact_members_and_updates_source_identity(mm,
     cache = Path(mm._index.paths.preview_roots[mod.game_id]) / mod.mod_id
     with zipfile.ZipFile(mod.path) as source:
         for path in selected:
-            assert Path(path).relative_to(cache).as_posix() not in source.namelist()
+            assert Path(path).relative_to(cache).as_posix() in source.namelist()
         assert Path(current.preview_images[0]).relative_to(cache).as_posix() in source.namelist()
-    assert current.content_hash == Mod.compute_sha1(mod.path) != mod.content_hash
+    assert current.content_hash == Mod.compute_sha1(mod.path) == mod.content_hash
+    assert Path(mod.path).read_bytes() == original_bytes
     assert confirm_source(current.path, current.mod_id, current.content_hash)
     info = json.loads((Path(mod.path).parent / ".d3dxmeta/info.json").read_text(encoding="utf8"))
     assert len(info["local"]["preview_references"]) == 1
@@ -95,7 +97,7 @@ def test_container_manual_preview_does_not_guess_zip_member_by_filename(mm, tmp_
     assert mm.update_mod(mod)
     source = Path(mod.path).read_bytes()
     assert delete(mm, mod.mod_id, [str(local)])
-    assert not local.exists()
+    assert local.read_bytes() == b"first image"
     assert Path(mod.path).read_bytes() == source
 
 
@@ -121,7 +123,7 @@ def test_7z_preview_deletion_keeps_archive_and_identity_unchanged(mm, tmp_path):
 
 @pytest.mark.parametrize("archive_format", ["7z", "zip"])
 @pytest.mark.parametrize("delete_all", [False, True])
-def test_deleted_archive_previews_stay_deleted_after_refresh_and_rebuild(
+def test_removed_archive_previews_stay_hidden_until_rebuild(
     mm,
     tmp_path,
     archive_format,
@@ -141,18 +143,17 @@ def test_deleted_archive_previews_stay_deleted_after_refresh_and_rebuild(
         assert mm.get_mod(mod.mod_id).preview_images == remaining
         assert all(not Path(path).exists() for path in mod.preview_images if path not in remaining)
 
-    # 后续元数据保存和重建应保留用户删除预览的结果。
+    # 元数据保存保留选择，显式重建重新发现包内图片。
     current = mm.get_mod(mod.mod_id)
     current.info.description = "Edited after deleting previews"
     assert mm.update_mod(current)
     mm.rebuild_index_from_filesystem(mod.game_id)
-    assert mm.get_mod(mod.mod_id).preview_images == []
-    assert all(not Path(path).exists() for path in mod.preview_images)
+    assert len(mm.get_mod(mod.mod_id).preview_images) == 3
     assert Path(mod.path).read_bytes() == source
 
 
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_deleted_preview_stays_excluded_when_remaining_cache_is_regenerated(mm, tmp_path, reuse_cache):
+def test_missing_cache_does_not_rediscover_removed_previews(mm, tmp_path, reuse_cache):
     from src.core.preview_cache_index import build_preview_cache_index
 
     mod = imported(mm, tmp_path, archive_format="7z")
@@ -165,7 +166,7 @@ def test_deleted_preview_stays_excluded_when_remaining_cache_is_regenerated(mm, 
         Path(path).unlink()
 
     found = mm._find_previews(mod.path, mod_id=mod.mod_id, cache_index=build_preview_cache_index(cache.parent))
-    assert sorted(Path(path).read_bytes() for path in found) == [b"second image", b"third image"]
+    assert found == []
     assert not Path(deleted).exists()
     # 陈旧缓存不得使已删除预览重新出现。
     Path(deleted).parent.mkdir(parents=True, exist_ok=True)
@@ -192,20 +193,27 @@ def test_entire_batch_is_validated_before_any_preview_is_deleted(mm, tmp_path, i
     assert snapshots(mm, mod) == before
 
 
-@pytest.mark.parametrize("where", ["archive", "metadata", "database"])
+@pytest.mark.parametrize("where", ["cache", "metadata", "database"])
 def test_failed_preview_transaction_restores_files_marker_metadata_and_record(mm, tmp_path, monkeypatch, where):
     mod = imported(mm, tmp_path)
     before = snapshots(mm, mod)
-    if where == "archive":
-        monkeypatch.setattr("src.services.archive.ArchiveService.remove_files_from_zip", lambda *args, **kwargs: False)
-    elif where == "database":
+    if where == "database":
         monkeypatch.setattr(mm._index, "update_mod", lambda *args, **kwargs: False)
     else:
         metadata = Path(mod.path).parent / ".d3dxmeta/info.json"
         replace = os.replace
 
         def fail_metadata_install(source, target):
-            if Path(target).name == metadata.name and Path(source).name.startswith(".preview-edit-"):
+            """分别模拟缓存移动失败或元数据安装失败。"""
+            from src.utils import fs
+
+            if where == "cache" and Path(fs.normal_path(source)) == Path(mod.preview_images[1]):
+                raise PermissionError("cache move denied")
+            if (
+                where == "metadata"
+                and Path(target).name == metadata.name
+                and Path(source).name.startswith(".preview-edit-")
+            ):
                 raise PermissionError("metadata install denied")
             return replace(source, target)
 
@@ -214,19 +222,20 @@ def test_failed_preview_transaction_restores_files_marker_metadata_and_record(mm
     assert snapshots(mm, mod) == before
 
 
-def test_source_replaced_during_zip_preparation_is_preserved_and_operation_fails(mm, tmp_path, monkeypatch):
-    from src.services.archive import ArchiveService
+def test_source_replaced_during_metadata_staging_is_preserved_and_operation_fails(mm, tmp_path, monkeypatch):
+    from src.core import preview_operations
 
     mod = imported(mm, tmp_path)
     before_images = {p: Path(p).read_bytes() for p in mod.preview_images}
-    original = ArchiveService.remove_files_from_zip
+    original = preview_operations._stage
 
-    def replace_source(service, archive, members):
-        result = original(service, archive, members)
+    def replace_source(*args, **kwargs):
+        """在暂存元数据后模拟外部替换本体，验证事务不会覆盖该外部操作。"""
+        result = original(*args, **kwargs)
         Path(mod.path).write_bytes(b"external replacement")
         return result
 
-    monkeypatch.setattr(ArchiveService, "remove_files_from_zip", replace_source)
+    monkeypatch.setattr(preview_operations, "_stage", replace_source)
     assert not delete(mm, mod.mod_id, mod.preview_images)
     assert Path(mod.path).read_bytes() == b"external replacement"
     assert {p: Path(p).read_bytes() for p in mod.preview_images} == before_images
@@ -282,22 +291,16 @@ def test_local_only_deletion_rejects_replacement_with_identical_source_bytes(mm,
     assert snapshots(mm, mod) == before
 
 
-def test_zip_preparation_runs_in_worker_and_database_publication_stays_on_owner(mm, tmp_path, monkeypatch):
+def test_source_checks_run_in_worker_and_database_publication_stays_on_owner(mm, tmp_path, monkeypatch):
     import threading
     from concurrent.futures import ThreadPoolExecutor
 
     from src.models.mod import Mod
-    from src.services.archive import ArchiveService
 
     mod = imported(mm, tmp_path)
     owner = threading.get_ident()
-    remove = ArchiveService.remove_files_from_zip
     compute = Mod.compute_sha1
     update = mm._index.update_mod
-
-    def remove_in_worker(service, source, members):
-        assert threading.get_ident() != owner
-        return remove(service, source, members)
 
     def hash_in_worker(source):
         assert threading.get_ident() != owner
@@ -307,7 +310,6 @@ def test_zip_preparation_runs_in_worker_and_database_publication_stays_on_owner(
         assert threading.get_ident() == owner
         return update(*args, **kwargs)
 
-    monkeypatch.setattr(ArchiveService, "remove_files_from_zip", remove_in_worker)
     monkeypatch.setattr(Mod, "compute_sha1", staticmethod(hash_in_worker))
     monkeypatch.setattr(mm._index, "update_mod", update_on_owner)
     with ThreadPoolExecutor(max_workers=1) as executor:
@@ -315,3 +317,58 @@ def test_zip_preparation_runs_in_worker_and_database_publication_stays_on_owner(
         assert delete(mm, mod.mod_id, mod.preview_images[:1])
     assert not Path(mod.preview_images[0]).exists()
     assert mm.get_mod(mod.mod_id).preview_images == mod.preview_images[1:]
+
+
+@pytest.mark.parametrize("rebuild_result", ["cancel", "commit", "fail"])
+def test_removed_selection_survives_restart_and_only_committed_rebuild_restores_it(
+    mm, tmp_path, monkeypatch, rebuild_result
+):
+    """六张图片覆盖候选上限，重启和刷新不能从未显示的资源中补入新预览。"""
+    from src.core.mod_manager import ModManager
+    from src.core.rebuild_session import RebuildSession
+    from src.ui.library_metadata import capture_request, publish_metadata, read_metadata
+
+    archive = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive, "w") as output:
+        output.writestr("mod.ini", "[Constants]\nx=2\n")
+        for number in range(6):
+            output.writestr(f"{number}.png", f"image {number}")
+    mod = mm.import_mod(str(archive), node_id=mm.add_character("Selection").id)
+    before = Path(mod.path).read_bytes()
+    assert len(mod.preview_images) == 5
+    assert delete(mm, mod.mod_id, mod.preview_images)
+    restarted = ModManager()
+    restarted.set_game(mod.game_id)
+    try:
+        publish_metadata(restarted, read_metadata(capture_request(restarted, mod.mod_id), restarted._find_previews))
+        assert restarted.get_mod(mod.mod_id).preview_images == []
+        session = RebuildSession(restarted, mod.game_id)
+        try:
+            session.prepare()
+            while not session.stage_batch():
+                pass
+            session.validate()
+            if rebuild_result == "commit":
+                session.commit()
+            elif rebuild_result == "fail":
+                transaction = restarted._index.transaction
+
+                @contextmanager
+                def fail_commit():
+                    """在元数据写入后模拟索引提交失败，检查选择记录回滚。"""
+                    with transaction():
+                        yield
+                        raise OSError("commit failed")
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(restarted._index, "transaction", fail_commit)
+                    with pytest.raises(OSError, match="commit failed"):
+                        session.commit()
+        finally:
+            session.close()
+        publish_metadata(restarted, read_metadata(capture_request(restarted, mod.mod_id), restarted._find_previews))
+        assert len(restarted.get_mod(mod.mod_id).preview_images) == (5 if rebuild_result == "commit" else 0)
+        assert Path(mod.path).read_bytes() == before
+    finally:
+        restarted.stop_ini_sync()
+        restarted._index.close()

@@ -42,13 +42,15 @@ def open_import(qtbot, mm, source):
 
 
 @pytest.mark.parametrize("kind", ["folder", "zip", "7z"])
+@pytest.mark.parametrize("target_format", ["zip", "7z"])
 @pytest.mark.parametrize("delete_all", [False, True])
-def test_import_excludes_selected_images_from_copy_without_changing_source(
+def test_import_removes_previews_without_excluding_resource_files(
     qtbot,
     mm,
     tmp_path,
     monkeypatch,
     kind,
+    target_format,
     delete_all,
 ):
     source = source_with_previews(mm, tmp_path, kind)
@@ -67,16 +69,17 @@ def test_import_excludes_selected_images_from_copy_without_changing_source(
     emitted = []
     dialog.import_confirmed.connect(lambda items, node_id: emitted.append(items))
     dialog._on_import()
+    emitted[0][0][4].update(target_format=target_format, strict_format=True)
     progress = ImportProgressDialog(emitted[0], node.id, mm)
     qtbot.addWidget(progress)
     (request,) = progress._plan_intake_requests()
     mod = progress._intake_service.commit(progress._intake_service.prepare(request))
 
     names = set(mm._archive.list_contents(mod.path))
-    assert names == ({"Skin/mod.ini"} if delete_all else {"Skin/mod.ini", "Skin/b/preview.png"})
+    assert names == {"Skin/mod.ini", "Skin/a/preview.png", "Skin/b/preview.png"}
     assert len(mod.preview_images) == (0 if delete_all else 1)
     mm.rebuild_index_from_filesystem(mod.game_id)
-    assert len(mm.get_mod(mod.mod_id).preview_images) == (0 if delete_all else 1)
+    assert len(mm.get_mod(mod.mod_id).preview_images) == 2
     assert source_bytes(source) == before
 
 

@@ -118,8 +118,8 @@ def validate_preview_references(references):
     return references
 
 
-def restore_preview_references(sidecar, discovered, *, container, preview_cache, node=None):
-    """按引用顺序恢复已保存图片，再追加新发现的图片。"""
+def restore_preview_references(sidecar, discovered, *, container, preview_cache, node=None, ignore_selection=False):
+    """恢复已保存图片；用户调整后仅使用保存的列表，显式重建时重新接纳扫描结果。"""
     roots = {"container": Path(container), "preview_cache": Path(preview_cache)}
     if node is not None:
         roots["node"] = Path(node)
@@ -131,6 +131,8 @@ def restore_preview_references(sidecar, discovered, *, container, preview_cache,
         candidate = roots[reference["scope"]] / reference["path"]
         if fs.is_file(candidate):
             restored.append(str(candidate))
+    if not ignore_selection and ((sidecar or {}).get("local") or {}).get("preview_selection_locked") is True:
+        return list(dict.fromkeys(restored))
     return list(dict.fromkeys((*restored, *(str(path) for path in discovered))))
 
 

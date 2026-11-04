@@ -17,8 +17,10 @@ from src.core.mod_package import (
     InvalidManagedMetadataError,
     InvalidVariantPackageError,
     read_container_marker,
+    read_envelope,
     read_sidecar,
     resolve_ini_overrides_dir,
+    resolve_preview_paths,
     strip_envelope,
     take_envelope,
 )
@@ -243,6 +245,7 @@ class PreparedImportSource:
     share_variants: tuple[ModVariant, ...] = ()
     staged_body_previews: list[tuple[str, Path]] = field(default_factory=list)
     staged_previews_complete: bool = False
+    excluded_preview_references: list[dict[str, str]] = field(default_factory=list)
     content_version: tuple | None = None
     staged_ini_overrides: Path | None = None
     metadata_staged: bool = False
@@ -505,44 +508,28 @@ def _take_envelope_or_degrade(
     candidate_dirs,
     stage: Path,
     notices: list[str],
+    preview_sources: dict[Path, Path] | None = None,
 ) -> tuple[dict | None, list[Path]]:
     """读取分享元数据，无效时记录说明并忽略该元数据。
 
     分享数据不决定资源内容有效性；调用方随后仍须移除其保留目录。
     """
     try:
-        return take_envelope(candidate_dirs, stage)
+        originals = []
+        if preview_sources is not None:
+            envelope = read_envelope(*candidate_dirs)
+            if envelope:
+                originals = resolve_preview_paths(envelope["meta_dir"], envelope["manifest"])
+        manifest, staged = take_envelope(candidate_dirs, stage)
+        if preview_sources is not None:
+            preview_sources.update(zip(originals, staged))
+        return manifest, staged
     except InvalidVariantPackageError:
         raise
     except InvalidManagedMetadataError as e:
         logger.warning("分享信封损坏，按无元数据导入: %s", e)
         _add_notice(notices, DEGRADED_METADATA_NOTICE)
         return None, []
-
-
-def _exclude_staged_previews(root: Path, names: tuple[str, ...], *, checkpoint=None, should_cancel=None) -> None:
-    """仅在本次导入拥有的工作副本中删除明确选定的成员。"""
-    if not names:
-        return
-    from src.core.library_schema import valid_relative
-
-    owned_root = Path(fs.native_path(root)).resolve()
-    selected = []
-    for name in dict.fromkeys(names):
-        _check_continue(checkpoint, should_cancel)
-        if (
-            not valid_relative(name)
-            or Path(name).suffix.lower() not in IMAGE_EXTENSIONS
-            or Path(name).suffix.lower() == ".dds"
-        ):
-            raise ValueError(f"Invalid excluded preview: {name!r}")
-        candidate = root / name.replace("\\", "/")
-        if not Path(fs.native_path(candidate)).resolve().is_relative_to(owned_root):
-            raise ValueError(f"Excluded preview is outside the import working copy: {name!r}")
-        selected.append(candidate)
-    for candidate in selected:
-        _check_continue(checkpoint, should_cancel)
-        fs.unlink(candidate, missing_ok=True)
 
 
 def prepare_import_source(
@@ -562,6 +549,11 @@ def prepare_import_source(
     调用方先根据 clean_path 计算哈希并检查重复，再生成最终本体。
     """
     src = Path(source_path)
+    from src.core.library_schema import valid_relative
+
+    for name in excluded_previews:
+        if not valid_relative(name) or Path(name).suffix.lower() not in IMAGE_EXTENSIONS:
+            raise ValueError(f"Invalid excluded preview: {name!r}")
     src_fmt = source_format(src)
     if not src_fmt:
         logger.error("不支持的导入源: %s", src)
@@ -573,15 +565,18 @@ def prepare_import_source(
     reserved = archive_has_reserved_payload(src, archive_service) if is_archive else _folder_has_reserved_payload(src)
 
     # 最常见的 GameBanana/普通压缩包快路径：保留原档，零解压零重压。
-    if is_archive and final_fmt == src_fmt and not reserved and not excluded_previews:
+    if is_archive and final_fmt == src_fmt and not reserved:
         return PreparedImportSource(
             clean_path=src,
             source_format=src_fmt,
             final_format=final_fmt,
             passthrough_archive=True,
+            excluded_preview_references=[
+                {"scope": "preview_cache", "path": name.replace("\\", "/")} for name in excluded_previews
+            ],
         )
 
-    needs_work_root = is_archive or reserved or excluded_previews or final_fmt in ARCHIVE_IMPORT_FORMATS
+    needs_work_root = is_archive or reserved or final_fmt in ARCHIVE_IMPORT_FORMATS
     work_root = None
     if needs_work_root:
         work_root = Path(temp_parent) / f"import_{uuid.uuid4().hex}"
@@ -592,10 +587,12 @@ def prepare_import_source(
     staged_previews: list[Path] = []
     notices: list[str] = []
     passthrough = False
+    preview_sources = {} if excluded_previews else None
     try:
         if is_archive:
             archive_variants = validate_archive_variant_members(src, archive_service) if reserved else False
             extract_root = work_root / "extracted"
+            preview_source_root = extract_root
             extracted = archive_service.extract(
                 str(src),
                 str(extract_root),
@@ -609,22 +606,22 @@ def prepare_import_source(
                     fs.rmtree(work_root, ignore_errors=True)
                 return None
             clean_path = Path(extracted)
-            _exclude_staged_previews(
-                extract_root, excluded_previews, checkpoint=checkpoint, should_cancel=should_cancel
-            )
             body = _probe_current_container(extract_root, clean_path, notices=notices)
             stage = work_root / "share_previews"
             variants = read_package_variants(extract_root, clean_path)
             if archive_variants and not variants:
                 raise InvalidVariantPackageError(tr("归档内的变体文件无法与同包 Mod 资源对应"))
-            manifest, staged_previews = _take_envelope_or_degrade((extract_root, clean_path), stage, notices)
+            manifest, staged_previews = _take_envelope_or_degrade(
+                (extract_root, clean_path), stage, notices, preview_sources
+            )
             # take_envelope 在没有 info.json 时不会清 marker；这里无条件清一次保留结构。
             strip_envelope(extract_root, clean_path)
         else:
             clean_path = src
+            preview_source_root = src
             body = None
             validate_folder_variant_roots(src)
-            if reserved or excluded_previews:
+            if reserved:
                 _probe_current_container(src, notices=notices)
                 source_variants = read_package_variants(src)
                 staged = work_root / "folder" / src.name
@@ -636,15 +633,13 @@ def prepare_import_source(
                     should_cancel=should_cancel,
                 )
                 clean_path = staged
-                _exclude_staged_previews(
-                    clean_path, excluded_previews, checkpoint=checkpoint, should_cancel=should_cancel
-                )
+                preview_source_root = staged
                 body = _probe_current_container(clean_path, notices=notices)
                 stage = work_root / "share_previews"
                 variants = read_package_variants(clean_path)
                 if variants != source_variants:
                     raise InvalidManagedMetadataError(tr("复制过程中变体文件发生变化，已取消导入"))
-                manifest, staged_previews = _take_envelope_or_degrade((clean_path,), stage, notices)
+                manifest, staged_previews = _take_envelope_or_degrade((clean_path,), stage, notices, preview_sources)
                 strip_envelope(clean_path)
 
         # 完整容器输入须先读取分享元数据，再移除管理结构并解析内部本体。
@@ -666,6 +661,17 @@ def prepare_import_source(
             clean_path, src_fmt, final_fmt, passthrough = unwrapped
 
         validate_package_variants(clean_path, variants)
+        excluded_references = []
+        for name in excluded_previews:
+            original = preview_source_root / name
+            if original in (preview_sources or {}):
+                excluded_references.append(
+                    {"scope": "container", "path": f"{META_DIR}/previews/{preview_sources[original].name}"}
+                )
+            elif fs.is_dir(clean_path) and original.is_relative_to(clean_path):
+                excluded_references.append(
+                    {"scope": "preview_cache", "path": original.relative_to(clean_path).as_posix()}
+                )
         return PreparedImportSource(
             clean_path=clean_path,
             source_format=src_fmt,
@@ -676,6 +682,7 @@ def prepare_import_source(
             share_previews=staged_previews,
             share_variants=variants,
             metadata_notice="\n".join(notices),
+            excluded_preview_references=excluded_references,
         )
     except InvalidManagedMetadataError as e:
         # 元数据校验失败时按统一契约返回 None，同时保存具体拒绝原因供上层显示。

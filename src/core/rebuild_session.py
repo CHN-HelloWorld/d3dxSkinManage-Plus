@@ -11,6 +11,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from contextlib import ExitStack
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -387,7 +388,8 @@ class RebuildSession:
                     SELECT s.mod_id FROM mods s JOIN rebuild_baseline_mods b ON b.mod_id=s.mod_id
                     LEFT JOIN deployment_records d ON d.mod_id=s.mod_id
                     LEFT JOIN rebuild_baseline_deployment_records old ON old.mod_id=s.mod_id
-                    WHERE {same} AND d.state IS old.state AND d.actual_path IS old.actual_path)""")
+                    WHERE {same} AND d.state IS old.state AND d.actual_path IS old.actual_path
+                      AND s.mod_id NOT IN (SELECT mod_id FROM rebuild_preview_resets))""")
         finally:
             stage.close()
 
@@ -414,6 +416,7 @@ class RebuildSession:
                         "rebuild_baseline_deployment_records(mod_id)"
                     )
                     target.execute("CREATE TABLE rebuild_candidates (mod_id TEXT PRIMARY KEY)")
+                    target.execute("CREATE TABLE rebuild_preview_resets (mod_id TEXT PRIMARY KEY)")
                 self.check_cancel()
             finally:
                 target.close()
@@ -472,7 +475,11 @@ class RebuildSession:
                     container=Path(mod.path).parent,
                     preview_cache=Path(self.stage.paths.preview_roots[self.gid]) / identity,
                     node=self.stage.paths.node_path(node_id) if node_id else None,
+                    ignore_selection=True,
                 )
+                local = sc.get("local") or {}
+                if local.get("preview_selection_locked") or local.get("excluded_archive_previews"):
+                    self.stage._db().execute("INSERT OR IGNORE INTO rebuild_preview_resets VALUES (?)", (identity,))
                 if self.stage.get_mod(identity) is None:
                     if not self.stage.add_mod(mod, commit=False):
                         raise RuntimeError(f"Rebuild staging insert failed: {mod.name}")
@@ -568,11 +575,13 @@ class RebuildSession:
 
     def _publish(self):
         """附加暂存数据库，在主索引事务中发布重建投影，并保证解除附加及修改计数。"""
+        from src.core.preview_operations import reset_preview_selection
+
         db = self.mm._index._db()
         db.execute("ATTACH DATABASE ? AS rebuild_stage", (str(self.stage_path),))
         mutation_started = False
         try:
-            with self.mm._index.transaction():
+            with ExitStack() as metadata_changes, self.mm._index.transaction():
                 # 获取写锁后再次检查，覆盖初次检查与锁获取之间的并发变化。
                 self._assert_version()
                 self._check_pending()
@@ -581,6 +590,13 @@ class RebuildSession:
                     self.mm._library_mutations += 1
                 mutation_started = True
                 self.published_ids = publish_rebuild_projection(db, self.gid)
+                accepted = set(self.published_ids)
+                metadata_changes.enter_context(
+                    reset_preview_selection(
+                        self.mm,
+                        {item["mod_id"]: item.get("sidecar") for item in self.enriched if item["mod_id"] in accepted},
+                    )
+                )
 
         finally:
             try:
