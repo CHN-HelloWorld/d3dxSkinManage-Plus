@@ -68,7 +68,7 @@ The import dialog offers **Add Files**, **Add Folder**, and **Remove Selected**.
 
 The source names in the table identify the current import candidates. You can edit the display name, author, version, source URL, and tags after importing.
 
-Distinguish between not using a preview and deleting it: the former only deselects it, while the latter affects the image file. Check the scope shown in the current confirmation prompt before deleting.
+Use **Remove preview** or **Remove all previews** to stop using images as previews while keeping every resource in the imported Mod. Use **Rebuild Index** to restore automatic preview discovery.
 
 After clicking **Confirm Import**, use the task center at the bottom-right to check progress, duplicates, and failures. Importing normally preserves the source files. When files are discovered directly inside the library, however, adding them to management may organize them in place; these are not identical copying workflows.
 
@@ -160,15 +160,15 @@ Sorting supports name, import time, author, age rating, enabled state, and other
 
 The NSFW dropdown controls whether local X-rated preview images are shown normally, hidden, or blurred. It does not automatically delete or disable Mods. The local overview and gallery share this display preference; the online page has its own NSFW policy.
 
-### 3.10 Adding, removing, and deleting preview images
+### 3.10 Adding and removing preview images
 
 Drag in an image, click **Add preview image**, or paste an image from the clipboard into a supported preview area. Mods support multiple images; categories and games each use a single cover image.
 
 Use the arrows to browse multiple images. Changing the displayed image affects the card preview. The image viewer supports zooming in and out and dragging to pan; follow the window's hints for its controls.
 
-- **Remove / do not use**: removes the reference and keeps the corresponding file.
-- **Delete**: deletes the corresponding image file. The relevant interface explains the scope before the operation.
-- **Delete all preview images**: affects multiple images for this Mod. Check the target before confirming.
+- **Remove preview / Remove all previews**: removes previews and clears only their generated cache. The Mod archive, resource files, and manually added originals are kept. Removing previews in the import dialog also keeps the images in the imported Mod.
+
+After editing, the saved preview list takes precedence. F5, restarting, and completing an import do not automatically add images. A successful **Rebuild Index** restores automatic discovery; cancelled or failed rebuilds preserve the selection. Existing Mods need no manual migration.
 
 Manually added Mod previews are normally copied into the container's `.d3dxmeta/previews/`. Previews inside the archive may be extracted to the cache. When backing up a Mod, keep the complete container, not just cached images.
 
