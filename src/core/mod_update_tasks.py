@@ -273,6 +273,16 @@ class ModUpdateTasks(QObject):
                 pass
         job.bindings.clear()
 
+    @staticmethod
+    def _retire_terminal_resources(job) -> None:
+        """销毁已退出的工作进程，并释放历史展示不再需要的准备资源。"""
+        process, job.process = job.process, None
+        job.plan = None
+        job.prepared = None
+        job.download = None
+        if process is not None:
+            process.deleteLater()
+
     def _download(self, job) -> None:
         """取得或复用共享下载并绑定进度，缓存命中直接转入导入等待，异常转为任务失败。"""
         dm = self.download_manager
@@ -459,14 +469,20 @@ class ModUpdateTasks(QObject):
             phase = "deferred" if job.game_id != self._manager.current_game_id else "failed"
             self._finish(job, phase, str(error))
             return
-        self._finished_archives[job.archive] = (job.file.file_id, (job.file.md5_checksum or "").lower())
-        self._finish(job, "done")
+        archive = job.archive
+        self._finished_archives[archive] = (job.file.file_id, (job.file.md5_checksum or "").lower())
+        if not self._finish(job, "done"):
+            self._finished_archives.pop(archive, None)
+            return
         self.applied.emit(job.mid, updated)
 
-    def _finish(self, job, phase: str, error: str = "") -> None:
-        """使活动任务进入终态，释放下载持有权并安排暂存清理，随后推进等待任务。"""
+    def _finish(self, job, phase: str, error: str = "") -> bool:
+        """使已退出的活动任务进入终态并回收资源，成功结算时返回 True。"""
         if self._records.get(job.key) is not job or not job.active:
-            return
+            return False
+        if job.process is not None and job.process.running:
+            logger.warning("更新工作进程仍在运行，延后终态资源回收: %s", job.mid)
+            return False
         self._disconnect(job)
         job.data["resume_phase"] = job.phase
         job.phase = phase
@@ -484,10 +500,13 @@ class ModUpdateTasks(QObject):
                 self.canceled.emit(job.mid)
             elif phase == "deferred":
                 self.deferred.emit(job.mid)
-        if job.plan is not None:
-            self._cleanup(job.plan)
+        plan = job.plan
+        if plan is not None:
+            self._cleanup(plan)
+        self._retire_terminal_resources(job)
         self._collect_archives()
         self._pump()
+        return True
 
     def _cleanup(self, plan) -> None:
         """启动后台线程清理安装暂存，并记录线程以供应用退出时等待。"""
@@ -732,9 +751,10 @@ class ModUpdateTasks(QObject):
         for job in list(self._records.values()):
             if job.active:
                 self._cancel_job(job)
-            if job.process is not None:
-                job.process.shutdown()
-                if job.process.running:
+            process = job.process
+            if process is not None:
+                process.shutdown()
+                if process.running:
                     stopped = False
                 elif job.active:
                     self._finish(job, "canceled")

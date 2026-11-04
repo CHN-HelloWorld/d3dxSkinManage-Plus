@@ -385,9 +385,11 @@ def test_exit_confirmation_includes_other_games_and_cancellation_preserves_resou
     assert seen == ["终止更新并退出"] and host.isVisible()
     assert host.cleaned == [] and not job.process.paused
 
+    process = job.process
     with interact(QMessageBox, lambda box: choose(box, stop=True)):
         assert host.close()
-    assert not job.process.running
+    assert not process.running
+    assert job.process is None
     assert "downloads" in host.cleaned and "images" in host.cleaned
     assert manager.get_mod(mod.mod_id).info.version == "v1"
 
