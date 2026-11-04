@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quick-start"><img src="docs/readme/windows.svg" alt="Windows 10 / 11 x64" height="24"></a>
   <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.10–3.14" height="24"></a>
-  <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="docs/readme/status.svg" alt="Version 1.0.0 released: download the portable Windows ZIP" height="24"></a>
+  <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="https://img.shields.io/github/v/release/CHN-HelloWorld/d3dxSkinManage-Plus?style=flat&amp;label=Release&amp;color=8b5637&amp;cacheSeconds=300" alt="Latest stable release: download the portable Windows ZIP" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases"><img src="https://img.shields.io/github/downloads/CHN-HelloWorld/d3dxSkinManage-Plus/total?style=flat&amp;label=Downloads&amp;color=3c8da8" alt="Total GitHub Releases asset downloads" height="24"></a>
   <a href="LICENSE"><img src="docs/readme/license.svg" alt="License: PolyForm Noncommercial 1.0.0 with the Attribution Integrity Addendum" height="24"></a>
 </p>
@@ -143,7 +143,7 @@ See the [personalization and background guide](docs/tutorials/chapters/en/ch6-se
 The manager organizes and deploys resources; 3DMigoto handles loading them in the game.
 
 Download the complete Windows ZIP from [the latest GitHub release](https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest),
-extract it to a writable folder, keep the included files, and run `d3dxSkinManage-Plus.exe`. The current version is **1.0.0**.
+extract it to a writable folder, keep the included files, and run `d3dxSkinManage-Plus.exe`.
 
 <a id="source"></a>
 

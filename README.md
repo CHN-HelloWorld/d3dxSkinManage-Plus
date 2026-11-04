@@ -18,7 +18,7 @@
 <p align="center">
   <a href="#quick-start"><img src="docs/readme/windows.svg" alt="Windows 10 / 11 x64" height="24"></a>
   <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.10–3.14" height="24"></a>
-  <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="docs/readme/status.svg" alt="1.0.0 已发布：下载 Windows 便携 ZIP" height="24"></a>
+  <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="https://img.shields.io/github/v/release/CHN-HelloWorld/d3dxSkinManage-Plus?style=flat&amp;label=Release&amp;color=8b5637&amp;cacheSeconds=300" alt="最新正式版本：下载 Windows 便携 ZIP" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases"><img src="https://img.shields.io/github/downloads/CHN-HelloWorld/d3dxSkinManage-Plus/total?style=flat&amp;label=Downloads&amp;color=3c8da8" alt="GitHub Releases 附件累计下载次数" height="24"></a>
   <a href="LICENSE"><img src="docs/readme/license.svg" alt="许可：PolyForm Noncommercial 1.0.0 与署名完整性附加条款" height="24"></a>
 </p>
@@ -143,7 +143,7 @@
 管理器负责整理和部署资源，游戏内的实际加载由 3DMigoto 完成。
 
 从 [GitHub Releases 下载最新版本](https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest)的完整 Windows ZIP，
-解压到可写目录，保留随包文件，运行 `d3dxSkinManage-Plus.exe`。当前版本为 **1.0.0**。
+解压到可写目录，保留随包文件，运行 `d3dxSkinManage-Plus.exe`。
 
 <a id="source"></a>
 
