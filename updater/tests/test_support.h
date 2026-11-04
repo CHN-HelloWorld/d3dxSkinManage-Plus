@@ -99,7 +99,7 @@ inline std::string Read(const fs::path& path) {
 void AddCoreTests(TestList& tests);
 // 追加同步、保护规则及备份恢复测试。
 void AddSyncTests(TestList& tests);
-// 追加进程等待、主程序启动和运行中映像替换测试。
+// 追加进程等待、主程序启动、运行中映像替换及更新缓存保留与清理测试。
 void AddProcessTests(TestList& tests);
 // 追加与主程序令牌、清单、语言及日志行为保持一致的契约测试。
 void AddPortTests(TestList& tests);

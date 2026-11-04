@@ -2,6 +2,7 @@
 #include "self_update.h"
 #include "sync.h"
 #include "test_support.h"
+#include "workflow.h"
 
 namespace tests {
 using namespace updater;
@@ -69,6 +70,35 @@ class ImageProcess {
     HANDLE process_ = nullptr;
     DWORD pid_ = 0;
 };
+
+// 使用测试程序副本模拟新版主程序，更新材料全部位于独立安装夹具中。
+UpdateRequest PrepareUpdate(const fs::path& target) {
+    const auto source = target / L"Updater/Cache/extract";
+    Write(source / L"files.manifest", "[managed]\nd3dxSkinManage-Plus.exe\nCore/library.dll\n");
+    Write(source / L"Core/library.dll", "new library");
+    CHECK(CopyFileW(SelfPath().c_str(), (source / L"d3dxSkinManage-Plus.exe").c_str(), FALSE) != FALSE);
+    Write(target / L"d3dxSkinManage-Plus.exe", "old program");
+    Write(target / L"Core/library.dll", "old library");
+    Write(target / L"Updater/Cache/backup/d3dxSkinManage-Plus.exe", "old program");
+    Write(target / L"Updater/Cache/backup/Core/library.dll", "old library");
+    Write(target / L"Updater/Cache/download/update.zip", "downloaded update");
+    UpdateRequest request;
+    request.pid = MAXDWORD;
+    request.extractDir = source;
+    request.installDir = target;
+    return request;
+}
+
+// 等待模拟主程序写入启动凭据并退出，确保临时安装目录清理前不再有运行中的副本。
+void WaitForLaunchedFixture(const fs::path& target) {
+    const auto marker = target / L"launched.txt";
+    const auto deadline = GetTickCount64() + 5000;
+    while (!fs::exists(marker) && GetTickCount64() < deadline)
+        Sleep(10);
+    CHECK(fs::exists(marker));
+    const auto pid = static_cast<DWORD>(std::stoul(Read(marker)));
+    CHECK(WaitForProcessExit(pid, 5000));
+}
 
 }
 
@@ -187,6 +217,104 @@ void AddProcessTests(TestList& tests) {
                          }
                          CleanupOldUpdateFiles(target);
                          CHECK(!fs::exists(target / L"updater.exe.old_update"));
+                     }});
+    tests.push_back({"workflow.success_cleans_update_caches_after_launch", [] {
+                         TempDir temp;
+                         const auto target = temp.path() / L"installed";
+                         const auto request = PrepareUpdate(target);
+                         Write(target / L"Updater/Cache/download/previous.zip", "older download");
+                         Write(target / L"Updater/Cache/download/update.zip.part", "partial download");
+                         Write(target / L"Updater/Cache/keep.txt", "other updater cache");
+                         Write(target / L"Updater/keep.txt", "updater data");
+                         Write(target / L"config/settings.json", "user settings");
+                         Write(target / L"cache/keep.zip", "application cache");
+                         bool keptUntilLaunch = false;
+                         UpdateCallbacks callbacks;
+                         callbacks.step = [&](int number) {
+                             if (number == 3) {
+                                 keptUntilLaunch = fs::exists(request.extractDir) &&
+                                                   fs::exists(target / L"Updater/Cache/backup") &&
+                                                   fs::exists(target / L"Updater/Cache/download/update.zip");
+                             }
+                         };
+                         CHECK(RunUpdate(request, callbacks));
+                         WaitForLaunchedFixture(target);
+                         CHECK(keptUntilLaunch);
+                         CHECK(!fs::exists(target / L"Updater/Cache/download"));
+                         CHECK(!fs::exists(request.extractDir));
+                         CHECK(!fs::exists(target / L"Updater/Cache/backup"));
+                         CHECK(Read(target / L"Updater/Cache/keep.txt") == "other updater cache");
+                         CHECK(Read(target / L"Updater/keep.txt") == "updater data");
+                         CHECK(Read(target / L"config/settings.json") == "user settings");
+                         CHECK(Read(target / L"cache/keep.zip") == "application cache");
+                         CHECK(Read(target / L"Core/library.dll") == "new library");
+                         CHECK(fs::exists(target / L"Updater/installed.manifest"));
+                     }});
+    tests.push_back({"workflow.sync_failure_keeps_update_caches", [] {
+                         TempDir temp;
+                         const auto target = temp.path() / L"installed";
+                         const auto request = PrepareUpdate(target);
+                         const HANDLE lock =
+                             CreateFileW((target / L"Core/library.dll").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                         CHECK(lock != INVALID_HANDLE_VALUE);
+                         const bool updated = RunUpdate(request);
+                         CloseHandle(lock);
+                         CHECK(!updated);
+                         CHECK(Read(target / L"Updater/Cache/download/update.zip") == "downloaded update");
+                         CHECK(Read(target / L"Updater/Cache/backup/d3dxSkinManage-Plus.exe") == "old program");
+                         CHECK(fs::exists(request.extractDir / L"d3dxSkinManage-Plus.exe"));
+                         CHECK(Read(target / L"Core/library.dll") == "old library");
+                         CHECK(!fs::exists(target / L"launched.txt"));
+                     }});
+    tests.push_back({"workflow.launch_failure_keeps_update_caches", [] {
+                         TempDir temp;
+                         const auto target = temp.path() / L"installed";
+                         const auto request = PrepareUpdate(target);
+                         bool reachedLaunch = false;
+                         UpdateCallbacks callbacks;
+                         callbacks.step = [&](int number) {
+                             if (number == 3) {
+                                 reachedLaunch = true;
+                                 fs::remove(target / L"d3dxSkinManage-Plus.exe");
+                             }
+                         };
+                         CHECK(!RunUpdate(request, callbacks));
+                         CHECK(reachedLaunch);
+                         CHECK(Read(target / L"Updater/Cache/download/update.zip") == "downloaded update");
+                         CHECK(Read(target / L"Updater/Cache/backup/d3dxSkinManage-Plus.exe") == "old program");
+                         CHECK(fs::exists(request.extractDir / L"d3dxSkinManage-Plus.exe"));
+                         CHECK(Read(target / L"Core/library.dll") == "new library");
+                         CHECK(!fs::exists(target / L"launched.txt"));
+                     }});
+    tests.push_back({"workflow.download_cleanup_failure_does_not_fail_update", [] {
+                         TempDir temp;
+                         const auto target = temp.path() / L"installed";
+                         const auto request = PrepareUpdate(target);
+                         const auto package = target / L"Updater/Cache/download/update.zip";
+                         const HANDLE lock = CreateFileW(package.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr,
+                                                         OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+                         CHECK(lock != INVALID_HANDLE_VALUE);
+                         const bool updated = RunUpdate(request);
+                         CloseHandle(lock);
+                         CHECK(updated);
+                         WaitForLaunchedFixture(target);
+                         CHECK(Read(package) == "downloaded update");
+                         CHECK(!fs::exists(request.extractDir));
+                         CHECK(!fs::exists(target / L"Updater/Cache/backup"));
+                     }});
+    tests.push_back({"workflow.missing_download_cache_does_not_fail_update", [] {
+                         TempDir temp;
+                         const auto target = temp.path() / L"installed";
+                         const auto request = PrepareUpdate(target);
+                         const auto download = target / L"Updater/Cache/download";
+                         CHECK(fs::remove(download / L"update.zip"));
+                         CHECK(fs::remove(download));
+                         CHECK(RunUpdate(request));
+                         WaitForLaunchedFixture(target);
+                         CHECK(!fs::exists(download));
+                         CHECK(!fs::exists(request.extractDir));
+                         CHECK(!fs::exists(target / L"Updater/Cache/backup"));
                      }});
 }
 

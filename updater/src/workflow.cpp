@@ -119,6 +119,18 @@ bool RunUpdate(const UpdateRequest& request, const UpdateCallbacks& callbacks) {
         CleanupExtract(request.extractDir);
         if (fs::exists(backup) && !RobustRemoveAll(backup))
             LogWarning(L"旧版本备份未完全清理");
+        // 仅清理安装目录内的下载缓存；路径校验或删除失败不改变已完成的更新结果。
+        try {
+            const auto download = SafeChild(request.installDir, L"Updater/Cache/download");
+            if (fs::exists(download)) {
+                if (RobustRemoveAll(download))
+                    LogInfo(L"已清理更新包下载目录: " + download.wstring());
+                else
+                    LogWarning(L"更新包下载目录未完全清理: " + download.wstring());
+            }
+        } catch (const std::exception& error) {
+            LogWarning(L"清理更新包下载目录失败: " + ExceptionMessage(error));
+        }
         progress(100);
         LogInfo(L"更新完成");
         return true;
