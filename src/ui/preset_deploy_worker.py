@@ -5,13 +5,14 @@ from __future__ import annotations
 from threading import Event
 from types import SimpleNamespace
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
 
 from src.core.preset_apply_service import PresetPlanExecutor
+from src.ui.worker_lifecycle import WorkerThread
 from src.utils.i18n import t as tr
 
 
-class DeploymentPhaseWorker(QThread):
+class DeploymentPhaseWorker(WorkerThread):
     """结束信号到达后才消费结果，不使用提前发出的结果信号。"""
 
     def __init__(self, work, parent=None):
@@ -43,7 +44,7 @@ class PresetCleanupWorker(DeploymentPhaseWorker):
         super().__init__(lambda: clean_unused_preset_deployments(records, root, storage, self.progress.emit), parent)
 
 
-class PresetDeployWorker(QThread):
+class PresetDeployWorker(WorkerThread):
     """执行预设部署计划，提供阶段进度和逐项完成信号，并在失败时协调回滚。"""
 
     progress = Signal(int, int, object, float)

@@ -7,12 +7,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from types import SimpleNamespace
 
-from PySide6.QtCore import QObject, QThread, QTimer, Signal
+from PySide6.QtCore import QObject, QTimer, Signal
 
 from src.core.library_snapshot import path_key
 from src.core.mod_manager import ModManager, ReconcileReport
 from src.core.mod_storage import ModStorage
 from src.core.preview_cache_index import capture_source_version
+from src.ui.worker_lifecycle import WorkerThread
 from src.utils import fs
 from src.utils.logger import logger
 from src.utils.runtime_metrics import MetricSamples
@@ -227,7 +228,7 @@ def _wait_for_stable_inputs(candidates, check):
         return
 
 
-class DiscoveryWorker(QThread):
+class DiscoveryWorker(WorkerThread):
     """使用只读请求快照扫描候选来源，并向界面报告发现路径与最终结果。"""
 
     observed = Signal(object)

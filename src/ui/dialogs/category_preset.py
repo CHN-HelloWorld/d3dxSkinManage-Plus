@@ -6,7 +6,7 @@ from functools import partial
 from pathlib import Path
 from threading import Event
 
-from PySide6.QtCore import QEvent, QSize, Qt, QThread, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -38,6 +38,7 @@ from src.ui.dialogs.category_preset_widgets import (
     preset_name_error,
     stat_strip,
 )
+from src.ui.worker_lifecycle import WorkerThread
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 
@@ -49,7 +50,7 @@ def _discard_plans(service, pending):
         del pending[0]
 
 
-class _PresetTask(QThread):
+class _PresetTask(WorkerThread):
     """串行执行可取消的预设服务调用，将结果、取消状态和异常留给界面线程处理。"""
 
     progress = Signal(str, int)

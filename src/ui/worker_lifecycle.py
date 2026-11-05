@@ -5,11 +5,21 @@ from __future__ import annotations
 from functools import partial
 from weakref import WeakSet
 
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, Slot
+from PySide6.QtCore import QCoreApplication, QEvent, QObject, Qt, QThread, Slot
 
 _owned_workers: WeakSet[QThread] = WeakSet()
 _retiring_workers: set[QThread] = set()
 _connected_apps: WeakSet[QCoreApplication] = WeakSet()
+
+
+class WorkerThread(QThread):
+    """运行期由宿主持有，延迟销毁时避免回调释放宿主造成重入析构。"""
+
+    def event(self, event: QEvent) -> bool:
+        """释放连接和工作闭包前移出宿主子对象列表；调用方仍须先等待线程结束。"""
+        if event.type() == QEvent.Type.DeferredDelete:
+            self.setParent(None)
+        return super().event(event)
 
 
 class _WorkerOwner(QObject):

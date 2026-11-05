@@ -6,12 +6,13 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
 
+from src.ui.worker_lifecycle import WorkerThread
 from src.utils.logger import logger
 
 
-class DisableBatchWorker(QThread):
+class DisableBatchWorker(WorkerThread):
     """逐个执行禁用作业单的后台线程。
 
     item_started(index, display_name)：某项开始（供浮层把该行标成「进行中」）。

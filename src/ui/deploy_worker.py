@@ -8,12 +8,13 @@ from __future__ import annotations
 
 import time
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Signal
 
+from src.ui.worker_lifecycle import WorkerThread
 from src.utils.logger import logger
 
 
-class DeployWorker(QThread):
+class DeployWorker(WorkerThread):
     """后台解压部署单个 Mod。
 
     progress(mod_id, frac)：解压进度 0~1（zip/rar 逐成员较准、7z 只起止两点）。
