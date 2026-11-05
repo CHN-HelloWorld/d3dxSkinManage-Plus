@@ -535,18 +535,9 @@ class DialogFrameManager(QObject):
                     from src.ui.acrylic import apply_dialog_acrylic
 
                     # 私有控件未创建前也可能收到样式事件，进度取消保持立即生效。
-                    fresh_surface = not obj.property("_dialog_acrylic")
                     apply_dialog_acrylic(obj, tint_alpha=0.78, animate=not isinstance(obj, QProgressDialog))
-                    if (
-                        fresh_surface
-                        and not isinstance(obj, QProgressDialog)
-                        and getattr(obj, "_slide_anim", None) is None
-                    ):
-                        # 显示期间新安装的表面过滤器尚未收到当前显示事件。
-                        from src.ui import anim
-
-                        obj._dialog_resting_geometry = obj.geometry()
-                        anim.slide_in(obj, dy=16, duration=150)
+                    # 应用过滤器之后才分发对象过滤器，新安装的表面也会收到本次 Show。
+                    # 入场位移统一由表面处理，避免两次位移覆盖静止几何。
                     if not obj.property("customDialogFrame") and not obj.property("dialogFrameInstalled"):
                         frame = decorate_dialog(obj)
                         frame.titlebar.retheme()

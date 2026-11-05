@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import shiboken6
-from PySide6.QtCore import QEvent, QObject, QRectF, Qt, QTimer
+from PySide6.QtCore import QAbstractAnimation, QEvent, QObject, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import QAbstractItemView, QComboBox, QMenu, QStyle, QStyleOptionComboBox, QWidget
 
@@ -450,6 +450,11 @@ class _DialogAcrylicSurface(QObject):
                 self._apply_window_effects(obj)
             if self._animate and not event.spontaneous():
                 self._play_entrance(obj)
+        elif et == QEvent.Type.Hide:
+            if _stop_dialog_slide(obj):
+                resting = getattr(obj, "_dialog_resting_geometry", None)
+                if resting is not None:
+                    obj.setGeometry(resting)
         return False
 
     def _apply_window_effects(self, dialog: QWidget) -> None:
@@ -537,6 +542,17 @@ def apply_dialog_acrylic(
         _install_close_animation(dialog)
 
 
+def _stop_dialog_slide(dialog: QWidget) -> bool:
+    """停止仍在运行的对话框位移，返回是否取消了本轮动画。"""
+    animation = getattr(dialog, "_slide_anim", None)
+    if animation is None or not shiboken6.isValid(animation):
+        return False
+    running = animation.state() != QAbstractAnimation.State.Stopped
+    animation.stop()
+    dialog._slide_anim = None
+    return running
+
+
 def _install_close_animation(dialog: QWidget) -> None:
     """统一处理对话框关闭路径，位移动画结束后调用原始 done。
 
@@ -554,11 +570,14 @@ def _install_close_animation(dialog: QWidget) -> None:
         if dialog.property("_acrylic_done"):
             return
         dialog.setProperty("_acrylic_done", True)
+        _stop_dialog_slide(dialog)
+        resting = getattr(dialog, "_dialog_resting_geometry", None)
+        if resting is not None:
+            # 隐藏后修改 QWidget 几何可能被尚未投递的原生移动事件覆盖。
+            # 先恢复窗口位置，再在同一次回调中隐藏，避免退出位移成为下次打开基准。
+            dialog.setGeometry(resting)
         orig_done(r)
         if shiboken6.isValid(dialog):
-            resting = getattr(dialog, "_dialog_resting_geometry", None)
-            if resting is not None:
-                dialog.setGeometry(resting)
             if dialog.isVisible():
                 # 工作或确认进行中时，对话框可以拒绝关闭。
                 dialog.setProperty("_acrylic_closing", False)
@@ -574,6 +593,9 @@ def _install_close_animation(dialog: QWidget) -> None:
         try:
             from src.ui import anim
 
+            if not _stop_dialog_slide(dialog):
+                # 入场结束后的移动、缩放属于用户选择，关闭时以最新几何为基准。
+                dialog._dialog_resting_geometry = dialog.geometry()
             # 关闭时使用加速上滑，使窗口在位移结束后消失。
             # slide_out 在动画完成或直接结束时均调用一次收尾回调。
             anim.slide_out(dialog, dy=40, duration=110, on_finished=lambda: _finish(r))
