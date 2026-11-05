@@ -3283,13 +3283,16 @@ class OverviewPage(QWidget):
         self._panel_deploy_hint.setVisible(bool(hint))
         self._variant_panel.set_busy(busy)
 
+    def _mod_deployment_path(self, mod: Mod | None) -> Path | None:
+        """预览与右键菜单共用部署核验，尚在发布中的副本不提供查看入口。"""
+        resolve = getattr(self._mod_manager, "get_mod_deployment_path", None)
+        if mod is None or mod.mod_id in self._deploying_frac or resolve is None:
+            return None
+        return resolve(mod)
+
     def _refresh_panel_deployment_button(self) -> Path | None:
         """按当前选择核验部署位置，同步轻量入口并返回本次有效路径。"""
-        mod = self._selected_mod
-        resolve = getattr(self._mod_manager, "get_mod_deployment_path", None)
-        path = None
-        if self._panel_mode == "mod" and mod and mod.mod_id not in self._deploying_frac and resolve is not None:
-            path = resolve(mod)
+        path = self._mod_deployment_path(self._selected_mod) if self._panel_mode == "mod" else None
         self._panel_deploy_btn.setVisible(path is not None)
         self._panel_deploy_btn.setToolTip(tr("在资源管理器中定位部署目录：\n{path}", path=path) if path else "")
         return path
@@ -5283,11 +5286,19 @@ class OverviewPage(QWidget):
             self.mod_edit_requested.emit(self._selected_mod.mod_id)
 
     def _on_panel_view_deployment(self) -> None:
-        """点击时重新核验部署身份，避免在目录被移除或替换后打开旧位置。"""
+        """将预览当前 Mod 交给统一的部署定位入口。"""
+        if self._panel_mode == "mod" and self._selected_mod is not None:
+            self._open_mod_deployment(self._selected_mod.mod_id)
+
+    def _open_mod_deployment(self, mod_id: str) -> None:
+        """重新核验操作目标的部署身份，多选时仍定位右键命中的 Mod。"""
         import os
         import subprocess
 
-        path = self._refresh_panel_deployment_button()
+        if self._panel_mode == "mod" and self._selected_mod is not None and self._selected_mod.mod_id == mod_id:
+            path = self._refresh_panel_deployment_button()
+        else:
+            path = self._mod_deployment_path(self._mod_by_id(mod_id))
         if path is None:
             self._status_label.setText(tr("无法定位该 Mod 的部署目录，请刷新后重试。"))
             return
@@ -6924,6 +6935,8 @@ class OverviewPage(QWidget):
                 toggle_act.setEnabled(False)
             edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
             open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+            deployment_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("查看部署"))
+            deployment_act.setEnabled(self._mod_deployment_path(mod) is not None)
             export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
             menu.addSeparator()
             delete_act = menu.addAction(icons.get_icon("actions/remove"), del_label)
@@ -6937,6 +6950,8 @@ class OverviewPage(QWidget):
                 self.mod_edit_requested.emit(item_id)
             elif action == open_folder_act:
                 self._open_mod_folder(item_id)
+            elif action == deployment_act:
+                self._open_mod_deployment(item_id)
             elif action == export_act:
                 self._export_from_context(item_id, is_mod=True)
             elif action == delete_act:
@@ -7106,6 +7121,8 @@ class OverviewPage(QWidget):
             toggle_act.setEnabled(False)
         edit_act = menu.addAction(icons.get_icon("actions/edit"), t("编辑"))
         open_folder_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("打开源目录"))
+        deployment_act = menu.addAction(icons.get_icon("actions/folder-open"), tr("查看部署"))
+        deployment_act.setEnabled(self._mod_deployment_path(mod) is not None)
         export_act = menu.addAction(icons.get_icon("actions/export"), tr("导出"))
         menu.addSeparator()
         self._add_item_clipboard_actions(menu)
@@ -7148,6 +7165,8 @@ class OverviewPage(QWidget):
             self._browse_previews_for_mod(mod_id)
         elif action == open_folder_act:
             self._open_mod_folder(mod_id)
+        elif action == deployment_act:
+            self._open_mod_deployment(mod_id)
         elif action == export_act:
             self._export_from_context(mod_id, is_mod=True)
         elif action == delete_act:

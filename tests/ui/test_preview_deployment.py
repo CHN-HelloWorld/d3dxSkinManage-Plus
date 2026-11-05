@@ -4,12 +4,14 @@ from pathlib import Path
 
 import pytest
 from PySide6.QtCore import QPoint, Qt
-from PySide6.QtWidgets import QPushButton, QWidget
+from PySide6.QtWidgets import QMenu, QPushButton, QWidget
 
 from src.core.mod_identity import new_mod_id, write_deployment_identity
 from src.ui.pages.overview import OverviewPage
 from src.utils import i18n
+from tests.core.test_library_reconcile import _import_mod
 from tests.core.test_library_reconcile import mm as mm
+from tests.qt_dialogs import interact
 from tests.ui.test_theme_transition_surfaces import appearance as appearance
 
 
@@ -174,3 +176,80 @@ def test_narrow_header_action_does_not_reflow_the_footer(preview, qtbot, qapp):
     assert not button.isVisible()
     assert (header.height(), page._detail_tabs.y(), page._panel_preview.height()) == before
     assert [item.mapTo(page._preview_panel, QPoint(0, 0)).y() for item in buttons] == footer_before
+
+
+def _show_mod_menu(page, mod_id, surface):
+    """从真实卡片或表格右键入口显示指定 Mod 的菜单。"""
+    if surface == "grid":
+        page._show_mod_card_context_menu(page, mod_id, QPoint(10, 10))
+    else:
+        row = next(index for index, item in enumerate(page._display_items) if item["id"] == mod_id)
+        pos = page._table.visualItemRect(page._table.item(row, 0)).center()
+        page._show_table_context_menu(pos)
+
+
+@pytest.mark.parametrize("surface", ["grid", "list"])
+@pytest.mark.parametrize("state", ["active", "parked", "staging", "absent", "deploying"])
+def test_context_deployment_action_matches_preview_availability(preview, monkeypatch, surface, state):
+    import subprocess
+
+    page, mod, root = preview
+    path = None
+    if state != "absent":
+        name = {"parked": "DISABLED_Preview", "staging": "DISABLED_Preview.partial"}.get(state, "Preview")
+        path = deploy(mod, root, name)
+    if state == "active":
+        mod.enable()
+    if state == "deploying":
+        page.begin_deploy_overlay(mod.mod_id)
+    if surface == "list":
+        page._set_view("list")
+    page._refresh_panel_mod_status()
+    available = state in ("active", "parked")
+    assert deployment_button(page).isVisible() is available
+    opened = []
+    monkeypatch.setattr(subprocess, "Popen", lambda args: opened.append(args))
+
+    def choose(menu):
+        """检查菜单可用性与预览一致，仅在副本已发布时通过回车执行。"""
+        action = next((action for action in menu.actions() if action.text() == "查看部署"), None)
+        assert action is not None
+        assert action.isEnabled() is available
+        return action if available else None
+
+    with interact(QMenu, choose):
+        _show_mod_menu(page, mod.mod_id, surface)
+    assert opened == ([["explorer", "/select,", str(path)]] if available else [])
+
+
+@pytest.mark.parametrize("surface", ["grid", "list"])
+@pytest.mark.parametrize("stale", [False, True])
+def test_context_deployment_action_rechecks_clicked_mod_in_multi_selection(
+    preview, mm, tmp_path, monkeypatch, surface, stale
+):
+    import subprocess
+
+    page, mod, root = preview
+    path = deploy(mod, root)
+    other = _import_mod(mm, mod.node_id, tmp_path, "Other")
+    page.set_current_mods([mod, other])
+    if surface == "list":
+        page._set_view("list")
+    page._selected_ids = {mod.mod_id, other.mod_id}
+    page._show_selection_panel()
+    assert page._selected_mod is None
+    opened = []
+    monkeypatch.setattr(subprocess, "Popen", lambda args: opened.append(args))
+
+    def choose(menu):
+        """菜单打开后可替换部署身份，执行时必须重新核验。"""
+        action = next((action for action in menu.actions() if action.text() == "查看部署"), None)
+        assert action is not None and action.isEnabled()
+        if stale:
+            write_deployment_identity(path, new_mod_id())
+        return action
+
+    with interact(QMenu, choose):
+        _show_mod_menu(page, mod.mod_id, surface)
+    assert opened == ([] if stale else [["explorer", "/select,", str(path)]])
+    assert page._selected_ids == {mod.mod_id, other.mod_id}

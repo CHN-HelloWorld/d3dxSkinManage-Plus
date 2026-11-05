@@ -328,6 +328,8 @@ Any of these actions can toggle a single Mod:
 
 After a Mod is enabled successfully, its status changes and the card shows a green marker. The first activation may require extraction; wait for that item's progress to finish. A parked copy that meets the requirements can be restored more quickly when enabled again.
 
+Use **View deployment** in the preview panel or a Mod card's or list row's context menu to locate its deployed copy in File Explorer. The context-menu action is disabled when no published copy is available. Copies retained after disabling a Mod can also be viewed.
+
 If another Mod is already enabled under a character/object, the application asks whether to disable the conflicting item and enable the new one. If you choose not to be prompted again, similar conflicts will follow that preference.
 
 **Disable All** applies to the current folder and its subfolders. At the root level, it covers the current game. An active search does not mean that only search results will be disabled; read the confirmation carefully.
