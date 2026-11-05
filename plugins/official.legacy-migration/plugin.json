@@ -1,0 +1,20 @@
+{
+  "id": "official.legacy-migration",
+  "name": "旧版数据迁移",
+  "version": "0.1.0",
+  "apiVersion": "2.1",
+  "minAppVersion": "1.0.0",
+  "author": "d3dxSkinManage-Plus",
+  "description": "预览旧版本地资源，将 Mod、分类、元数据和预览图复制到当前游戏。",
+  "entry": "entry.py",
+  "files": ["entry.py", "controller.py", "wizard.py", "preview.py", "legacy.py", "README.md", "languages"],
+  "permissions": ["mods:read", "mods:write", "fs:read", "storage", "background", "ui:views", "ui:tools-page"],
+  "contributes": {
+    "commands": [
+      {"id": "official.legacy-migration.open", "title": "从旧版迁移"}
+    ],
+    "toolsPage": [
+      {"command": "official.legacy-migration.open", "group": "插件", "icon": "navigation/tools"}
+    ]
+  }
+}
