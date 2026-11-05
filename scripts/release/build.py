@@ -48,12 +48,25 @@ LANGUAGES = ROOT / "config" / "languages"
 SHIPPED_LANGUAGE_FILES = ("schema.json", "zh-CN/strings.json", "en-US/strings.json")
 LANGUAGE_ARCHIVE_PATHS = frozenset(f"config/languages/{name}" for name in SHIPPED_LANGUAGE_FILES)
 PLUGINS = ROOT / "plugins"
-SHIPPED_PLUGIN_IDS = ("example.mod-inventory", "example.preset-audit", "example.preset-cycle")
+SHIPPED_PLUGIN_IDS = (
+    "example.mod-inventory",
+    "example.preset-audit",
+    "example.preset-cycle",
+    "official.legacy-migration",
+)
 _PLUGIN_COMMON_FILES = ("plugin.json", "entry.py", "languages/en-US/strings.json", "README.md")
 SHIPPED_PLUGIN_FILES = {
     "example.mod-inventory": (*_PLUGIN_COMMON_FILES, "inventory.py"),
     "example.preset-audit": _PLUGIN_COMMON_FILES,
     "example.preset-cycle": _PLUGIN_COMMON_FILES,
+    "official.legacy-migration": (
+        *_PLUGIN_COMMON_FILES,
+        "legacy.py",
+        "controller.py",
+        "wizard.py",
+        "preview.py",
+        "languages/zh-CN/strings.json",
+    ),
 }
 PLUGIN_ARCHIVE_PATHS = frozenset(
     f"plugins/{plugin_id}/{relative}"
@@ -341,7 +354,7 @@ def stage_project_story(product_dir: Path) -> Path:
 
 
 def stage_plugins(product_dir: Path) -> Path:
-    """复制随包教学插件的清单、源码、语言包与说明，排除本地安装文件。"""
+    """复制随包插件的清单、源码、语言包与说明，排除本地安装文件。"""
     directory = product_dir / "plugins"
     if directory.exists():
         shutil.rmtree(directory)
