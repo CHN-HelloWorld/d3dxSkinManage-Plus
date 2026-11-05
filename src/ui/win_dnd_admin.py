@@ -96,9 +96,54 @@ def is_uac_elevated() -> bool:
 
 # 文件拖放通道的注册与撤销。
 
-# 保存窗口对应的 Qt OLE 目标指针，供内部拖动时恢复注册。
-_saved_targets: dict[int, int] = {}
+# 保存窗口对应的 Qt OLE 目标，借用期限不得超过原生窗口生命周期。
+_saved_targets: dict[int, _DropTargetLease] = {}
 _OLE_TARGET_PROP = "OleDropTargetInterface"
+
+
+def _change_target_reference(pointer: int, method_index: int) -> None:
+    """按 IUnknown 调用约定增加或释放拖放目标引用，不转移 Qt 原有所有权。"""
+    vtable = ctypes.cast(pointer, ctypes.POINTER(ctypes.c_void_p))[0]
+    address = ctypes.cast(vtable, ctypes.POINTER(ctypes.c_void_p))[method_index]
+    method_type = getattr(ctypes, "WINFUNCTYPE", ctypes.CFUNCTYPE)(ctypes.c_ulong, ctypes.c_void_p)
+    method_type(address)(ctypes.c_void_p(pointer))
+
+
+class _DropTargetLease(QObject):
+    """在 Qt 控件或原生句柄退役时释放借用的 COM 目标，防止句柄复用命中过期指针。"""
+
+    def __init__(self, widget: QWidget, hwnd: int, pointer: int) -> None:
+        """绑定窗口和句柄生命周期，监听销毁及不创建句柄的 WinIdChange 查询。"""
+        super().__init__(widget)
+        self.hwnd = hwnd
+        self.pointer = pointer
+        widget.installEventFilter(self)
+        widget.destroyed.connect(self.release)
+        handle = widget.windowHandle()
+        if handle is not None:
+            handle.destroyed.connect(self.release)
+
+    def eventFilter(self, obj, event):
+        """窗口标志变化和弹层关闭清除原生句柄时立即终止旧目标借用。"""
+        if event.type() == QEvent.Type.WinIdChange and self.pointer:
+            wid = obj.effectiveWinId()
+            if not wid or int(wid) != self.hwnd or QWidget.find(wid) is not obj:
+                self.release()
+        return False
+
+    def release(self, *_args) -> None:
+        """幂等移除缓存并释放唯一借用引用，窗口销毁中的重复通知不再访问 COM。"""
+        pointer = self.pointer
+        if not pointer:
+            return
+        self.pointer = 0
+        if _saved_targets.get(self.hwnd) is self:
+            del _saved_targets[self.hwnd]
+        try:
+            _change_target_reference(pointer, 2)
+        except Exception as exc:
+            logger.debug("释放 Qt 拖放目标失败: %s", exc)
+        self.deleteLater()
 
 
 def _grab_qt_drop_target(hwnd: int) -> int:
@@ -107,7 +152,10 @@ def _grab_qt_drop_target(hwnd: int) -> int:
     RegisterDragDrop 将目标记录在 OleDropTargetInterface，保留该对象可在内部拖动时重新注册。
     """
     if hwnd in _saved_targets:
-        return _saved_targets[hwnd]
+        return _saved_targets[hwnd].pointer
+    widget = QWidget.find(hwnd)
+    if widget is None or not widget.isWindow():
+        return 0
     user32 = _u32()
     user32.GetPropW.restype = ctypes.c_void_p
     user32.GetPropW.argtypes = [wintypes.HWND, wintypes.LPCWSTR]
@@ -115,14 +163,11 @@ def _grab_qt_drop_target(hwnd: int) -> int:
     if not ptr:
         return 0
     try:  # 增加 IUnknown 引用计数，防止撤销注册时释放仍需复用的对象。
-        vtbl = ctypes.cast(ptr, ctypes.POINTER(ctypes.c_void_p))[0]
-        add_ref = ctypes.cast(
-            ctypes.cast(vtbl, ctypes.POINTER(ctypes.c_void_p))[1], ctypes.CFUNCTYPE(ctypes.c_ulong, ctypes.c_void_p)
-        )
-        add_ref(ctypes.c_void_p(ptr))
+        _change_target_reference(int(ptr), 1)
     except Exception as exc:
         logger.debug("AddRef Qt 拖放目标失败: %s", exc)
-    _saved_targets[hwnd] = int(ptr)
+        return 0
+    _saved_targets[hwnd] = _DropTargetLease(widget, hwnd, int(ptr))
     return int(ptr)
 
 
@@ -140,23 +185,20 @@ def _arm(hwnd: int) -> None:
 
 def _restore_ole_target(hwnd: int) -> bool:
     """恢复 Qt 的 OLE 拖放目标，并暂停文件消息通道。"""
-    ptr = _saved_targets.get(hwnd, 0)
-    if not ptr:
+    target = _saved_targets.get(hwnd)
+    if target is None or not target.pointer:
         return False
     ole32 = _ole32()
     ole32.RegisterDragDrop.argtypes = [wintypes.HWND, ctypes.c_void_p]
     _sh32().DragAcceptFiles(wintypes.HWND(hwnd), False)
-    return ole32.RegisterDragDrop(wintypes.HWND(hwnd), ctypes.c_void_p(ptr)) == 0
+    return ole32.RegisterDragDrop(wintypes.HWND(hwnd), ctypes.c_void_p(target.pointer)) == 0
 
 
 def _widget_for_hwnd(hwnd: int) -> QWidget | None:
-    """按原生句柄寻找可见顶层 Qt 控件，忽略遍历期间已销毁的窗口。"""
-    for top in QApplication.topLevelWidgets():
-        try:
-            if top.isVisible() and int(top.winId()) == hwnd:
-                return top
-        except RuntimeError:  # 已析构
-            continue
+    """查询现存句柄对应的可见顶层控件，不在原生消息栈内创建或重建窗口。"""
+    top = QWidget.find(hwnd)
+    if top is not None and top.isWindow() and top.isVisible():
+        return top
     return None
 
 
@@ -305,14 +347,17 @@ class suspend_for_internal_drag:
     def __init__(self, widget: QWidget) -> None:
         """在管理员拖放桥已启用时捕获内部拖动所属顶层窗口的原生句柄。"""
         self._hwnd = 0
+        self._window = None
         if _installed and widget is not None:
             top = widget.window()
-            wid = top.winId() if top is not None else None
-            self._hwnd = int(wid) if wid else 0
+            wid = top.effectiveWinId() if top is not None else None
+            if wid and QWidget.find(wid) is top:
+                self._hwnd = int(wid)
+                self._window = top
 
     def __enter__(self) -> suspend_for_internal_drag:
         """内部拖动期间恢复 Qt 的 OLE 目标，暂时让出旧式文件拖放通道。"""
-        if self._hwnd:
+        if self._hwnd and _widget_for_hwnd(self._hwnd) is self._window:
             try:
                 if not _restore_ole_target(self._hwnd):
                     logger.debug("恢复 Qt OLE 拖放目标失败，内部拖拽本次不可用")
@@ -322,7 +367,7 @@ class suspend_for_internal_drag:
 
     def __exit__(self, *_exc) -> None:
         """内部拖动结束后重新启用旧式文件拖放通道，恢复失败不掩盖原异常。"""
-        if self._hwnd:
+        if self._hwnd and _widget_for_hwnd(self._hwnd) is self._window:
             try:
                 _arm(self._hwnd)
             except Exception as exc:
