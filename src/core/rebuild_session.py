@@ -245,6 +245,7 @@ class RebuildSession:
             get_characters=characters,
             _get_character_library=character_path,
             _get_library_root=lambda _gid: self.root,
+            _import_cleanup_recovery=getattr(self.mm, "_import_cleanup_recovery", None),
             _storage=SimpleNamespace(
                 scan_library_directory=lambda *args, **kwargs: ModStorage.scan_library_directory(None, *args, **kwargs)
             ),

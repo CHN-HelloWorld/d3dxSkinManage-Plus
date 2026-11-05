@@ -285,6 +285,11 @@ class ModManager:
         from src.core.library_protection import LibraryProtection
 
         self._library_protection = LibraryProtection()
+        from src.core.import_cleanup import ImportCleanupRecovery
+
+        self._import_cleanup_recovery = ImportCleanupRecovery(self)
+        if self._index._conn is not None:
+            self._import_cleanup_recovery.restore_pending()
         # 启动监控和导入前恢复分类发布，未解决的凭据继续保护对应路径。
         self.category_preset_recovery_errors = ()
         if self._index._conn is not None:
@@ -3357,6 +3362,7 @@ class ModManager:
             return read_container_marker(container) if reused else _validate_container_marker(container, data)
 
         scope = {_norm(p) for p in changed_paths} if changed_paths else set()
+        cleanup_recovery = getattr(self, "_import_cleanup_recovery", None)
 
         def _in_scope(path) -> bool:
             """无 scope 时恒真；否则只认与变化路径同分支（互为祖先/后代或相等）的项。"""
@@ -3388,6 +3394,8 @@ class ModManager:
                 if child.name.startswith("."):
                     continue
                 entry = Path(fs.normal_path(child.path))
+                if cleanup_recovery is not None and cleanup_recovery.contains(entry):
+                    continue
                 if not _in_scope(entry):
                     continue
                 if child.is_dir():
@@ -3453,7 +3461,11 @@ class ModManager:
             if cancel_cb is not None:
                 cancel_cb()
             # 直接成员清单已经覆盖这些分类根，包括无效容器和子分类。
-            return _norm(path) not in scanned_roots and _in_scope(path)
+            return (
+                _norm(path) not in scanned_roots
+                and _in_scope(path)
+                and (cleanup_recovery is None or not cleanup_recovery.contains(path))
+            )
 
         for d in self._storage.scan_library_directory(
             str(library_root),

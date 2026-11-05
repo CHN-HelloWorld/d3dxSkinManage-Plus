@@ -83,6 +83,11 @@ class IntakeError(RuntimeError):
 class DuplicateIntakeError(IntakeError):
     """该游戏已存在逻辑内容相同的 Mod。"""
 
+    def __init__(self, message: str, *, content_hash: str = "") -> None:
+        """携带已验证的内容指纹，使宿主可在所有者线程解析重复身份。"""
+        super().__init__(message)
+        self.content_hash = content_hash
+
 
 class IntakeTargetMissingError(IntakeError):
     """导入期间目标目录或分类被移除。"""
@@ -140,6 +145,7 @@ class IntakeRequest:
     external_copy: bool = False
     source_version: tuple | None = None
     source_name: str = ""
+    recoverable_cleanup: bool = False
 
 
 @dataclass
@@ -170,6 +176,7 @@ class PreparedIntake:
     variants: tuple[ModVariant, ...] = field(default=(), repr=False)
     #: 非空表示随包描述类元数据已整份丢弃（内容完好）；由任务中心明细行展示给用户。
     metadata_notice: str = ""
+    cleanup_token: str = ""
     committed: bool = field(default=False, init=False)
 
 
@@ -246,6 +253,7 @@ class ModIntakeService:
         external_copy: bool = False,
         source_version: tuple | None = None,
         planning_snapshot: IntakePlanningSnapshot | None = None,
+        recoverable_cleanup: bool = False,
     ) -> IntakeRequest:
         """冻结配置和索引派生的导入输入，原始文件名仅用于新容器的默认命名。"""
         if game_id != self._manager.current_game_id:
@@ -305,6 +313,7 @@ class ModIntakeService:
             context=context,
             external_copy=external_copy,
             source_version=source_version,
+            recoverable_cleanup=recoverable_cleanup,
         )
         self._validate_target(request, check_character=True)
         return request
@@ -379,6 +388,8 @@ class ModIntakeService:
 
         if request.context not in {"external", "rediscovery"}:
             raise IntakeError(f"unknown intake context: {request.context}")
+        if request.recoverable_cleanup and (request.context != "external" or request.move_source):
+            raise IntakeError("recoverable cleanup requires an external copy import")
         if request.source_version is not None and capture_source_version(source) != request.source_version:
             raise IntakeError("source changed after discovery")
         if request.context == "rediscovery":
@@ -401,6 +412,31 @@ class ModIntakeService:
         source_backup_root: Path | None = None
         mod_id: str | None = None
         operation_temp = None
+        recovery = self._manager._import_cleanup_recovery if request.recoverable_cleanup else None
+        cleanup_token = ""
+        cleanup_attempted = False
+
+        def record_container(path, body_name):
+            """为本次新建空容器登记持久身份，正文开始复制前即建立重启保护。"""
+            nonlocal cleanup_token
+            cleanup_token = recovery.begin(
+                game_id=request.game_id,
+                root=get_data_dir() / request.resource_dir / "mods",
+                container=path,
+                body_name=body_name,
+                mod_id=mod_id,
+                content_hash=content_hash,
+            )
+
+        def cleanup_failed_container(path):
+            """将复制中取消交给有限重试清理；没有成功登记时最多移除空目录。"""
+            nonlocal cleanup_attempted
+            cleanup_attempted = True
+            if cleanup_token:
+                recovery.cancel(cleanup_token)
+            elif fs.is_dir(path):
+                fs.rmdir(path)
+
         try:
             mod_id = self._reserve_mod_id(request)
             operation_temp = get_data_dir() / "temp" / f"intake_{mod_id}"
@@ -444,6 +480,7 @@ class ModIntakeService:
             ):
                 raise DuplicateIntakeError(
                     f"content already exists: {request.display_name or source.name}",
+                    content_hash=content_hash,
                 )
 
             if not stage_import_metadata(
@@ -507,11 +544,18 @@ class ModIntakeService:
                 before_create=lambda target: self._manager.protect_library_operation(
                     "intake:" + mod_id, paths=(target,)
                 ),
+                **(
+                    {"on_created": record_container, "on_failed_cleanup": cleanup_failed_container}
+                    if recovery is not None
+                    else {}
+                ),
             )
             if body is None:
                 raise IntakeError("failed to create managed container")
             body = Path(body)
             container = body.parent
+            if recovery is not None:
+                recovery.prepared(cleanup_token)
             if capture_source_version(prepared_source.clean_path) != prepared_source.content_version:
                 raise IntakeError("source changed while copying import")
 
@@ -649,12 +693,20 @@ class ModIntakeService:
                 metadata_notice=prepared_source.metadata_notice,
                 operation_temp=operation_temp,
                 variants=imported_variants,
+                cleanup_token=cleanup_token,
             )
         except BaseException:
+            cleanup_error = None
             try:
                 if mod_id is not None:
                     self._release_mod_id(mod_id)
-                if container is not None:
+                if cleanup_token:
+                    if not cleanup_attempted:
+                        try:
+                            recovery.cancel(cleanup_token)
+                        except Exception as error:
+                            cleanup_error = error
+                elif container is not None:
                     fs.rmtree(container, ignore_errors=True)
                 if preview_cache is not None:
                     fs.rmtree(preview_cache, ignore_errors=True)
@@ -671,6 +723,8 @@ class ModIntakeService:
                     fs.rmtree(operation_temp, ignore_errors=True)
                 if mod_id is not None:
                     self._manager.release_library_operation("intake:" + mod_id)
+            if cleanup_error is not None:
+                raise cleanup_error
             raise
 
     def _prepare_existing(
@@ -821,10 +875,12 @@ class ModIntakeService:
         prepared: PreparedIntake,
         *,
         rollback_on_error: bool = True,
+        cleanup_on_success: bool = True,
     ) -> Mod:
         """重新验证目标、正文和变体文件，在同一索引事务中检查身份与内容冲突并写入 Mod。
 
-        提交前失败按参数回滚准备结果；成功后标记已提交、释放在途登记并清理临时文件及通知导入事件。"""
+        提交前失败按参数回滚；成功后释放在途登记并通知事件。
+        cleanup_on_success=False 时，调用方须在后台执行 cleanup_committed 后再结束任务。"""
         try:
             if (
                 prepared.request.context == "rediscovery"
@@ -858,6 +914,8 @@ class ModIntakeService:
                 if not self._manager._write_mod_sidecar(prepared.mod, repair_invalid=True):
                     raise IntakeError("failed to restore source descriptions")
                 prepared.written_sidecar = self._read_metadata_bytes(sidecar_path)
+            if prepared.cleanup_token:
+                self._manager._import_cleanup_recovery.committing(prepared.cleanup_token)
             old_game = self._manager._index.game_id
             self._manager._index.game_id = prepared.request.game_id
             try:
@@ -879,6 +937,7 @@ class ModIntakeService:
                     ):
                         raise DuplicateIntakeError(
                             f"content already exists: {existing.display_name}",
+                            content_hash=prepared.content_hash,
                         )
                     occupied = self._manager._index.find_mod_id_by_path(
                         prepared.mod.path,
@@ -904,9 +963,10 @@ class ModIntakeService:
             self._release_mod_id(prepared.mod.mod_id, committed=True)
             # 已入库 → 索引本身就能保护它，注销在途登记。
             self._manager.unregister_inflight_mod_id(prepared.mod.mod_id)
-            prepared.import_source.cleanup()
-            if prepared.source_backup_root is not None:
-                fs.rmtree(prepared.source_backup_root, ignore_errors=True)
+            if cleanup_on_success:
+                prepared.import_source.cleanup()
+                if prepared.source_backup_root is not None:
+                    fs.rmtree(prepared.source_backup_root, ignore_errors=True)
             self._manager._emit(
                 "mod_imported",
                 mod_id=prepared.mod.mod_id,
@@ -914,10 +974,32 @@ class ModIntakeService:
                 game_id=prepared.request.game_id,
             )
         finally:
+            if cleanup_on_success:
+                if prepared.operation_temp is not None:
+                    fs.rmtree(prepared.operation_temp, ignore_errors=True)
+                try:
+                    if prepared.cleanup_token:
+                        self._manager._import_cleanup_recovery.committed(prepared.cleanup_token)
+                finally:
+                    self._manager.release_library_operation("intake:" + prepared.mod.mod_id)
+        return prepared.mod
+
+    def cleanup_committed(self, prepared: PreparedIntake) -> None:
+        """清理已提交导入的临时文件并释放路径保护，不查询或改写数据库。"""
+        if not prepared.committed:
+            raise IntakeError("cannot clean an uncommitted import")
+        try:
+            prepared.import_source.cleanup()
+            if prepared.source_backup_root is not None:
+                fs.rmtree(prepared.source_backup_root, ignore_errors=True)
+        finally:
             if prepared.operation_temp is not None:
                 fs.rmtree(prepared.operation_temp, ignore_errors=True)
-            self._manager.release_library_operation("intake:" + prepared.mod.mod_id)
-        return prepared.mod
+            try:
+                if prepared.cleanup_token:
+                    self._manager._import_cleanup_recovery.committed(prepared.cleanup_token)
+            finally:
+                self._manager.release_library_operation("intake:" + prepared.mod.mod_id)
 
     def rollback(self, prepared: PreparedIntake) -> None:
         """撤销尚未提交的导入准备，并确保清理操作临时目录及释放路径保护。"""
@@ -938,11 +1020,18 @@ class ModIntakeService:
             self._manager.unregister_inflight_mod_id(prepared.mod.mod_id)
         except Exception:
             pass
-        for path in reversed(prepared.created_paths):
-            if fs.is_dir(path):
-                fs.rmtree(path, ignore_errors=True)
-            elif fs.exists(path):
-                fs.unlink(path, missing_ok=True)
+        cleanup_error = None
+        if prepared.cleanup_token:
+            try:
+                self._manager._import_cleanup_recovery.cancel(prepared.cleanup_token)
+            except Exception as error:
+                cleanup_error = error
+        else:
+            for path in reversed(prepared.created_paths):
+                if fs.is_dir(path):
+                    fs.rmtree(path, ignore_errors=True)
+                elif fs.exists(path):
+                    fs.unlink(path, missing_ok=True)
         if prepared.preview_cache_path is not None and prepared.request.context == "external":
             fs.rmtree(prepared.preview_cache_path, ignore_errors=True)
         if (
@@ -969,6 +1058,8 @@ class ModIntakeService:
             prepared.source_backup_root,
         )
         prepared.import_source.cleanup()
+        if cleanup_error is not None:
+            raise cleanup_error
 
     @staticmethod
     def _read_metadata_bytes(path: Path) -> bytes | None:

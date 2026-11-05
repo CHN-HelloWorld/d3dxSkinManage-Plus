@@ -100,6 +100,9 @@ class ModOperationService(QObject):
         from src.core.preset_variant_operations import PresetVariantOperations
 
         self._preset_variants = PresetVariantOperations(self, manager)
+        from src.core.plugin_library_operations import PluginLibraryOperations
+
+        self._library_operations = PluginLibraryOperations(self, manager)
 
     @property
     def busy(self):
@@ -126,7 +129,9 @@ class ModOperationService(QObject):
         self._owned_tasks.setdefault(owner, weakref.WeakSet()).add(task)
         task._cancel = lambda: self._cancel_request(request)
         if self._stopping:
-            task._finish(OperationResult(request.game_id, cancelled_ids=ids, error=tr("宿主正在退出")))
+            task._finish(
+                OperationResult(request.game_id, cancelled_ids=ids, error=tr("宿主正在退出"), cancel_requested=True)
+            )
             return task
         was_busy = self.busy
         self._queue.append(request)
@@ -157,7 +162,20 @@ class ModOperationService(QObject):
         for request in list(self._queue) + ([self._active] if self._active else []):
             request.task.cancel()
 
-    def _complete(self, request, *, succeeded=(), failed=(), cancelled=(), error="", preset_id=None, variant_id=None):
+    def _complete(
+        self,
+        request,
+        *,
+        succeeded=(),
+        failed=(),
+        cancelled=(),
+        error="",
+        preset_id=None,
+        variant_id=None,
+        node_id="",
+        skipped=(),
+        warnings=(),
+    ):
         """释放请求预留并发布结果，先刷新宿主信号再完成插件回调，随后继续调度。"""
         self._preset_variants.release(request)
         result = OperationResult(
@@ -168,6 +186,10 @@ class ModOperationService(QObject):
             error,
             preset_id if preset_id is not None else request.args.get("preset_id", ""),
             variant_id if variant_id is not None else request.args.get("variant_id"),
+            node_id=node_id,
+            skipped_ids=tuple(skipped),
+            warnings=tuple(warnings),
+            cancel_requested=request.task._cancel_requested,
         )
         if self._active is request:
             self._active = None
@@ -205,6 +227,9 @@ class ModOperationService(QObject):
         """按操作类型验证目标并调度预设、删除、启用或禁用流程。"""
         args, operation = request.args, request.operation
         if self._cancel_before_mutation(request):
+            return
+        if operation in {"create_category", "import_mod"}:
+            self._library_operations.start(request)
             return
         if operation.startswith(("preset_", "variant_")):
             self._preset_variants.start(request)
@@ -378,6 +403,14 @@ class ModOperationService(QObject):
             return
         worker = request.worker
         if worker.isRunning():
+            return
+        if request.operation == "import_mod":
+            request.state["settling"] = True
+            try:
+                self._library_operations.settle(request, worker)
+            finally:
+                request.state["settling"] = False
+                worker.deleteLater()
             return
         if request.operation.startswith(("preset_", "variant_")):
             request.state["settling"] = True

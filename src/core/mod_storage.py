@@ -790,12 +790,15 @@ class ModStorage:
         should_cancel=None,
         progress_cb=None,
         before_create=None,
+        on_created=None,
+        on_failed_cleanup=None,
     ) -> Path | None:
         """将 Mod 本体复制到新容器并返回本体路径。
 
         容器包含身份标记及同基名的文件夹或归档；重名时同时调整容器和本体名称。
         目标名称预留和创建在锁内完成，避免并发覆盖。
         source_name 可提供原始文件名；仅使用其安全基名，源路径和归档后缀保持不变。
+        可选创建与失败清理回调由插件导入提供，用于为新容器保存可恢复的清理凭据。
         """
         src = Path(src)
         dst_parent = Path(dst_parent)
@@ -830,8 +833,12 @@ class ModStorage:
             body = container / f"{base}{suffix}"
             if before_create is not None:
                 before_create(container)
+            created = False
             try:
                 fs.ensure_dir(container, exist_ok=False)
+                created = True
+                if on_created is not None:
+                    on_created(container, body.name)
                 fs.copy_path(
                     src,
                     body,
@@ -841,7 +848,11 @@ class ModStorage:
                 )
             except OSError as e:
                 logger.error("复制 Mod 到容器失败: %s", e)
-                fs.rmtree(container, ignore_errors=True)
+                if on_failed_cleanup is not None:
+                    if created:
+                        on_failed_cleanup(container)
+                else:
+                    fs.rmtree(container, ignore_errors=True)
                 return None
 
         try:
@@ -858,7 +869,10 @@ class ModStorage:
             logger.error("写容器 marker 失败，已回滚导入产物: %s", e)
             marker_written = False
         if not marker_written:
-            fs.rmtree(container, ignore_errors=True)
+            if on_failed_cleanup is not None:
+                on_failed_cleanup(container)
+            else:
+                fs.rmtree(container, ignore_errors=True)
             return None
         logger.info("Mod 已复制进容器: %s -> %s", src, body)
         return body

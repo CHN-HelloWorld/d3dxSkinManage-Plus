@@ -504,14 +504,17 @@ class MainWindow(QMainWindow):
                 tr("插件操作已完成") if result.ok else tr("插件操作未完成"),
                 result.error
                 or tr(
-                    "成功 {count} 项，失败 {count_2} 项，取消 {count_3} 项",
-                    count=len(result.succeeded_ids),
+                    "成功 {count} 项，跳过 {skipped} 项，失败 {count_2} 项，取消 {count_3} 项",
+                    count=len(result.succeeded_ids) + bool(getattr(result, "node_id", "")),
+                    skipped=len(getattr(result, "skipped_ids", ())),
                     count_2=len(result.failed_ids),
                     count_3=len(result.cancelled_ids),
                 ),
                 ok=result.ok,
             )
-        if result.game_id == self._mod_manager.current_game_id and result.succeeded_ids:
+        if result.game_id == self._mod_manager.current_game_id and (
+            result.succeeded_ids or getattr(result, "node_id", "")
+        ):
             self._suppress_watcher()
             self._reload_overview_level(result.game_id)
             if self._stack.currentIndex() == self.PAGE_GALLERY:
@@ -532,9 +535,11 @@ class MainWindow(QMainWindow):
             "delete_mod": tr("删除 Mod"),
             "set_enabled": tr("切换 Mod 状态"),
             "toggle_mod": tr("切换 Mod 状态"),
+            "create_category": tr("创建分类"),
+            "import_mod": tr("导入 Mod"),
         }
         self._plugin_progress.start_batch(
-            len(ids),
+            max(1, len(ids)),
             labels.get(operation, tr("插件操作")),
             stop_tooltip=tr("停止后续插件操作"),
             cancelled_title=tr("插件操作已停止"),

@@ -72,7 +72,7 @@ class PluginContext:
         self.mods = ModFacade(mod_manager, granted, operations=operations, owner=meta.id)
         self.presets = PresetFacade(mod_manager, granted, operations=operations, owner=meta.id)
         self.variants = VariantFacade(mod_manager, granted, operations=operations, owner=meta.id)
-        self.game = GameFacade(mod_manager, granted)
+        self.game = GameFacade(mod_manager, granted, operations=operations, owner=meta.id)
 
     @property
     def plugin_id(self) -> str:

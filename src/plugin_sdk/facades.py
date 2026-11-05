@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 from src.plugin_sdk._lifecycle import ContextResource
 from src.plugin_sdk.errors import PermissionDenied
+from src.plugin_sdk.imports import ModImportRequest
 from src.plugin_sdk.operations import OperationResult, OperationTask
 from src.utils.i18n import t as tr
 from src.utils.logger import logger as _logger
@@ -89,8 +90,8 @@ class _PermMixin(ContextResource):
             raise PermissionDenied(perm)
 
 
-class ModFacade(_PermMixin):
-    """Mod 读写门面。写入操作须具备对应权限，并在主线程执行。"""
+class _OperationFacade(_PermMixin):
+    """共用带插件所有权的任务提交及停用语义。"""
 
     def __init__(self, manager: ModManager, granted: frozenset[str], *, operations=None, owner: str = "") -> None:
         """绑定 Mod 管理器、已授予权限和带插件归属的异步操作队列。"""
@@ -105,6 +106,26 @@ class ModFacade(_PermMixin):
         """停用写操作入口，使之后的提交返回失败任务。"""
         self._closed_game_id = getattr(self._m, "current_game_id", "")
         self._closed = True
+
+    def _submit(self, operation: str, **args) -> OperationTask:
+        """将写操作提交给宿主队列；停用或无操作服务时返回已完成的失败任务。"""
+        if self._closed or self._operations is None:
+            task = OperationTask()
+            ids = (args["mod_id"],) if args.get("mod_id") else ()
+            task._finish(
+                OperationResult(
+                    self._closed_game_id if self._closed else getattr(self._m, "current_game_id", ""),
+                    failed_ids=ids,
+                    error=tr("插件已停用") if self._closed else tr("宿主未提供 Mod 操作服务"),
+                )
+            )
+            return task
+        self._require_open()
+        return self._operations.submit(self._owner, operation, **args)
+
+
+class ModFacade(_OperationFacade):
+    """Mod 读写门面。写入操作须具备对应权限，并在主线程执行。"""
 
     # 查询返回独立快照，并要求读取权限。
     def current_game_id(self) -> str:
@@ -133,21 +154,12 @@ class ModFacade(_PermMixin):
         return [self._info(m) for m in self._m.search_mods(query)]
 
     # 写（mods:write）
-    def _submit(self, operation: str, **args) -> OperationTask:
-        """将写操作提交给宿主队列；门面停用或服务缺失时返回已完成的失败任务。"""
-        if self._closed or self._operations is None:
-            task = OperationTask()
-            ids = (args["mod_id"],) if args.get("mod_id") else ()
-            task._finish(
-                OperationResult(
-                    self._closed_game_id if self._closed else getattr(self._m, "current_game_id", ""),
-                    failed_ids=ids,
-                    error=tr("插件已停用") if self._closed else tr("宿主未提供 Mod 操作服务"),
-                )
-            )
-            return task
-        self._require_open()
-        return self._operations.submit(self._owner, operation, **args)
+    def import_mod(self, request: ModImportRequest) -> OperationTask:
+        """复制导入到当前游戏分类，重复内容通过 skipped_ids 返回已有身份。"""
+        self._require("mods:write")
+        if not isinstance(request, ModImportRequest):
+            raise TypeError("request must be a ModImportRequest")
+        return self._submit("import_mod", request=request)
 
     def set_enabled(self, mod_id: str, enabled: bool) -> OperationTask:
         """检查 mods:write 权限后请求设置 Mod 启用状态，结果通过任务回调返回。"""
@@ -171,19 +183,45 @@ class ModFacade(_PermMixin):
         return self._submit("delete_mod", mod_id=mod_id)
 
 
-class GameFacade(_PermMixin):
-    """游戏 / 角色树只读门面。"""
+class GameFacade(_OperationFacade):
+    """游戏与分类查询，以及经过权限检查的分类创建。"""
 
-    def __init__(self, manager: ModManager, granted: frozenset[str]) -> None:
-        """绑定游戏查询所需的管理器和插件权限集合。"""
-        super().__init__()
-        self._m = manager
-        self._granted = granted
+    def create_category(
+        self,
+        name: str,
+        *,
+        parent_id: str = "",
+        node_type: str = "category",
+        name_en: str = "",
+        thumbnail_path: str = "",
+        exist_ok: bool = False,
+    ) -> OperationTask:
+        """创建当前游戏的节点，通过 node_id 返回身份；exist_ok 仅复用同名同类型节点。"""
+        self._require("mods:write")
+        if not all(isinstance(value, str) for value in (name, parent_id, node_type, name_en, thumbnail_path)):
+            raise TypeError("category fields must be strings")
+        if not isinstance(exist_ok, bool):
+            raise TypeError("exist_ok must be a bool")
+        return self._submit(
+            "create_category",
+            name=name,
+            parent_id=parent_id,
+            node_type=node_type,
+            name_en=name_en,
+            thumbnail_path=thumbnail_path,
+            exist_ok=exist_ok,
+        )
 
     def current_game_id(self) -> str:
         """返回宿主当前选中的游戏 ID。"""
         self._read_guard()
         return self._m.current_game_id
+
+    def current_game_name(self) -> str:
+        """返回当前游戏显示名称；未选择有效游戏时返回空字符串。"""
+        self._read_guard()
+        game = self._m._game_service.get_current_game()
+        return game.name if game is not None else ""
 
     def get_characters(self) -> list[CharacterInfo]:
         """返回当前游戏分类节点的只读快照列表。"""
