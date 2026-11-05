@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import html
+from math import ceil
 
 from PySide6.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPen
 from PySide6.QtWidgets import QAbstractButton, QLayout, QLayoutItem, QSizePolicy, QToolButton, QToolTip
 
 from src.models.tag import TagDefinition, tag_colors
@@ -79,14 +80,18 @@ class TagChip(QAbstractButton):
         self.updateGeometry()
         self.update()
 
+    def _text_metrics(self) -> QFontMetricsF:
+        """按实际字体和绘制设备保留小数宽度，使布局测量与省略判断保持一致。"""
+        return QFontMetricsF(self.font(), self)
+
     def _count_width(self) -> int:
-        """计算可选数量文字及其前置间隔所占的像素宽度。"""
-        return self.fontMetrics().horizontalAdvance(f"  {self._count}") if self._count is not None else 0
+        """向上取整数量文字及前置间隔的宽度，避免分数像素被截断。"""
+        return ceil(self._text_metrics().horizontalAdvance(f"  {self._count}")) if self._count is not None else 0
 
     def sizeHint(self) -> QSize:
         """根据标签名、数量和移除按钮计算推荐宽度，并限制在最大宽度内。"""
         self.ensurePolished()
-        width = self.fontMetrics().horizontalAdvance(self._tag.name) + 16 + self._count_width()
+        width = ceil(self._text_metrics().horizontalAdvance(self._tag.name)) + 16 + self._count_width()
         if self._remove_button is not None:
             width += 19
         return QSize(min(self.maximumWidth(), width), self._height)
@@ -112,7 +117,7 @@ class TagChip(QAbstractButton):
         remove_width = 19 if self._remove_button is not None else 0
         count_width = self._count_width()
         text_rect = self.rect().adjusted(8, 0, -8 - remove_width - count_width, 0)
-        text = self.fontMetrics().elidedText(self._tag.name, Qt.TextElideMode.ElideRight, max(0, text_rect.width()))
+        text = self._text_metrics().elidedText(self._tag.name, Qt.TextElideMode.ElideRight, max(0, text_rect.width()))
         painter.drawText(text_rect, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft, text)
         if self._count is not None:
             count_rect = self.rect().adjusted(self.width() - 8 - remove_width - count_width, 0, -8 - remove_width, 0)
