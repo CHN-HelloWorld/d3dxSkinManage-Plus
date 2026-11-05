@@ -18,6 +18,9 @@ from src.plugin_sdk.errors import PermissionDenied
 # factory -> QWidget（宿主侧创建/托管）
 ViewFactory = Callable[[], Any]
 PageFactory = Callable[[], Any]
+STYLE_ROLES = frozenset(
+    {"card", "title", "subtitle", "muted", "heading", "primary_button", "button", "input", "table", "progress"}
+)
 
 
 class _ViewRegistryLike(Protocol):
@@ -41,6 +44,10 @@ class _UIHostLike(Protocol):
 
     def notify(self, plugin_id: str, message: str, level: str) -> None:
         """以指定等级显示带插件归属的提示消息。"""
+        ...
+
+    def apply_style(self, plugin_id: str, widget: Any, role: str) -> Disposable:
+        """为控件登记宿主语义样式，返回停止主题更新的句柄。"""
         ...
 
 
@@ -105,6 +112,15 @@ class UIExtensionPoints(ContextResource):
     def show_popup(self, widget: Any, title: str = "") -> Any:
         """使用宿主对话框接口展示非模态窗口。"""
         return self.show_dialog(widget, title=title, modal=False)
+
+    def apply_style(self, widget: Any, role: str) -> Disposable:
+        """绑定 card、文字层级、按钮、input、table 或 progress 样式，并随宿主主题更新。"""
+        self._require_views()
+        if role not in STYLE_ROLES:
+            raise ValueError(f"Unknown plugin style role: {role}")
+        if self._host is None:
+            return self._subscriptions.add(Disposable(lambda: None))
+        return self._subscriptions.add(self._host.apply_style(self._pid, widget, role))
 
     def notify(self, message: str, level: str = "info") -> None:
         """发送一条 Toast 通知。level: info | success | warning | error。"""

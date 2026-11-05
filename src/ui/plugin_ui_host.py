@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 
 from src.plugin_sdk.disposable import Disposable
 from src.ui import icons, theme
+from src.ui.plugin_style import PluginStyleBindings
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 
@@ -42,6 +43,7 @@ class PluginUIHost:
         # 窗口显示前先将通知排队，待布局完成后再显示 Toast，确保定位依据有效。
         self._notify_ready = False
         self._notify_queue: list[tuple[str, str, str]] = []
+        self._styles = PluginStyleBindings()
 
     # 页面
 
@@ -138,6 +140,7 @@ class PluginUIHost:
 
     def retheme(self) -> None:
         """原位刷新宿主管理的表面和导航图标，保留插件输入状态。"""
+        self._styles.retheme()
         for pages in self._pages.values():
             for item, page in pages:
                 self._retheme_page(page)
@@ -157,6 +160,10 @@ class PluginUIHost:
             lst.remove(dlg)
             if not lst:
                 self._dialogs.pop(plugin_id, None)
+
+    def apply_style(self, plugin_id: str, widget: QWidget, role: str) -> Disposable:
+        """为插件控件绑定与宿主一致的样式，禁止插件依赖内部主题模块。"""
+        return self._styles.bind(plugin_id, widget, role)
 
     # 通知
 
@@ -190,6 +197,7 @@ class PluginUIHost:
 
     def cleanup_plugin(self, plugin_id: str) -> None:
         """插件停用：移除其页面与导航项、关闭其对话框。"""
+        self._styles.cleanup_plugin(plugin_id)
         self._notify_queue = [item for item in self._notify_queue if item[0] != plugin_id]
         # 停用是强制回收。结束模态循环并立即隐藏，不受 closeEvent 拒绝影响；
         # 插件已停用，不再派发 finished/rejected 回调。
