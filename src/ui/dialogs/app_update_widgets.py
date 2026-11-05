@@ -169,11 +169,17 @@ class UpdateProgressDialog(UpdateDialog):
         self._speed.setObjectName("downloadSpeed")
         self._speed.setVisible(cancellable)
         body.addWidget(self._speed)
+        self._source = update_label("", "caption", wrap=True)
+        self._source.setObjectName("downloadSource")
+        self._source.setVisible(False)
+        body.addWidget(self._source)
         self.content.addLayout(body)
         footer, row = update_footer()
         row.addWidget(
             update_label(
-                tr("下载期间可以取消。") if cancellable else tr("关闭窗口后，安装准备仍会继续。"), "caption", wrap=True
+                tr("取消后将清理已下载数据。") if cancellable else tr("关闭窗口后，安装准备仍会继续。"),
+                "caption",
+                wrap=True,
             ),
             1,
         )
@@ -212,6 +218,11 @@ class UpdateProgressDialog(UpdateDialog):
                 self._speed.setText(tr("下载速度：{speed}", speed=value))
                 return
             speed /= 1024
+
+    def setDownloadSource(self, source: str) -> None:
+        """独立显示下载源和代理状态，不随字节进度说明刷新而丢失。"""
+        self._source.setText(tr("当前线路：{source}", source=source))
+        self._source.setVisible(self._cancellable and bool(source))
 
     def _refresh_percent(self) -> None:
         """根据当前进度和上限刷新百分比，无确定上限时显示进行中。"""

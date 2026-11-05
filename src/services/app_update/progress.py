@@ -14,11 +14,11 @@ class DownloadRate:
         self._clock = clock
         self.reset()
 
-    def reset(self) -> None:
-        """清零字节基线和速度，将当前时刻作为下一次采样起点。"""
+    def reset(self, downloaded: int = 0) -> None:
+        """以已有分片建立字节基线，清除速度，避免把续传前缀计为新增下载量。"""
         self._time = self._clock()
-        self._bytes = 0
-        self._sample_bytes = 0
+        self._bytes = max(0, downloaded)
+        self._sample_bytes = self._bytes
         self._speed: float | None = None
 
     def record(self, downloaded: int) -> None:
