@@ -103,6 +103,9 @@ class _Visitor(ast.NodeVisitor):
         if _is_forbidden_src(mod):
             self._r.forbidden_imports.append(f"{mod} ({self._rel}:{lineno})")
             return
+        # URL 解析只处理本地字符串；urllib 本身及其请求模块仍受网络权限检查。
+        if mod == "urllib.parse":
+            return
         perm = _DANGEROUS_MODULE_PERMS.get(_top_module(mod))
         if perm:
             tag = f"{mod}→{perm} ({self._rel}:{lineno})"
@@ -123,7 +126,11 @@ class _Visitor(ast.NodeVisitor):
         if node.level and not node.module:
             return
         if node.level == 0 and node.module:
-            self._check_module(node.module, node.lineno)
+            if node.module == "urllib":
+                for alias in node.names:
+                    self._check_module(f"urllib.{alias.name}", node.lineno)
+            else:
+                self._check_module(node.module, node.lineno)
         self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:

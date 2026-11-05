@@ -46,6 +46,7 @@ htmlcov/
 !/plugins/example.mod-inventory/
 !/plugins/example.preset-audit/
 !/plugins/example.preset-cycle/
+!/plugins/official.legacy-migration/
 
 # 编辑器与本地辅助工具配置
 /.claude/
