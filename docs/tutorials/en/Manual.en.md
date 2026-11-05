@@ -252,7 +252,7 @@ Search covers the current category and its subcategories. Entering a category, g
 | **Category** | Multiple Mods can be enabled at once | Interface Mods, tools, and resources that can be combined |
 | **Character/object** | Only one Mod can be enabled across this node and all its subcategories | Mutually exclusive character appearances or object replacements |
 
-Choose **Node type** when creating a category. Character restrictions apply down the hierarchy from parent nodes; creating another subcategory does not bypass them.
+Choose **Node type** when creating or editing a category. Character/object restrictions cover every level below the node, including nested characters/objects.
 
 The root level is primarily for category navigation. Enter the target category before importing Mods to avoid accumulating uncategorized resources at the root.
 
@@ -277,6 +277,8 @@ Enter a name, optionally add an English name and cover image, then confirm. The 
 *Enter a name, English name, image, and node type separately for each item. Categories are created at the current level.*
 
 Batch creation also uses the node type selected for each item. To change an existing category's information, choose **Edit** from its context menu or details panel.
+
+The editor lets you convert between **Category** and **Character/object**. If more than one Mod is enabled in the node or its descendants when converting a category to a character/object, saving is blocked. Choose **Disable all and retry** to save after every affected Mod has been disabled successfully, or **Confirm** to dismiss the message and keep the original type. Cancelling the disable operation or encountering a failure also keeps the original type. Wait for any deployment tasks under the node to finish before converting its type.
 
 If you have a category preset, build the category tree using **Start with a category preset** on the empty page or **Tools → Import category preset**. See Chapter 7. Category presets contain different data from Mod presets, which save which Mods are enabled.
 

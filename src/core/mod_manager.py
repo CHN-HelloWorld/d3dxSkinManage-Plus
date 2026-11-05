@@ -451,20 +451,25 @@ class ModManager:
 
     # 角色/对象 Mod 限制
 
-    def find_character_ancestor(self, char_id: str, game_id: str | None = None) -> Node | None:
-        """向上查找最近的 node_type='character' 祖先节点"""
+    def find_character_ancestor(
+        self, char_id: str, game_id: str | None = None, *, outermost: bool = False
+    ) -> Node | None:
+        """查找包含自身的角色祖先；互斥检查可取最外层角色，使约束覆盖整个子树。"""
         gid = game_id or self.current_game_id
         all_chars = self.get_characters(gid)
         char_map = {c.id: c for c in all_chars}
         current = char_id
+        ancestor = None
         while current:
             c = char_map.get(current)
             if not c:
                 break
             if c.node_type == "character":
-                return c
+                ancestor = c
+                if not outermost:
+                    return c
             current = c.parent_id
-        return None
+        return ancestor
 
     def get_subtree_ids(self, root_id: str, game_id: str | None = None) -> list[str]:
         """获取以 root_id 为根的所有子孙节点 ID（包括 root_id 本身）"""
@@ -488,8 +493,8 @@ class ModManager:
         mod = self._index.get_mod(mod_id)
         if not mod or not mod.node_id:
             return []
-        # 查找最近的 character 祖先
-        char_ancestor = self.find_character_ancestor(mod.node_id)
+        # 父类别转为角色后，原有的嵌套角色同样受父级互斥约束。
+        char_ancestor = self.find_character_ancestor(mod.node_id, outermost=True)
         if not char_ancestor:
             return []
         # 找到角色子树下所有 node_id
@@ -763,7 +768,7 @@ class ModManager:
     @protect_node_operation
     @library_mutation
     def update_character(self, char_id: str, name: str, name_en: str = "", node_type: str | None = None) -> bool:
-        """更新分类名称和类型并同步目录及标记，失败恢复原件；提交后修复后代部署引用。"""
+        """校验子树启用约束后更新分类目录与标记，失败恢复原件；提交后修复后代部署引用。"""
         if not self.check_node_operation(char_id):
             return False
         gid = self.current_game_id
@@ -773,6 +778,17 @@ class ModManager:
         kind = current.node_type if node_type is None else node_type
         if kind not in _CATEGORY_NODE_TYPES:
             return False
+        if current.node_type != "character" and kind == "character":
+            pending = self._library_protection.snapshot()[1]
+            if pending:
+                scope_ids = self.get_subtree_ids(char_id, gid)
+                busy_mods = self.get_character_conflict_mods(scope_ids, deploying_ids=pending)
+                if any(mod.mod_id in pending for mod in busy_mods):
+                    logger.warning("节点子树仍有在途 Mod 操作，暂不改为角色/对象: %s", char_id)
+                    return False
+            if len(self.get_enabled_mod_ids(char_id, gid)) > 1:
+                logger.warning("节点子树中存在多个已启用 Mod，拒绝改为角色/对象: %s", char_id)
+                return False
         conn = self._index._db()
         old_path = self._get_character_library(char_id, gid, create=False)
         new_path = old_path.parent / name

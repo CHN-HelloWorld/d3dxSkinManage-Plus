@@ -581,11 +581,11 @@ class CharacterDialog(QDialog):
         if char_data and char_data.get("name"):
             own = char_data["name"].lower()
             self._existing_names.discard(own)
-            self._all_character_names.discard(own)
+            if char_data.get("node_type") == "character":
+                self._all_character_names.discard(own)
         self.setWindowTitle(t("编辑类别") if self._is_edit else t("新建类别"))
         self._heading.setText(self.windowTitle())
         self._confirm_button.setText(tr("保存") if self._is_edit else tr("确认"))
-        self._type_section.setVisible(not self._is_edit)
         self._type_combo.setCurrentIndex(1 if char_data and char_data.get("node_type") == "character" else 0)
         self._name_input.setStyleSheet("")
         self._name_input.setText(char_data.get("name", "") if char_data else "")
@@ -606,7 +606,7 @@ class CharacterDialog(QDialog):
         self._on_clear_thumbnail()
 
     def _setup_ui(self):
-        """构建分类名称、英文名和图片表单，新建时显示节点类型选择，并连接确认与取消操作。"""
+        """构建分类名称、英文名、图片及节点类型表单，并连接确认与取消操作。"""
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(16)
@@ -691,7 +691,7 @@ class CharacterDialog(QDialog):
         name_en_group.addWidget(self._name_en_input)
         form_section.addLayout(name_en_group)
 
-        # 节点类型选择仅在新建时显示，编辑时隐藏。
+        # 新建与编辑共用类型选择，转换时的启用约束由宿主与核心服务检查。
         self._type_section = QWidget()
         type_group = QVBoxLayout(self._type_section)
         type_group.setContentsMargins(0, 0, 0, 0)
@@ -712,10 +712,6 @@ class CharacterDialog(QDialog):
         type_hint.setWordWrap(True)
         type_group.addWidget(type_hint)
         form_section.addWidget(self._type_section)
-        # 编辑模式下完全隐藏节点类型选择
-        if self._is_edit:
-            self._type_section.setVisible(False)
-
         form_section.addStretch()
         body.addLayout(form_section, 1)
         layout.addLayout(body, 1)

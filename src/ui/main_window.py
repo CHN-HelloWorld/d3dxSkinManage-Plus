@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import time
 from collections import deque
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from functools import wraps
 from pathlib import Path
@@ -238,6 +238,8 @@ class MainWindow(QMainWindow):
         self._disable_entries: tuple = ()
         self._disable_done = 0
         self._disable_game_id = ""
+        self._disable_cancel_requested = False
+        self._disable_on_finished: Callable[[bool], None] | None = None
         # 持有非模态导出控制器，确保实例存活，并限制同时仅运行一个导出批次。
         self._export_controller = None
         self._file_watcher = FileWatcher(self)
@@ -2219,11 +2221,59 @@ class MainWindow(QMainWindow):
         name_en = data.get("name_en", "")
         thumbnail = data.get("thumbnail", "")
         node_type = data.get("node_type", None)
+        current = self._mod_manager.get_character(char_id)
+        if current is not None and current.node_type != "character" and node_type == "character":
+            deploying = self._mods_being_deployed()
+            if deploying:
+                scope_ids = self._mod_manager.get_subtree_ids(char_id)
+                conflicts = self._mod_manager.get_character_conflict_mods(scope_ids, deploying_ids=deploying)
+                if any(mod.mod_id in deploying for mod in conflicts):
+                    QMessageBox.information(self, tr("提示"), tr("Mod 正在后台部署，请等待部署完成后重试。"))
+                    return
+            if len(self._mod_manager.get_enabled_mod_ids(char_id)) > 1:
+                self._confirm_character_type_change(char_id, data)
+                return
         if self._mod_manager.update_character(char_id, name, name_en, node_type=node_type):
             if thumbnail is not None:
                 self._mod_manager.update_character_thumbnail(char_id, thumbnail)
             self._load_characters(self._game_service.current_game_id)
             self._suppress_watcher()  # 跳过 watcher 二次重建
+
+    def _confirm_character_type_change(self, char_id: str, data: dict) -> None:
+        """提示角色转换冲突；明确选择全部禁用后，在后台完整成功时重试原编辑。"""
+        game_id = self._game_service.current_game_id
+        draft = dict(data)
+        dialog = QMessageBox(self)
+        dialog.setWindowTitle(tr("提示"))
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setText(tr("此节点下当前启用了多个Mod，请仅保留一个启用的Mod，然后再试。"))
+        disable_button = dialog.addButton(tr("全部禁用并重试"), QMessageBox.ButtonRole.YesRole)
+        confirm_button = dialog.addButton(tr("确认"), QMessageBox.ButtonRole.RejectRole)
+        dialog.setDefaultButton(confirm_button)
+        dialog.setEscapeButton(confirm_button)
+        try:
+            dialog.exec()
+            retry = dialog.clickedButton() is disable_button
+        finally:
+            dialog.deleteLater()
+        if not retry or self._game_service.current_game_id != game_id:
+            return
+        if _plugin_operation_busy(self) or _deployment_operation_busy(self):
+            return
+
+        def retry_edit(succeeded: bool) -> None:
+            """只在原游戏的整个子树已禁用时保存草稿，取消或部分失败均保留原类型。"""
+            if not succeeded or self._game_service.current_game_id != game_id:
+                return
+            if self._mod_manager.get_enabled_mod_ids(char_id, game_id):
+                return
+            self._on_character_edit(char_id, draft)
+
+        enabled_ids = self._mod_manager.get_enabled_mod_ids(char_id, game_id)
+        if enabled_ids:
+            self._on_overview_batch_disable(enabled_ids, on_finished=retry_edit)
+        else:
+            retry_edit(True)
 
     @_invalidates_library_probe
     def _on_character_delete(self, char_id: str) -> None:
@@ -2429,7 +2479,7 @@ class MainWindow(QMainWindow):
         """确定 Mod 所属角色祖先及冲突子树；无角色范围时返回空集合。"""
         if not mod.node_id:
             return None, []
-        ancestor = self._mod_manager.find_character_ancestor(mod.node_id)
+        ancestor = self._mod_manager.find_character_ancestor(mod.node_id, outermost=True)
         if ancestor is not None:
             return ancestor, self._mod_manager.get_subtree_ids(ancestor.id)
         current = self._mod_manager.get_character(mod.node_id)
@@ -3089,11 +3139,11 @@ class MainWindow(QMainWindow):
             logger.warning("notify_store_mod_deleted 失败: %s", exc)
 
     @_invalidates_library_probe
-    def _on_overview_batch_disable(self, mod_ids: list) -> None:
+    def _on_overview_batch_disable(self, mod_ids: list, *, on_finished: Callable[[bool], None] | None = None) -> None:
         """统一处理批量禁用入口。
 
         主线程一次性准备整批操作，DisableBatchWorker 执行文件读写，
-        完成后由主线程提交单个索引事务并保存预设。
+        完成后由主线程提交单个索引事务并保存预设。可选回调在释放忙碌状态后收到完整成功标记。
         """
         if _plugin_operation_busy(self) or _deployment_operation_busy(self):
             return
@@ -3132,6 +3182,8 @@ class MainWindow(QMainWindow):
             return
         worker = DeploymentPhaseWorker(preparation.prepare, self)
         self._disable_worker = worker
+        self._disable_cancel_requested = False
+        self._disable_on_finished = on_finished
         worker.finished.connect(lambda w=worker: self._on_disable_prepared(w, mod_ids))
         panel.stop_requested.connect(self._on_disable_stop_requested)
         worker.start(QThread.Priority.LowPriority)
@@ -3142,7 +3194,7 @@ class MainWindow(QMainWindow):
             return
         panel = self._intake_progress
         try:
-            if worker.isInterruptionRequested():
+            if getattr(self, "_disable_cancel_requested", False) or worker.isInterruptionRequested():
                 self._on_disable_batch_finished([], True)
                 return
             if worker.error is not None:
@@ -3182,6 +3234,8 @@ class MainWindow(QMainWindow):
         """浮层 ■：请求中断批量禁用。已处理的保持已禁用，未处理的保持原样（不回滚）。"""
         worker = getattr(self, "_disable_worker", None)
         if worker is not None:
+            # QThread 结束后会清除中断标记，准备与文件阶段之间须保留用户的取消请求。
+            self._disable_cancel_requested = True
             worker.requestInterruption()
             self._intake_progress.set_stop_enabled(False)
 
@@ -3218,16 +3272,18 @@ class MainWindow(QMainWindow):
     def _on_disable_batch_finished(self, results, cancelled: bool) -> None:
         """发布停用批次结果并保证释放界面状态，收尾异常时保留已提交结果的提示。"""
         worker = getattr(self, "_disable_worker", None)
+        cancelled = cancelled or getattr(self, "_disable_cancel_requested", False)
+        succeeded = False
         try:
-            self._publish_disable_results(results, cancelled)
+            succeeded = self._publish_disable_results(results, cancelled)
         except Exception as error:
             logger.exception("禁用界面收尾失败")
             self._intake_progress.finish(tr("禁用状态已提交，界面刷新失败"), str(error), ok=False)
         finally:
-            self._clear_disable_ui(worker)
+            self._clear_disable_ui(worker, succeeded=succeeded)
 
-    def _publish_disable_results(self, results, cancelled: bool) -> None:
-        """在主线程以单个事务提交批量禁用结果，再刷新条目并结算任务进度。"""
+    def _publish_disable_results(self, results, cancelled: bool) -> bool:
+        """主线程提交批量禁用并刷新进度，仅全部成功且未取消时返回 True。"""
         worker = getattr(self, "_disable_worker", None)
         panel = self._intake_progress
         entries = getattr(self, "_disable_entries", ()) or ()
@@ -3236,7 +3292,7 @@ class MainWindow(QMainWindow):
         except Exception as error:
             logger.exception("禁用状态提交失败")
             panel.finish(tr("禁用状态提交失败"), str(error), ok=False)
-            return
+            return False
         if worker is not None:
             worker.committed = True
         failed = sum(1 for r in (results or []) if r is not None and not r.ok)
@@ -3266,11 +3322,14 @@ class MainWindow(QMainWindow):
         for index, entry in enumerate(entries):
             if entry.mod_id in disabled:
                 panel.update_item(index, entry.display_name, ST_DONE, tr("已禁用"))
+        return not cancelled and not failed and not skipped and len(disabled) == len(entries)
 
-    def _clear_disable_ui(self, worker) -> None:
-        """释放停用事务保护、断开停止连接并清空线程状态，随后恢复游戏操作和延后任务。"""
+    def _clear_disable_ui(self, worker, *, succeeded: bool = False) -> None:
+        """释放停用保护与线程状态，恢复游戏操作，并一次性通知所属批次的完成回调。"""
         if self._disable_worker is not worker:
             return
+        on_finished = getattr(self, "_disable_on_finished", None)
+        self._disable_on_finished = None
         self._mod_manager.release_library_operation("disable-batch")
         try:
             self._intake_progress.stop_requested.disconnect(self._on_disable_stop_requested)
@@ -3282,10 +3341,13 @@ class MainWindow(QMainWindow):
         self._disable_entries = ()
         self._disable_done = 0
         self._disable_game_id = ""
+        self._disable_cancel_requested = False
         self._game_page.setEnabled(True)
         resume = getattr(self, "_resume_deferred_library_environment", None)
         if resume is not None:
             resume()
+        if on_finished is not None:
+            on_finished(succeeded)
 
     def _on_overview_items_export(self, cat_ids: list, mod_ids: list) -> None:
         """OverviewPage「导出」：导出选中的类别（展开子树）+ Mod。

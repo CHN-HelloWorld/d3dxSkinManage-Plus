@@ -115,7 +115,7 @@ def test_category_form_rebinds_add_edit_and_validation_without_rebuilding(qtbot,
             assert dialog._name_input.text() == "Category"
             assert dialog._name_en_input.text() == "Original"
             assert dialog._type_combo.currentData() == "character"
-            assert dialog._type_section.isHidden()
+            assert dialog._type_section.isVisible()
             dialog._name_input.setText("Discarded")
         finally:
             dialog.reject()

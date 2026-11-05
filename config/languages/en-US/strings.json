@@ -1623,6 +1623,8 @@
     "当前游戏尚未配置「Mod 文件夹」，请前往「游戏」页编辑当前游戏，设置「Mod 文件夹」后重试。": "The current game has no Mod folder configured. Edit it on the Games page, set the Mod folder, then try again.",
     "角色「{name}」": "Character \"{name}\"",
     "当前角色": "Current character",
+    "此节点下当前启用了多个Mod，请仅保留一个启用的Mod，然后再试。": "Multiple Mods are currently enabled under this node. Leave only one Mod enabled, then try again.",
+    "全部禁用并重试": "Disable all and retry",
     "该 Mod 正在更新，请在更新完成或终止后重试。": "This Mod is being updated. Try again after the update finishes or is stopped.",
     "变体数据转换尚未完成。请关闭管理器，在转换工具中恢复或完成操作；原文件已保留。": "Variant data migration is incomplete. Close the manager and recover or complete the operation with the migration tool. The original files were kept.",
     "旧版组合偏好需要先转换，原文件已保留。完成数据转换后即可管理命名变体。": "Legacy preset preferences need migration. The original files were kept. Complete migration to manage named variants.",
