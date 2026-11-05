@@ -20,10 +20,10 @@ APP_UPDATE_REPO = "CHN-HelloWorld/d3dxSkinManage-Plus"
 # 原生更新器 updater/src/token.cpp 内必须使用完全相同的字面量。
 APP_UPDATE_TOKEN_SECRET = b"d3dxSkinManagePlus_Updater_LaunchToken_2026!"
 # 更新包下载源。
-# 每项 (key, 显示名, URL前缀)；前缀为空=官方直连。UI 另提供「auto」=镜像优先、失败回退。
+# 每项 (key, 显示名, URL前缀)；空前缀表示官方源。自动模式对源与代理组合测速并支持低速换源。
 # 镜像为「前缀型」release 代理：把原始 GitHub 资产 URL 拼到前缀后即可加速。
 APP_UPDATE_DOWNLOAD_MIRRORS = (
-    ("official", N_("GitHub 官方直连"), ""),
+    ("official", N_("GitHub 官方源"), ""),
     ("ghproxy", N_("gh-proxy 加速"), "https://gh-proxy.com/"),
     ("ghfast", N_("ghfast 加速"), "https://ghfast.top/"),
     ("llkk", N_("gh.llkk.cc 加速"), "https://gh.llkk.cc/"),

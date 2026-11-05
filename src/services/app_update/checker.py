@@ -36,6 +36,9 @@ class AppUpdateInfo:
     raw: dict = field(default_factory=dict)
     releases: list[dict[str, str]] = field(default_factory=list)
     history_error: str = ""
+    repo: str = ""
+    asset_id: int = 0
+    asset_name: str = ""
 
     def to_dict(self) -> dict:
         """导出供界面使用的检查结果并复制版本说明列表，不包含原始网络响应。"""
@@ -52,6 +55,9 @@ class AppUpdateInfo:
             "error": self.error,
             "releases": [dict(release) for release in self.releases],
             "history_error": self.history_error,
+            "repo": self.repo,
+            "asset_id": self.asset_id,
+            "asset_name": self.asset_name,
         }
 
 
@@ -96,7 +102,7 @@ class AppUpdateChecker:
 
     def check(self, timeout: int = 15) -> AppUpdateInfo:
         """执行一次检查，返回 AppUpdateInfo（错误经 .error 返回，不抛出）。"""
-        info = AppUpdateInfo(current_version=self.current_version)
+        info = AppUpdateInfo(current_version=self.current_version, repo=self.repo)
 
         if not self.repo or "/" not in self.repo:
             info.error = tr("更新来源配置无效，无法检查更新。")
@@ -133,18 +139,29 @@ class AppUpdateChecker:
             logger.info("已是最新版本（当前 %s，最新 %s）", self.current_version, info.latest_version)
             return info
 
-        # 解析 zip 更新包资产
+        # 附件身份只取自所选 ZIP；其它附件及历史发布不能提供当前下载的摘要。
+        asset_digest = ""
         for asset in release.get("assets", []) or []:
             name = (asset.get("name", "") or "").lower()
             if name.endswith(".zip"):
                 info.download_url = asset.get("browser_download_url", "") or ""
-                info.download_size = int(asset.get("size", 0) or 0)
+                size, asset_id = asset.get("size"), asset.get("id")
+                info.download_size = size if type(size) is int and size > 0 else 0
+                info.asset_id = asset_id if type(asset_id) is int and asset_id > 0 else 0
+                info.asset_name = asset.get("name", "") or ""
+                digest = asset.get("digest")
+                match = re.fullmatch(r"sha256:([a-fA-F0-9]{64})", digest) if isinstance(digest, str) else None
+                if match:
+                    asset_digest = match.group(1).lower()
                 break
 
-        # 从 release body 提取可选的 SHA256（形如 "SHA256: <64hex>"）
-        m = re.search(r"SHA256[:\s]+([a-fA-F0-9]{64})", info.changelog)
-        if m:
-            info.sha256 = m.group(1).lower()
+        # 兼容已有发布正文的摘要；两处有效摘要冲突时拒绝自动更新。
+        match = re.search(r"SHA256[:\s]+([a-fA-F0-9]{64})(?![a-fA-F0-9])", info.changelog)
+        body_digest = match.group(1).lower() if match else ""
+        if asset_digest and body_digest and asset_digest != body_digest:
+            info.error = tr("更新附件与发布说明中的 SHA-256 不一致，请稍后重新检查更新。")
+            return info
+        info.sha256 = asset_digest or body_digest
 
         logger.info("发现新版本 %s（资产 %.1fMB）", info.latest_version, info.download_size / 1024 / 1024)
         return info

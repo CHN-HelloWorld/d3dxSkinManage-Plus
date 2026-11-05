@@ -76,6 +76,45 @@ def test_history_never_replaces_latest_download_metadata(serve):
     assert info.sha256 == "a" * 64
 
 
+def test_selected_asset_digest_and_identity_are_preserved(serve):
+    latest = release("2.0.0")
+    latest["assets"][0].update(id=42, name="Application.zip", digest="sha256:" + "A" * 64)
+    serve(latest, [])
+    info = AppUpdateChecker("1.0.0", "example/app").check()
+    assert info.sha256 == "a" * 64
+    assert info.asset_id == 42 and info.asset_name == "Application.zip"
+    assert info.repo == "example/app"
+    assert info.to_dict()["asset_id"] == 42
+    assert info.to_dict()["asset_name"] == "Application.zip"
+    assert info.to_dict()["repo"] == "example/app"
+
+
+def test_asset_and_release_digest_conflict_rejects_update(serve):
+    latest = release("2.0.0", body="SHA256: " + "a" * 64)
+    latest["assets"][0]["digest"] = "sha256:" + "b" * 64
+    serve(latest, [])
+    assert AppUpdateChecker("1.0.0", "example/app").check().error
+
+
+@pytest.mark.parametrize("digest", [None, "sha512:" + "b" * 128, "sha256:invalid"])
+def test_missing_asset_digest_falls_back_to_release_body(serve, digest):
+    latest = release("2.0.0", body="SHA256: " + "a" * 64)
+    latest["assets"][0]["digest"] = digest
+    serve(latest, [])
+    info = AppUpdateChecker("1.0.0", "example/app").check()
+    assert info.sha256 == "a" * 64 and not info.error
+
+
+def test_digest_from_another_asset_is_not_used_for_the_zip(serve):
+    latest = release("2.0.0")
+    latest["assets"].insert(0, {"name": "notes.txt", "digest": "sha256:" + "b" * 64})
+    latest["assets"][1].update(id="invalid", digest="sha256:" + "a" * 64)
+    serve(latest, [])
+    info = AppUpdateChecker("1.0.0", "example/app").check()
+    assert info.sha256 == "a" * 64
+    assert info.asset_id == 0
+
+
 @pytest.mark.parametrize("status,history", [(503, {}), (200, {"message": "not a list"})])
 def test_history_failure_does_not_block_a_valid_update(serve, status, history):
     serve(release("2.0.0"), history, history_status=status)

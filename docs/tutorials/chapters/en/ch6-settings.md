@@ -178,7 +178,7 @@ See Chapter 5 for pausing, resuming, background tasks, and file selection in the
 | Check application updates | Manual control | Displays the current version and checks the update source configured by the publisher |
 | Check on startup | On | Checks in the background, with a 24-hour minimum interval |
 | Back up the previous version | On | Backs up application files before updating the manager itself |
-| Update package source | Automatic | Tries mirrors first and falls back on failure; you can also choose a specific source |
+| Update package source | Automatic | Compares download speeds and switches after sustained low speed or failure; you can also choose a specific source |
 
 Manual **Check application updates** works regardless of the **Check on startup** setting or the 24-hour interval. The supplied updater installs application updates. If no update source is configured, obtain the new version through the software publisher's download channel.
 

@@ -15,15 +15,17 @@ import time
 import weakref
 from pathlib import Path
 
-from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, QTimer, Signal
+from PySide6.QtCore import QCoreApplication, QObject, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import QApplication, QWidget
 
 from src.core.config import Config
 from src.services.app_update.checker import AppUpdateChecker, AppUpdateInfo
+from src.services.app_update.download_sources import build_download_routes
+from src.services.app_update.download_state import UpdateArtifact
+from src.services.app_update.download_worker import AppUpdateDownloadWorker
 from src.services.app_update.installer import AppUpdateInstaller
 from src.services.app_update.progress import DownloadRate
 from src.services.app_update.retirement import cleanup_retired_updaters
-from src.services.network import NetworkService
 from src.ui.dialogs.app_update_dialog import UpdatePromptDialog
 from src.ui.dialogs.app_update_widgets import UpdateNoticeDialog, UpdateProgressDialog
 from src.utils.constants import (
@@ -42,6 +44,9 @@ _connected_apps: weakref.WeakSet[QCoreApplication] = weakref.WeakSet()
 
 def _finish_update_workers() -> None:
     """应用退出时等待更新准备线程，避免父窗口销毁后仍有线程访问原生对象。"""
+    for worker in list(_active_workers):
+        if isinstance(worker, AppUpdateDownloadWorker):
+            worker.cancel()
     for worker in list(_active_workers):
         try:
             worker.wait()
@@ -112,10 +117,9 @@ class AppUpdateManager(QObject):
         super().__init__(parent_window)
         self._win = parent_window
         self._config = config or Config()
-        self._network = NetworkService(self)
 
         self._check_worker: _CheckWorker | None = None
-        self._download_worker = None
+        self._download_worker: AppUpdateDownloadWorker | None = None
         self._progress: UpdateProgressDialog | None = None
         self._installer: AppUpdateInstaller | None = None
         self._install_worker: _InstallWorker | None = None
@@ -123,11 +127,8 @@ class AppUpdateManager(QObject):
         self._info: AppUpdateInfo | None = None
         self._silent = False
         self._is_busy = False
-        # 记录下载候选源和失败后的回退位置。
-        self._dl_info: AppUpdateInfo | None = None
-        self._dl_candidates: list[str] = []
-        self._dl_index = 0
-        self._dl_save_path: Path | None = None
+        # 下载信号绑定会话编号，取消后屏蔽已经排入界面事件队列的结果。
+        self._download_id = 0
         self._dl_cancelled = False
         self._download_rate = DownloadRate()
         self._speed_timer = QTimer(self)
@@ -152,6 +153,8 @@ class AppUpdateManager(QObject):
         """仅在原生工作期保活更新线程，允许管理器先销毁，并在结束后清除当前属性引用。"""
         worker.setParent(None)
         _active_workers.add(worker)
+        if isinstance(worker, AppUpdateDownloadWorker):
+            self.destroyed.connect(worker.cancel)
         manager_ref = weakref.ref(self)
 
         def cleanup() -> None:
@@ -162,6 +165,10 @@ class AppUpdateManager(QObject):
                     manager._check_worker = None
                 if manager._install_worker is worker:
                     manager._install_worker = None
+                if manager._download_worker is worker:
+                    manager._download_worker = None
+                    if manager._dl_cancelled:
+                        manager._is_busy = False
             _active_workers.discard(worker)
             try:
                 worker.deleteLater()
@@ -257,7 +264,9 @@ class AppUpdateManager(QObject):
     # 下载
 
     def _start_download(self, info: AppUpdateInfo) -> None:
-        """在打包环境准备下载缓存、候选源及进度对话框，然后启动首个下载源。"""
+        """在打包环境固定附件身份，建立一个持有分片与重试状态的下载会话。"""
+        if self._is_busy:
+            return
         if not is_frozen():
             self._info_box(
                 tr("开发环境"),
@@ -267,97 +276,80 @@ class AppUpdateManager(QObject):
         if not info.download_url:
             self._error_box(tr("下载失败"), tr("本次发布未找到 .zip 更新包资源。"))
             return
-
+        try:
+            artifact = UpdateArtifact(
+                info.download_url,
+                info.download_size,
+                info.sha256,
+                repo=info.repo,
+                tag=info.tag_name,
+                asset_id=info.asset_id,
+                name=info.asset_name,
+            )
+        except ValueError as exc:
+            self.update_failed.emit(str(exc))
+            self._error_box(tr("下载失败"), str(exc))
+            return
+        source = (self._config.get("app_update.download_source", "auto") or "auto").strip()
+        routes = build_download_routes(info.download_url, source, get_configured_proxy_url(self._config))
         self._is_busy = True
-        self._dl_info = info
         self._dl_cancelled = False
-        save_dir = get_app_dir() / "Updater" / "Cache" / "download"
-        save_dir.mkdir(parents=True, exist_ok=True)
-        self._dl_save_path = save_dir / (info.download_url.split("/")[-1] or "update.zip")
-
-        # 按下载源设置构造候选地址，自动模式优先镜像并在失败后回退。
-        self._dl_candidates = self._build_download_candidates(info.download_url)
-        self._dl_index = 0
-
-        self._progress = UpdateProgressDialog(tr("下载更新"), tr("正在下载更新包…"), self._win)
+        self._download_id += 1
+        self._download_rate.reset()
+        self._progress = UpdateProgressDialog(tr("下载更新"), tr("正在准备下载更新包…"), self._win)
         self._progress.canceled.connect(self._on_download_cancel)
         self._progress.show()
-
-        self._try_next_download()
-
-    def _build_download_candidates(self, url: str) -> list[str]:
-        """据 app_update.download_source 生成候选下载 URL（按尝试顺序）。"""
-        from src.utils.constants import APP_UPDATE_DOWNLOAD_MIRRORS
-
-        source = (self._config.get("app_update.download_source", "auto") or "auto").strip()
-        prefixes = {key: prefix for key, _name, prefix in APP_UPDATE_DOWNLOAD_MIRRORS}
-
-        def apply(prefix: str) -> str:
-            """为原始下载地址添加镜像前缀，空前缀保留直连地址。"""
-            return f"{prefix}{url}" if prefix else url
-
-        if source != "auto" and source in prefixes:
-            return [apply(prefixes[source])]
-
-        # 自动模式优先使用镜像，最后使用官方地址，并按配置顺序去重。
-        ordered = [p for k, _n, p in APP_UPDATE_DOWNLOAD_MIRRORS if p]  # 非空=镜像
-        ordered.append("")  # 官方直连垫底
-        seen, cands = set(), []
-        for p in ordered:
-            u = apply(p)
-            if u not in seen:
-                seen.add(u)
-                cands.append(u)
-        return cands
-
-    def _try_next_download(self) -> None:
-        """尝试候选列表中的下一个源；全部失败则报错。"""
-        if self._dl_cancelled:
-            return
-        if self._dl_index >= len(self._dl_candidates):
-            self._is_busy = False
-            self._close_progress()
-            self.update_failed.emit(tr("所有下载源均失败"))
-            self._error_box(tr("下载失败"), tr("所有下载源均无法获取更新包，请检查网络/代理或稍后重试。"))
-            return
-        url = self._dl_candidates[self._dl_index]
-        self._dl_index += 1
-        n, total = self._dl_index, len(self._dl_candidates)
-        logger.info("程序更新：尝试下载源 %d/%d -> %s", n, total, url)
-        if self._progress:
-            self._progress.setLabelText(tr("正在下载更新包…（源 {n}/{total}）", n=n, total=total))
-            self._progress.setDownloadSpeed(None)
-        self._download_rate.reset()
-        self._speed_timer.start()
-        self._download_worker = self._network.download_file(
-            url=url,
-            save_path=self._dl_save_path,
-            on_progress=self._on_download_progress,
-            on_finished=self._on_download_finished,
-            on_error=self._on_download_error,
-            # 更新下载遵循代理总开关，代理失败或超时后回退直连。
-            proxy=get_configured_proxy_url(self._config),
+        worker = AppUpdateDownloadWorker(
+            self._download_id,
+            artifact,
+            get_app_dir() / "Updater" / "Cache" / "download",
+            routes,
+            automatic=source == "auto",
         )
+        self._download_worker = worker
+        self._track_worker(worker)
+        worker.progress.connect(self._on_download_progress)
+        worker.source_changed.connect(self._on_download_source)
+        worker.status_changed.connect(self._on_download_status)
+        worker.succeeded.connect(self._on_download_finished)
+        worker.failed.connect(self._on_download_error)
+        worker.start()
 
-    def _on_download_progress(self, downloaded: int, total: int) -> None:
-        """更新已接收字节和速度采样，总大小未知时将进度框切换为不确定进度。"""
-        if not self._progress:
+    @Slot(int, str, "qint64")
+    def _on_download_source(self, session_id: int, source: str, offset: int) -> None:
+        """当前线路开始后按分片长度建立速度基线，并显示其源和代理状态。"""
+        if session_id != self._download_id or self._dl_cancelled or self._progress is None:
+            return
+        self._download_rate.reset(offset)
+        self._progress.setDownloadSpeed(None)
+        self._progress.setDownloadSource(source)
+        self._speed_timer.start()
+
+    @Slot(int, str)
+    def _on_download_status(self, session_id: int, message: str) -> None:
+        """非传输阶段停止速度采样，避免将测速或校验时间显示为当前下载速度。"""
+        if session_id != self._download_id or self._dl_cancelled or self._progress is None:
+            return
+        self._speed_timer.stop()
+        self._progress.setDownloadSpeed(None)
+        self._progress.setLabelText(message)
+
+    @Slot(int, "qint64", "qint64")
+    def _on_download_progress(self, session_id: int, downloaded: int, total: int) -> None:
+        """仅接受当前会话的字节进度，续传速度不包含之前保留的分片。"""
+        if session_id != self._download_id or self._dl_cancelled or self._progress is None:
             return
         self._download_rate.record(downloaded)
         self._update_download_speed()
-        if total > 0:
-            self._progress.setMaximum(100)
-            self._progress.setValue(int(downloaded / total * 100))
-            self._progress.setLabelText(
-                tr(
-                    "正在下载更新包…  {value:.1f} / {value_2:.1f} MB",
-                    value=downloaded / 1024 / 1024,
-                    value_2=total / 1024 / 1024,
-                )
+        self._progress.setMaximum(100)
+        self._progress.setValue(int(downloaded / total * 100) if total > 0 else 0)
+        self._progress.setLabelText(
+            tr(
+                "正在下载更新包…  {value:.1f} / {value_2:.1f} MB",
+                value=downloaded / 1024 / 1024,
+                value_2=total / 1024 / 1024,
             )
-        else:
-            self._progress.setMaximum(0)  # 不确定进度
-            self._progress.setLabelText(tr("已下载 {value:.1f} MB", value=downloaded / 1024 / 1024))
+        )
 
     def _update_download_speed(self) -> None:
         """仅在下载进度框存在且未取消时刷新采样速度。"""
@@ -365,53 +357,33 @@ class AppUpdateManager(QObject):
             self._progress.setDownloadSpeed(self._download_rate.sample())
 
     def _on_download_cancel(self) -> None:
-        """标记下载取消并停止速度定时器，向工作线程发出取消请求后解除忙碌状态。"""
+        """屏蔽旧会话事件并请求中断；文件所有者退出前保持忙碌，防止并发恢复。"""
         self._dl_cancelled = True
+        self._download_id += 1
         self._close_progress()
-        if self._download_worker:
-            try:
-                self._download_worker.cancel()
-            except Exception:
-                pass
+        if self._download_worker is not None:
+            self._download_worker.cancel()
+        else:
+            self._is_busy = False
+        logger.info("程序更新：用户取消下载，等待下载线程关闭连接并清理分片")
+
+    @Slot(int, str)
+    def _on_download_error(self, session_id: int, message: str) -> None:
+        """会话已完成全部重试，当前失败只报告一次，不在界面层另行启动下载。"""
+        if session_id != self._download_id or self._dl_cancelled:
+            return
         self._is_busy = False
-        logger.info("程序更新：用户取消下载")
-
-    def _on_download_error(self, message: str) -> None:
-        """未取消时记录当前源失败并尝试下一个候选下载地址。"""
-        if self._dl_cancelled:
-            return
-        logger.warning("程序更新：下载源失败（%s），尝试下一个源", message)
-        self._try_next_download()
-
-    def _on_download_finished(self, file_path: str) -> None:
-        """检查下载包最小预期大小及可选 SHA256，校验失败换源，通过后关闭进度并进入安装准备。"""
-        if self._dl_cancelled:
-            return
-        info = self._dl_info
-        path = Path(file_path)
-
-        # 校验①：大小（拦截镜像错误页/残包冒充完整包）→ 失败则换下一个源
-        if info.download_size > 0:
-            try:
-                actual = path.stat().st_size
-            except OSError:
-                actual = 0
-            if actual < info.download_size * 0.99:
-                logger.warning("程序更新：源返回残包(%d/%d)，换下一个源", actual, info.download_size)
-                self._safe_unlink(path)
-                self._try_next_download()
-                return
-
-        # 校验②：SHA256（发布说明提供时才强校验）→ 失败则换下一个源
-        if info.sha256 and not self._verify_sha256(path, info.sha256):
-            logger.warning("程序更新：源 SHA256 不符，换下一个源")
-            self._safe_unlink(path)
-            self._try_next_download()
-            return
-
         self._close_progress()
+        self.update_failed.emit(message)
+        self._error_box(tr("下载失败"), message)
 
-        self._install(path)
+    @Slot(int, str)
+    def _on_download_finished(self, session_id: int, file_path: str) -> None:
+        """会话完成精确大小和 SHA-256 校验后才进入安装，迟到的完成事件无效。"""
+        if session_id != self._download_id or self._dl_cancelled:
+            return
+        self._close_progress()
+        self._install(Path(file_path))
 
     # 安装：解压 → 备份 → 拉起 updater.exe → 退出
 
@@ -508,26 +480,6 @@ class AppUpdateManager(QObject):
         ts_hex = format(int(time.time()), "x")
         mac = hmac.new(APP_UPDATE_TOKEN_SECRET, ts_hex.encode("ascii"), hashlib.sha256).hexdigest()
         return f"{ts_hex}.{mac}"
-
-    @staticmethod
-    def _verify_sha256(path: Path, expected: str) -> bool:
-        """分块计算文件 SHA256 并忽略大小写比较，文件读取失败时返回 False。"""
-        try:
-            h = hashlib.sha256()
-            with open(path, "rb") as f:
-                for chunk in iter(lambda: f.read(1 << 20), b""):
-                    h.update(chunk)
-            return h.hexdigest().lower() == expected.lower()
-        except OSError:
-            return False
-
-    @staticmethod
-    def _safe_unlink(path: Path) -> None:
-        """尽力删除无效下载包，路径不存在或删除失败时不向调用方抛出。"""
-        try:
-            path.unlink(missing_ok=True)
-        except OSError:
-            pass
 
     def _close_progress(self) -> None:
         """停止下载速度定时器并结束进度框，随后解除管理器持有的对话框引用。"""

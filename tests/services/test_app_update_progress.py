@@ -48,3 +48,14 @@ def test_sampling_immediately_does_not_divide_by_zero():
     rate = DownloadRate(clock=lambda: 0.0)
     rate.record(42)
     assert rate.sample() is None
+
+
+def test_resumed_bytes_are_not_counted_as_new_download_speed():
+    from src.services.app_update.progress import DownloadRate
+
+    clock = [0.0]
+    rate = DownloadRate(clock=lambda: clock[0])
+    rate.reset(100 * 1024 * 1024)
+    rate.record(100 * 1024 * 1024 + 1024)
+    clock[0] = 0.5
+    assert rate.sample() == 2048

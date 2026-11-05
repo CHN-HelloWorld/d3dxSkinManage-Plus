@@ -925,7 +925,7 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         from src.utils.constants import APP_UPDATE_DOWNLOAD_MIRRORS
 
         self._app_upd_source_combo = QComboBox()
-        self._app_upd_source_combo.addItem(tr("自动（镜像优先，失败回退）"), "auto")
+        self._app_upd_source_combo.addItem(tr("自动（测速选源，低速切换）"), "auto")
         for key, name, _prefix in APP_UPDATE_DOWNLOAD_MIRRORS:
             self._app_upd_source_combo.addItem(tr(name), key)
         self._app_upd_source_combo.setMinimumWidth(200)

@@ -798,7 +798,9 @@ The one-click update process downloads, checks, and extracts the package, then m
 
 - Finish active tasks before installing an update, then close the application when prompted.
 - Updates preserve your mods, settings, and plugins. Regular backups of personal data are still recommended.
-- The download source can be automatic or a specific mirror. Automatic mode falls back through the candidate sources.
+- Choose automatic selection or a specific source. Automatic mode compares routes using small downloads and switches after sustained low speed or a connection failure. The window shows the current source and proxy status.
+- The current task can resume after a connection interruption or a switch from a slow source. A source without resume support restarts the download. Canceling, exiting the application, or a final download failure removes unfinished data; the next update attempt starts over.
+- Installation requires an exact file size and matching SHA-256. Missing or conflicting verification information stops the update.
 - If the updater reports an error, retain both application and updater logs, check paths and files in use, then retry.
 
 Application updates and GameBanana mod updates serve different purposes. The former upgrades the manager; the latter replaces resources in the library.
@@ -985,7 +987,7 @@ See Chapter 5 for pausing, resuming, background tasks, and file selection in the
 | Check application updates | Manual control | Displays the current version and checks the update source configured by the publisher |
 | Check on startup | On | Checks in the background, with a 24-hour minimum interval |
 | Back up the previous version | On | Backs up application files before updating the manager itself |
-| Update package source | Automatic | Tries mirrors first and falls back on failure; you can also choose a specific source |
+| Update package source | Automatic | Compares download speeds and switches after sustained low speed or failure; you can also choose a specific source |
 
 Manual **Check application updates** works regardless of the **Check on startup** setting or the 24-hour interval. The supplied updater installs application updates. If no update source is configured, obtain the new version through the software publisher's download channel.
 
