@@ -149,14 +149,17 @@ def test_native_win10_titlebar_updates_before_show_and_without_moving(qapp, qtbo
     qtbot.waitUntil(window.isActiveWindow)
 
     def caption_is_dark(dark):
-        """读取原生标题栏的空白区域，避免把 QWidget 客户区截图当作系统绘制结果。"""
+        """以屏幕局部偏移读取原生标题栏，避免非零原点屏幕抓到无关的黑色区域。"""
         interactive_desktop()
         assert window.isVisible()
         margins = window.windowHandle().frameMargins()
         assert margins.top() > 0
         point = window.mapToGlobal(QPoint(window.width() // 2, -max(1, margins.top() // 2)))
+        screen = window.screen()
+        assert screen.geometry().contains(point)
+        offset = point - screen.geometry().topLeft()
         win_effects.ctypes.windll.dwmapi.DwmFlush()
-        image = window.screen().grabWindow(0, point.x(), point.y(), 1, 1).toImage()
+        image = screen.grabWindow(0, offset.x(), offset.y(), 1, 1).toImage()
         assert not image.isNull()
         lightness = image.pixelColor(0, 0).lightness()
         return lightness < 80 if dark else lightness > 200

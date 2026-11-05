@@ -1,7 +1,9 @@
+"""验证标签选择、候选编辑和浮层布局的交互约束。"""
+
 from __future__ import annotations
 
 import pytest
-from PySide6.QtCore import QEvent, QPoint, Qt
+from PySide6.QtCore import QEvent, QPoint, QRect, Qt
 from PySide6.QtGui import QHelpEvent, QInputMethodEvent
 from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton, QScrollArea, QToolTip, QVBoxLayout, QWidget
 
@@ -217,13 +219,14 @@ def test_chip_clicks_do_not_reach_card_and_flow_wraps(qtbot, temp_data_dir):
 
 
 def test_popup_is_bounded_without_reflowing_host(qtbot, tag_data):
+    """用全局坐标检查内嵌浮层与屏幕及保存按钮边界，覆盖非零原点的屏幕。"""
     _, service, mod = tag_data
     host, picker = make_picker(qtbot, service.begin_edit(mod))
     before = host.size()
     picker.open_editor(picker.draft.selected_ids[0])
     qtbot.wait(10)
     assert host.size() == before
-    popup = picker.popup.frameGeometry()
+    popup = QRect(picker.popup.mapToGlobal(QPoint()), picker.popup.size())
     available = host.screen().availableGeometry()
     assert available.contains(popup)
     boundary_top = picker._popup_boundary.mapToGlobal(QPoint(0, 0)).y()
