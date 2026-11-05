@@ -162,6 +162,10 @@ You can also start the application with `python -m src.main` in this virtual env
 
 ### Six steps to enable your first Mod
 
+**Moving from d3dxSkinManage?** Enable the bundled **Legacy data migration** plugin on the Plugins page, then open
+**Migrate from the legacy app** in Tools. Preview and copy your Mods, categories, metadata, and previews while preserving
+the old files. See the [migration plugin README](plugins/official.legacy-migration/README.md).
+
 1. **Add a game:** On the Games page, enter its name, English name, loader path, and **Mod folder**.
 2. **Activate the game:** Double-click the game card and check that the **Current** badge appears.
 3. **Create a category:** Open Category Overview, create a category, then double-click to enter it. A regular **Category** allows multiple enabled Mods; **Character/object** is suitable for mutually exclusive appearances.

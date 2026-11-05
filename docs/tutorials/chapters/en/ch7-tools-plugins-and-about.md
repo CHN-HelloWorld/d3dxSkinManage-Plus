@@ -118,13 +118,28 @@ Use **Reload** after editing plugin code. The app removes old commands and inter
 
 If the status is **Error**, read the error description and logs. Parsing failures, permission mismatches, code checks, and runtime errors can all prevent activation. Permission declarations and checks do not determine whether a plugin's source is trustworthy for you.
 
-Three optional plugins are bundled; enable each one before first use. Their contributions add the corresponding controls to Tools, Category Overview context menus, navigation pages, and shortcut settings:
+Four optional plugins are bundled; enable each one before first use. Their contributions add the corresponding controls to Tools, Category Overview context menus, navigation pages, and shortcut settings:
 
 - **Mod inventory export** exports a CSV inventory of the current game from Tools. From a category's context menu, it includes that category and its subcategories. Select **Export enabled mods only** in plugin details to limit the output. The inventory is generated in the background, with a notification on completion. It contains text metadata only, without mod files, and is not a restorable preset file.
 - **Preset check** adds a navigation page with the same name for checking missing mod and appearance variant references. Return to the main interface to edit affected presets. Choose whether to include the default preset and click **Check again** to refresh. Results reflect references that can currently be resolved; a missing reference does not prove a resource is permanently lost.
 - **Preset cycle** switches to the previous or next combination from Tools or **Plugin Commands**. The default shortcuts are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the app and adjustable in **Settings → Shortcuts**. The default preset is skipped unless you change the option in plugin details. The host task interface shows progress and failure reasons. Repeated clicks during an unfinished switch do not queue multiple switches.
 
 These plugins' source code and usage instructions are in `plugins/`. To write your own plugin, read this tutorial's [Plugin development guide](../../en/PluginGuide.en.md). Start with the first working example, learn the current SDK's commands, settings, pages, background tasks, and dependencies, then complete testing and packaging.
+
+### 7.7.1 Migrating from d3dxSkinManage
+
+Enable the bundled legacy migration plugin on the Plugins page, then open **Migrate from the legacy app** in Tools. First add and activate the destination game on the Games page; the wizard displays the selected target.
+
+1. Select the old installation folder containing `home/` and `resources/`, then choose a legacy user environment.
+2. Scan and review Mods, categories, resource sizes, and reported problems before starting the copy.
+3. The wizard creates or reuses categories and imports each Mod, preserving its name, author, description, rating, tags, and recognized preview images.
+4. Review succeeded, skipped, failed, and cancelled items. Correct missing or conflicting data and scan again; failed items can be retried.
+
+Migration preserves old files, leaves Mods disabled, and does not take over the old loader or deployment folder. Extensionless SHA archives are detected by their actual format. Index entries without local Mod files are reported rather than downloaded. Duplicate content preserves existing Plus entries and their metadata. Stopping or closing the window cancels subsequent work while retaining completed imports.
+
+Resolve ambiguous categories, conflicting index metadata, and unsupported path configurations using the issue list. See the [plugin README](../../../../plugins/official.legacy-migration/README.md) for compatibility details.
+
+If another application locks an output file during cancellation, the host retries cleanup. Files that remain locked are preserved with a recovery receipt and a specific path diagnostic. Restarting or rebuilding the index will not treat them as ordinary Mods; the next import retries cleanup. If the commit outcome or file identity cannot be confirmed, keep the files and the receipts in `data/recovery/import-cleanup/` for inspection.
 
 ### 7.8 About and the project film
 

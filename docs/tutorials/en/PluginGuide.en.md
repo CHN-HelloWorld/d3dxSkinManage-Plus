@@ -12,6 +12,8 @@ Start with the skeleton in section 1 and confirm that its command works. Then re
 | 2 | [Preset audit](../../../plugins/example.preset-audit/README.md) | Find invalid Mod and variant references in combinations | Unresolved references, startup activation, pages, events, batched queries, and cleanup |
 | 3 | [Preset cycling](../../../plugins/example.preset-cycle/README.md) | Switch to the previous or next combination using shortcuts or buttons | Write permissions, asynchronous operations, repeated requests, completion feedback, and cancellation |
 
+The bundled [legacy migration plugin](../../../plugins/official.legacy-migration/README.md) demonstrates SDK 2.1 category creation, copy imports, external previews, and host styling. It reads local d3dxSkinManage data and writes to the current game through public APIs.
+
 Section 10 provides reading and practice steps for each example. Sections 2–9 cover the interfaces, section 11 covers custom interfaces, and section 12 covers development checks and troubleshooting.
 
 ## 1. Environment and your first plugin
@@ -156,7 +158,7 @@ To build on a practical example, copy its folder and change the `id`, name, and 
 |------|------|------|
 | `id` | ✓ | Globally unique, reverse-domain style, 2–64 characters; only letters, digits, `.`, `_`, and `-` |
 | `name` `version` | ✓ | Display name / semantic version |
-| `apiVersion` | ✓ | Required SDK version, currently `"2.0"`; the major version must match and the required minor version must not exceed the host's |
+| `apiVersion` | ✓ | Required SDK version, currently `"2.1"`; the major version must match and the required minor version must not exceed the host's; existing `2.0` plugins remain compatible |
 | `entry` | ✓ | Relative `.py` path inside the plugin folder, exporting the `Plugin` class; absolute paths, `..`, and links outside the folder are prohibited |
 | `minAppVersion` | | Minimum application version, such as `"1.0.0"`; checked before importing code, with loading rejected if unmet |
 | `author` `description` `homepage` | | Metadata |
@@ -283,7 +285,7 @@ Declare permissions in `plugin.json`. Users confirm trust and requested permissi
 | Permission | Capability |
 |------|----------|
 | `mods:read` | Query games, Mods, categories, presets, and variants; checked before each query |
-| `mods:write` | Enable or disable Mods, and create, apply, copy, or modify presets and variants |
+| `mods:write` | Import, enable, or disable Mods; create categories; and create, apply, copy, or modify presets and variants |
 | `mods:manage` | `ctx.mods.delete_mod`, `ctx.presets.delete`, and `ctx.variants.delete` |
 | `storage` | Access private key-value storage, the data folder, and declared configuration; checked at runtime |
 | `ui:tools-page` / `ui:menus` / `ui:settings` | Declare the corresponding contributions; checked in the manifest; settings also require `storage` |
@@ -474,6 +476,53 @@ ctx.presets.create("Plugin-created combination", description="Empty combination"
 Placeholder names must match the source text. Missing or invalid translations fall back to the declared fallback language and then the source text, with diagnostics logged. Display names, descriptions, and contribution titles use the same language pack. Command IDs, setting keys, and values retain their original identities. Set widget text with `ctx.i18n.t()`. For dropdowns, use translated display text and put the stable value in `userData`. Already constructed interfaces follow the host's restart requirement for language changes. Reload the plugin after editing a language pack so it is read again.
 
 ---
+
+### 7.6 Creating categories and importing copies (SDK 2.1)
+
+`ctx.game.create_category(name, *, parent_id="", node_type="category", name_en="", thumbnail_path="", exist_ok=False)` returns an `OperationTask`. An empty parent means the current game's root; the node type is `category` or `character`. Read `result.node_id` before importing into the node. Existing names are rejected by default. With `exist_ok=True`, only a node with the same parent, name, and type is reused, without changing its attributes. A thumbnail is copied into the node's assets; if that copy fails after creation, the result retains the node ID and reports a warning.
+
+`ctx.game.current_game_name()` returns the current game's display name, or an empty string when no valid game is selected. Like other game queries, it requires `mods:read`.
+
+```python
+from src.plugin_sdk import ModImportRequest
+
+request = ModImportRequest(
+    source_path="D:/ModCollection/outfit.zip",
+    node_id=node_id,
+    name="Sample outfit",
+    author="Sample author",
+    description="Collection notes",
+    rating="G",
+    tags=("Light outfit",),
+    preview_paths=("D:/ModCollection/preview.png",),
+    source_url="https://example.invalid/mod/7",
+)
+task = ctx.mods.import_mod(request)
+task.on_finished(on_import_finished)
+```
+
+Both write APIs require `mods:write`; plugins reading external files should also declare `fs:read`. Imports require a valid category in the current game, always copy the source, and leave the Mod disabled. A deployment folder is not required. `author`, `description`, `rating`, `tags`, and `source_url` default to `None`, preserving embedded metadata. Explicit empty strings or an empty tag tuple clear those fields. Ratings accept `G/P/R/X`. Tag and preview sequences are frozen when the request is created.
+
+Folders and ZIP, 7z, and RAR archives follow the host's import settings. Archives without extensions are detected from their headers and staged separately, without renaming the source. Optional `expected_sha1` checks the original file's byte digest: forty hexadecimal characters, not a Plus content fingerprint or `mod_id`. External previews are copied into the new container, and metadata is saved before the index commits.
+
+File preparation runs in the background; index commits and completion callbacks run on the host thread. Changed sources, missing previews, or missing targets fail the operation. Cancellation removes uncommitted output while retaining completed items. Duplicate content returns existing Mod identities in `result.skipped_ids` and preserves their metadata and category. A failed import may have no target ID, so always check `error` and `ok` even when ID tuples are empty. Use completion callbacks to schedule batches and check the current game before each step.
+
+`OperationResult` adds `node_id`, `skipped_ids`, `warnings`, and `cancel_requested`; existing fields retain their meaning. Warnings describe completed operations and do not make `ok` false by themselves. `cancel_requested` records a host stop request even if no target Mod ID exists yet or the current item has already committed. Batch plugins should stop submitting subsequent items while retaining successful identities and diagnostics.
+
+Cleanup retries file locks a limited number of times. If it remains incomplete, the result identifies preserved paths and the host keeps recovery receipts in `data/recovery/import-cleanup/`. Pending output stays protected across restarts and index rebuilds; later imports retry cleanup in the background. An uncertain commit outcome, changed directory identity, or externally added files causes preservation and a diagnostic, never automatic deletion based on a missing index. A successful ID can accompany an `error`; retain the success count and display the cleanup diagnostic.
+
+### 7.7 Host styling (SDK 2.1)
+
+`ctx.ui.apply_style(widget, role)` requires `ui:views` and returns a `Disposable` managed by the plugin lifecycle. Roles are `card`, `title`, `subtitle`, `muted`, `heading`, `primary_button`, `button`, `input`, `table`, and `progress`.
+
+```python
+ctx.ui.apply_style(title_label, "title")
+ctx.ui.apply_style(source_edit, "input")
+ctx.ui.apply_style(start_button, "primary_button")
+ctx.ui.apply_style(preview_table, "table")
+```
+
+The host applies its existing theme tokens and updates styles in place, preserving input state. Each widget keeps only its latest binding. Disposing the binding or disabling the plugin stops updates and restores the prior stylesheet; destroying the widget removes its binding. Plugins can match the application without importing `src.ui.*` or hardcoding colors. Layout, spacing, and widget construction remain the plugin's responsibility.
 
 ## 8. Packaging and distribution
 
