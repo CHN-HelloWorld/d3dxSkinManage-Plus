@@ -104,6 +104,8 @@ class GameDetailPanel(QWidget):
         )
         form.addRow(tr("英文名称"), self._name_en)
         self._exe = QLineEdit()
+        self._exe.setPlaceholderText(tr("程序路径，可附加启动参数"))
+        self._exe.setToolTip(tr("可在程序路径后填写启动参数。路径含空格时，建议用双引号括起。"))
         form.addRow(tr("可执行文件"), self._browse_row(self._exe, self._browse_exe))
         self._migoto = QLineEdit()
         self._migoto.setToolTip(tr("3DMigoto 所在目录，仅用于启动 Mod 加载器。"))

@@ -1940,6 +1940,8 @@
     "游戏名称": "Game name",
     "英文名称": "English name",
     "可执行文件": "Executable",
+    "程序路径，可附加启动参数": "Program path, optionally followed by launch arguments",
+    "可在程序路径后填写启动参数。路径含空格时，建议用双引号括起。": "You can add launch arguments after the program path. Enclose paths containing spaces in double quotes.",
     "＋ 新游戏（未确认）": "＋ New game (unconfirmed)",
     "游戏配置未保存": "Unsaved game settings",
     "游戏「{game_name}」的配置尚未保存。\n是否现在保存？": "Settings for \"{game_name}\" have not been saved.\nSave them now?",
