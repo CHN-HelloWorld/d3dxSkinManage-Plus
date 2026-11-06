@@ -113,6 +113,7 @@ _TEAM = [
     ("numlinka.png", "numlinka", N_("项目协作者"), N_("特别支持"), "https://github.com/numlinka", False),
     ("kkevin0001.png", "hunxuankai", N_("贡献者"), N_("辅助开发 · 测试"), "https://github.com/kKevin0001", False),
     ("菊理千姬.jpg", "菊理千姬", N_("特别支持"), N_("持续关注 · 鼎力支持"), None, False),
+    ("为人民服务.jpg", "为人民服务", N_("特别支持"), N_("持续关注 · 鼎力支持"), None, False),
     ("昀熙.jpg", "昀熙", N_("内测贡献"), N_("有效问题反馈 · 建议获采纳"), None, False),
     ("自求多芙吧!.jpg", "自求多芙吧!", N_("内测贡献"), N_("有效问题反馈 · 建议获采纳"), None, False),
 ]
