@@ -35,13 +35,14 @@ class Plugin(PluginBase):
         generation = self._dialog_generation
         wizard = MigrationWizard(self._ctx)
         self._wizard = wizard
-        dialog = self._ctx.ui.show_dialog(wizard, title=self._ctx.i18n.t("从旧版迁移"), modal=False)
+        dialog = self._ctx.ui.show_dialog(wizard, title=self._ctx.i18n.t("d3dxSkinManage数据迁移"), modal=False)
         if dialog is None:
             wizard.shutdown()
             wizard.deleteLater()
             self._wizard = None
             return None
         self._dialog = dialog
+        wizard.configure_window(dialog)
         dialog.finished.connect(partial(self._dialog_finished, generation))
         dialog.destroyed.connect(partial(self._dialog_destroyed, generation))
         return dialog
