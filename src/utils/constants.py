@@ -4,7 +4,7 @@ from src.utils.language_pack import N_
 
 # 应用信息
 APP_NAME = "d3dxSkinManage-Plus"
-APP_VERSION = "1.0.1"
+APP_VERSION = "1.1.0"
 APP_DISPLAY_NAME = "d3dxSkinManage-Plus"
 APP_ORGANIZATION = "d3dxSkinManage-Plus"
 
