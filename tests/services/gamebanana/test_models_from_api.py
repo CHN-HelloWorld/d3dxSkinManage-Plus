@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
 
+import pytest
+
 from src.services.gamebanana.models import (
     GbAuthor,
     GbCategory,
@@ -14,6 +16,16 @@ from src.services.gamebanana.models import (
 )
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+@pytest.mark.parametrize("model", [GbModRecord, GbModProfile])
+@pytest.mark.parametrize("updated", [None, 0, 1700100000])
+def test_online_record_prefers_update_date_and_falls_back_to_publication(model, updated):
+    payload = {"_tsDateAdded": 1700000000}
+    if updated is not None:
+        payload["_tsDateUpdated"] = updated
+    record = model.from_api(payload)
+    assert record.date_updated_ts == (updated or payload["_tsDateAdded"])
 
 
 def load(name):

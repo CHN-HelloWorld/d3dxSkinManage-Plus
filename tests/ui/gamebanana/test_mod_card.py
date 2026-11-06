@@ -1,6 +1,12 @@
+from dataclasses import replace
+from datetime import datetime
+
+import pytest
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor, QPixmap
 from PySide6.QtWidgets import QApplication
 
+from src.services.gamebanana.models import GbModRecord
 from src.ui.widgets.gb_mod_card import GbModCard
 
 
@@ -8,6 +14,60 @@ def test_card_basic_display(qtbot, sample_record, fake_image_loader):
     c = GbModCard(sample_record, image_loader=fake_image_loader)
     qtbot.addWidget(c)
     assert c.title_label.text().startswith("Sample Mod")
+
+
+def test_card_date_badge_only_shows_date_at_thumbnail_bottom_right(qtbot, sample_record, fake_image_loader):
+    card = GbModCard(sample_record, image_loader=fake_image_loader, is_installed=True)
+    qtbot.addWidget(card)
+    card.show()
+    expected = datetime.fromtimestamp(sample_record.date_updated_ts).strftime("%Y-%m-%d")
+    badge = card.date_badge
+    assert badge.text() == expected
+    assert badge.toolTip() == datetime.fromtimestamp(sample_record.date_updated_ts).strftime("%Y-%m-%d %H:%M")
+    assert not badge.isHidden()
+    assert badge.x() + badge.width() == card.thumbnail.x() + card.thumbnail.width() - 6
+    assert badge.y() + badge.height() == card.thumbnail.y() + card.thumbnail.height() - 6
+    assert not badge.geometry().intersects(card.installed_badge.geometry())
+    assert card.sizeHint().width() == 210 and card.sizeHint().height() == 270
+
+
+@pytest.mark.parametrize("updated", [None, 0])
+def test_card_date_uses_publication_when_update_is_missing(qtbot, fake_image_loader, updated):
+    payload = {"_idRow": 101, "_sName": "Example Mod", "_tsDateAdded": 1700000000}
+    if updated is not None:
+        payload["_tsDateUpdated"] = updated
+    record = GbModRecord.from_api(payload)
+    card = GbModCard(record, image_loader=fake_image_loader)
+    qtbot.addWidget(card)
+    assert card.date_badge.text() == datetime.fromtimestamp(payload["_tsDateAdded"]).strftime("%Y-%m-%d")
+    assert not card.date_badge.isHidden()
+
+
+def test_card_date_rebind_updates_badge_and_render_cache(qtbot, sample_record, fake_image_loader):
+    card = GbModCard(sample_record, image_loader=fake_image_loader, defer_image=True)
+    qtbot.addWidget(card)
+    badge = card.date_badge
+    image = QPixmap(210, 160)
+    image.fill(QColor("blue"))
+    card.thumbnail.setPixmap(image)
+    previous_key = card.scroll_render_key()
+    assert previous_key is not None
+    replacement = replace(sample_record, date_updated_ts=sample_record.date_updated_ts + 86400)
+    card.set_record(replacement)
+    card.thumbnail.setPixmap(image)
+    assert card.date_badge is badge
+    assert badge.text() == datetime.fromtimestamp(replacement.date_updated_ts).strftime("%Y-%m-%d")
+    assert card.scroll_render_key() != previous_key
+
+
+@pytest.mark.parametrize("timestamp", [0, -1, 10**30])
+def test_card_invalid_date_never_shows_placeholder_or_epoch(qtbot, sample_record, fake_image_loader, timestamp):
+    card = GbModCard(sample_record, image_loader=fake_image_loader)
+    qtbot.addWidget(card)
+    card.set_record(replace(sample_record, date_updated_ts=timestamp))
+    assert card.date_badge.text() == ""
+    assert card.date_badge.toolTip() == ""
+    assert card.date_badge.isHidden()
 
 
 class _CountingLoader:

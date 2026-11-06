@@ -1,7 +1,8 @@
-"""展示在线 Mod 的缩略图、作者、统计及安装状态，支持内容分级和悬停反馈。"""
+"""展示在线 Mod 的缩略图、日期、作者、统计及安装状态，支持内容分级和悬停反馈。"""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Literal
 
 from PySide6.QtCore import (
@@ -310,6 +311,12 @@ class GbModCard(QFrame):
         self.installed_badge.move(6, _THUMB_H - self.installed_badge.height() - 6)
         self.installed_badge.setVisible(bool(is_installed))
 
+        self.date_badge = QLabel(self)
+        self.date_badge.setStyleSheet(
+            "background: rgba(0, 0, 0, 0.55); color: white; padding: 2px 6px; border-radius: 4px; font-size: 8pt;"
+        )
+        self._update_date_badge()
+
         # 文字区域保持透明，使用整张卡片统一绘制的背景。
         # 祖先控件的透明样式须限定作用范围，避免覆盖卡片底色。
         info_widget = QWidget(self)
@@ -381,6 +388,8 @@ class GbModCard(QFrame):
             self.type_badge.isHidden(),
             self.nsfw_badge.isHidden(),
             self.installed_badge.isHidden(),
+            self.date_badge.text(),
+            self.date_badge.isHidden(),
             self._selected,
         )
 
@@ -420,6 +429,7 @@ class GbModCard(QFrame):
         self.type_badge.setVisible(record.model.value != "Mod")
         self.nsfw_badge.setVisible(record.is_nsfw)
         self.set_installed(is_installed)
+        self._update_date_badge()
         # 显示新占位前清除旧的清晰和模糊像素。
         self.thumbnail.start_loading()
         self.thumbnail.set_blur(record.is_nsfw and self._nsfw_policy == "blur")
@@ -427,6 +437,19 @@ class GbModCard(QFrame):
             self.thumbnail.setPixmap(_build_loading_placeholder())
         elif not self._restore_cached_thumbnail() and not self._defer_image:
             self._do_load_thumbnail()
+
+    def _update_date_badge(self) -> None:
+        """在预览图右下角显示本地日期，使用模型的发布回退值，异常时间不显示占位文字。"""
+        try:
+            timestamp = self.record.date_updated_ts
+            date_time = datetime.fromtimestamp(timestamp) if timestamp > 0 else None
+        except (TypeError, ValueError, OverflowError, OSError):
+            date_time = None
+        self.date_badge.setText(date_time.strftime("%Y-%m-%d") if date_time is not None else "")
+        self.date_badge.setToolTip(date_time.strftime("%Y-%m-%d %H:%M") if date_time is not None else "")
+        self.date_badge.adjustSize()
+        self.date_badge.move(_CARD_W - self.date_badge.width() - 6, _THUMB_H - self.date_badge.height() - 6)
+        self.date_badge.setVisible(date_time is not None)
 
     def sizeHint(self) -> QSize:
         """为使用绝对定位子控件的卡片提供明确的固定布局尺寸。"""
