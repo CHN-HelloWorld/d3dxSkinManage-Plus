@@ -74,7 +74,7 @@ _README_TEMPLATE = """# {name}
 - 多文件逻辑放在 `commands.py`，使用相对导入；宿主为每次加载创建独立包。
 - 声明的命令首次执行时自动激活插件，启动时不读取资源库。
 - 翻译：`ctx.i18n.t()` 读取 `languages/<语言>/strings.json`，跟随宿主语言。
-- 命令：从工具箱或「插件命令」执行「查看 Mod 统计」，结果以通知显示。
+- 命令：从插件详情的「操作」区或「插件命令」执行「查看 Mod 统计」，结果以通知显示。
 - 快捷键：默认 `Ctrl+Alt+M`，可在应用设置中修改；冲突时不会覆盖已有绑定。
 - 导入宿主代码时只使用 `src.plugin_sdk` 及其子模块；标准库和 PySide6 仍可按需使用。
 - 自绘界面使用 `PySide6`（信号/槽为 `Signal` / `Slot`），把 `QWidget` 交给 `ctx.ui` 托管；
@@ -128,10 +128,9 @@ def main() -> int:
         "author": args.author,
         "description": f"{name} 插件",
         "entry": "entry.py",
-        "permissions": ["mods:read", "ui:tools-page", "ui:shortcuts"],
+        "permissions": ["mods:read", "ui:shortcuts"],
         "contributes": {
             "commands": [{"id": command, "title": "查看 Mod 统计"}],
-            "toolsPage": [{"command": command, "group": "插件"}],
             "shortcuts": [{"command": command, "default": "Ctrl+Alt+M", "context": "window"}],
         },
     }

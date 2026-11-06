@@ -2,7 +2,7 @@
   "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
   "messages": {
     "Mod 清单导出": "Mod inventory export",
-    "将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。": "Export mods from the current game or a category subtree to CSV for organizing and sharing an inventory.",
+    "教学示例：将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。用于演示插件开发，也可实际使用。": "Tutorial example: Export mods from the current game or a category subtree to CSV for organizing and sharing an inventory. Demonstrates plugin development and can also be used as a practical tool.",
     "插件": "Plugins",
     "导出 Mod 清单": "Export mod inventory",
     "仅导出已启用的 Mod": "Export enabled mods only",

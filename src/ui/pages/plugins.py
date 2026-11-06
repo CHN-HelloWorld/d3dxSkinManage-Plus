@@ -96,6 +96,44 @@ def _plain_widget() -> QWidget:
     return widget
 
 
+def _is_example_plugin(plugin_id: str) -> bool:
+    """按现有示例命名空间识别教学用途，不影响插件权限或运行行为。"""
+    return plugin_id.startswith("example.")
+
+
+class _PluginExampleBadge(QLabel):
+    """使用统一主题样式展示教学示例用途。"""
+
+    def __init__(self, parent=None):
+        """创建不可拦截列表点击的紧凑标识。"""
+        super().__init__(parent)
+        self.setObjectName("pluginExampleBadge")
+        self.setTextFormat(Qt.TextFormat.PlainText)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.retheme()
+
+    def retheme(self):
+        """同步当前语言与主题，不重新创建插件详情。"""
+        self.setText(tr("教学示例"))
+        self.setToolTip(tr("用于演示插件开发，也可实际使用。"))
+        self.setStyleSheet(f"""
+            QLabel#pluginExampleBadge {{ background: {theme.rgba("settings.accent", 0.10)};
+                border: 1px solid {settings_style.stroke()}; border-radius: 4px; padding: 2px 6px;
+                color: {settings_style.color("accent")}; font-family: "{theme.font("family")}";
+                font-size: 12px; font-weight: 400; }}
+        """)
+        self.ensurePolished()
+        self.updateGeometry()
+
+    def changeEvent(self, event):
+        """字体或样式变化后更新高度约束，避免列表复用旧字体尺寸。"""
+        super().changeEvent(event)
+        if event.type() in (QEvent.Type.FontChange, QEvent.Type.StyleChange):
+            self.setMinimumHeight(0)
+            self.setMinimumHeight(self.minimumSizeHint().height())
+
+
 class _PluginEntry(QPushButton):
     """可选择的插件列表行，活动插件内容由详情面板持有。"""
 
@@ -121,14 +159,30 @@ class _PluginEntry(QPushButton):
         self._name.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         self._name.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self._name.installEventFilter(self)
-        layout.addWidget(self._name, 1)
+        identity = QVBoxLayout()
+        identity.setSpacing(5)
+        identity.addWidget(self._name)
+        self._example_badge = _PluginExampleBadge()
+        identity.addWidget(self._example_badge, 0, Qt.AlignmentFlag.AlignLeft)
+        layout.addLayout(identity, 1)
         self.update_record(record)
+
+    def sizeHint(self) -> QSize:
+        """让按钮行高包含标题和教学标识，而非仅采用原生按钮尺寸。"""
+        return super().sizeHint().expandedTo(self.layout().sizeHint())
+
+    def minimumSizeHint(self) -> QSize:
+        """保留内容布局的最小尺寸，避免主题切换后裁切两行文字。"""
+        return super().minimumSizeHint().expandedTo(self.layout().minimumSize())
 
     def update_record(self, record):
         """替换列表项记录，同步无障碍名称、提示及主题样式，再按可用宽度省略名称。"""
         self._record = record
-        self.setAccessibleName(record.name)
-        self.setToolTip(f"{record.name}\n{record.description}")
+        is_example = _is_example_plugin(record.id)
+        self._example_badge.setVisible(is_example)
+        identity = f"{record.name} · {tr('教学示例')}" if is_example else record.name
+        self.setAccessibleName(identity)
+        self.setToolTip(f"{identity}\n{record.description}")
         self.retheme()
         self._elide()
 
@@ -145,6 +199,7 @@ class _PluginEntry(QPushButton):
         """)
         icons.apply_pixmap(self._icon, "navigation/plugins", 23, "settings.accent")
         self._name.setStyleSheet(f"background: transparent; color: {c('text')}; font-size: 14px; font-weight: 600;")
+        self._example_badge.retheme()
 
     def _elide(self):
         """在字体样式生效后按名称标签的实际宽度生成尾部省略文本。"""
@@ -179,6 +234,7 @@ class PluginCard(QFrame):
         self._themed_labels: list[tuple[QLabel, str, str]] = []
         self._setting_rows = []
         self._settings_form = None
+        self._example_badge = None
         self.setObjectName("pluginCard")
         # 详情面板使用样式背景；背景图模式下采用半透明表面，否则使用不透明卡片色。
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
@@ -216,6 +272,8 @@ class PluginCard(QFrame):
         """)
         for label, token, extra in self._themed_labels:
             label.setStyleSheet(f"background: transparent; color: {theme.color(token)}; {extra}")
+        if self._example_badge is not None:
+            self._example_badge.retheme()
         self._toggle.blockSignals(True)
         self._toggle.setChecked(self._rec.enabled and self._rec.trusted)
         self._toggle.blockSignals(False)
@@ -251,6 +309,9 @@ class PluginCard(QFrame):
         ver = QLabel(f"v{mf.version}")
         self._style_label(ver, "text.tertiary", f"font-size: {theme.font('size_secondary')}px;")
         byline.addWidget(ver)
+        if _is_example_plugin(self._rec.id):
+            self._example_badge = _PluginExampleBadge()
+            byline.addWidget(self._example_badge)
 
         byline.addStretch()
         identity.addLayout(byline)
@@ -299,6 +360,7 @@ class PluginCard(QFrame):
         actions.addStretch()
         root.addLayout(actions)
 
+        self._build_commands(root)
         self._build_settings(root)
         self._build_views(root)
         if self._rec.state.value != "active":
@@ -390,6 +452,28 @@ class PluginCard(QFrame):
         layout.addLayout(head)
         root.addWidget(panel)
         return layout
+
+    def _build_commands(self, root: QVBoxLayout) -> None:
+        """展示当前可用插件的声明命令，点击时通过宿主命令表按需激活并执行。"""
+        pm = self._page.manager
+        if pm is None or self._rec.state.value not in {"ready", "active"}:
+            return
+        items = [
+            item for item in pm.contributions.commands() if item.plugin_id == self._rec.id and item.command.strip()
+        ]
+        if not items:
+            return
+        section = self._section(root, tr("操作"), "navigation/tools")
+        actions = _plain_widget()
+        flow = TagFlowLayout(actions, spacing=9)
+        for item in items:
+            button = _action_button(item.title or item.command, "navigation/tools")
+            button.setObjectName("pluginCommandButton")
+            button.setMinimumHeight(36)
+            button.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed)
+            button.clicked.connect(lambda _checked=False, command=item.command: pm.execute_command(command))
+            flow.addWidget(button)
+        section.addWidget(actions)
 
     def _build_views(self, root: QVBoxLayout) -> None:
         """仅为已激活插件调用注册的视图工厂，将有效 Qt 控件纳入详情布局。"""

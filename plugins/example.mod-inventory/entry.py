@@ -12,7 +12,7 @@ from .inventory import export_inventory
 
 
 class Plugin(PluginBase):
-    """提供工具箱和分类菜单入口，以共享配置控制导出范围。"""
+    """提供插件详情和分类菜单入口，以共享配置控制导出范围。"""
 
     def activate(self, ctx: PluginContext) -> None:
         """注册命令和任务状态，激活阶段不查询资源库。"""

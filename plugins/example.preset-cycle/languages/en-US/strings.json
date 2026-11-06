@@ -2,7 +2,7 @@
   "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
   "messages": {
     "预设轮换": "Preset cycle",
-    "通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。": "Use shortcuts or tool buttons to switch to the previous or next preset in the current game's list.",
+    "教学示例：通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。用于演示插件开发，也可实际使用。": "Tutorial example: Use shortcuts or tool buttons to switch to the previous or next preset in the current game's list. Demonstrates plugin development and can also be used as a practical tool.",
     "插件": "Plugins",
     "切换到上一个预设": "Switch to previous preset",
     "切换到下一个预设": "Switch to next preset",

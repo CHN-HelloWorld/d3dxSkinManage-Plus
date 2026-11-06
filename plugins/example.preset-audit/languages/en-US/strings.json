@@ -2,7 +2,7 @@
   "_meta": {"format": 1, "name": "English", "fallback": "zh-CN"},
   "messages": {
     "预设检查": "Preset check",
-    "集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。": "Check the current game's presets for missing mod and appearance variant references.",
+    "教学示例：集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。用于演示插件开发，也可实际使用。": "Tutorial example: Check the current game's presets for missing mod and appearance variant references. Demonstrates plugin development and can also be used as a practical tool.",
     "检查当前游戏预设中失效的 Mod 和外观变体引用。请在主界面调整对应预设。": "Check the current game's presets for missing mod and appearance variant references. Edit affected presets in the main interface.",
     "包含默认预设": "Include default preset",
     "重新检查": "Check again",

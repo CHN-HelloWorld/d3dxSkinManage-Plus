@@ -11,7 +11,7 @@ class Plugin(PluginBase):
     """把迁移窗口及其后台任务绑定到当前插件实例。"""
 
     def activate(self, ctx: PluginContext) -> None:
-        """注册工具箱入口，不读取旧版目录或查询游戏资源库。"""
+        """注册插件操作入口，不读取旧版目录或查询游戏资源库。"""
         self._ctx = ctx
         self._active = True
         self._wizard = None

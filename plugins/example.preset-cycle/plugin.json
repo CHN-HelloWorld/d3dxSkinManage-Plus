@@ -6,17 +6,13 @@
   "files": ["entry.py", "README.md", "languages"],
   "minAppVersion": "1.0.0",
   "author": "d3dxSkinManage-Plus",
-  "description": "通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。",
+  "description": "教学示例：通过快捷键或工具按钮，按列表顺序切换当前游戏的上一个或下一个组合预设。用于演示插件开发，也可实际使用。",
   "entry": "entry.py",
-  "permissions": ["mods:read", "mods:write", "storage", "ui:tools-page", "ui:settings", "ui:shortcuts"],
+  "permissions": ["mods:read", "mods:write", "storage", "ui:settings", "ui:shortcuts"],
   "contributes": {
     "commands": [
       {"id": "example.preset-cycle.previous", "title": "切换到上一个预设"},
       {"id": "example.preset-cycle.next", "title": "切换到下一个预设"}
-    ],
-    "toolsPage": [
-      {"command": "example.preset-cycle.previous", "group": "插件", "icon": "navigation/tools"},
-      {"command": "example.preset-cycle.next", "group": "插件", "icon": "navigation/tools"}
     ],
     "settings": [
       {"key": "include_default", "type": "bool", "default": false, "title": "轮换时包含默认预设"}

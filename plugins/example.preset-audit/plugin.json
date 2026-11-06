@@ -7,7 +7,7 @@
   "files": ["entry.py", "README.md", "languages"],
   "minAppVersion": "1.0.0",
   "author": "d3dxSkinManage-Plus",
-  "description": "集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。",
+  "description": "教学示例：集中检查当前游戏组合预设中失效的 Mod 和外观变体引用。用于演示插件开发，也可实际使用。",
   "entry": "entry.py",
   "permissions": ["mods:read", "storage", "ui:views"],
   "contributes": {}

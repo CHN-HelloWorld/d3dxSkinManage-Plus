@@ -4,6 +4,8 @@
     "name": "English"
   },
   "messages": {
+    "教学示例": "Tutorial example",
+    "用于演示插件开发，也可实际使用。": "Demonstrates plugin development and can also be used as a practical tool.",
     "更新附件与发布说明中的 SHA-256 不一致，请稍后重新检查更新。": "The update asset and release notes have different SHA-256 checksums. Please check for updates again later.",
     "正在校验更新包…": "Verifying the update package…",
     "所有下载源均无法获取完整更新包，请检查网络或稍后重试。": "No download source could provide a complete update package. Check your connection or try again later.",

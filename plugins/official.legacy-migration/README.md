@@ -1,7 +1,7 @@
 # d3dxSkinManage数据迁移
 
 `official.legacy-migration` 将 d3dxSkinManage 的本地资源复制到 d3dxSkinManage-Plus 当前选择的游戏。
-当前插件版本为 0.3.5，使用 SDK 2.1。插件随安装包提供，在插件页启用后，通过工具箱的 **d3dxSkinManage数据迁移** 打开向导。
+当前插件版本为 0.3.5，使用 SDK 2.1。插件随安装包提供，在插件页启用后，通过详情中 **操作** 区的 **d3dxSkinManage数据迁移** 打开向导。
 激活插件和打开向导不会扫描文件或开始迁移。
 
 ## 使用
@@ -84,7 +84,7 @@
 
 **d3dxSkinManage Data Migration** copies local d3dxSkinManage resources into the game currently selected in d3dxSkinManage-Plus.
 Plugin version 0.3.5 uses SDK 2.1. Enable the bundled plugin on the Plugins page, then open **d3dxSkinManage Data Migration**
-in the toolbox. Activating the plugin or opening its window does not scan or import files.
+in the plugin details' **Action** section. Activating the plugin or opening its window does not scan or import files.
 
 1. Create or select the game on the Games page. Check **Import into** in the migration window.
 2. **Choose folder**: select the legacy app folder containing `home` and `resources`. Data is detected automatically.

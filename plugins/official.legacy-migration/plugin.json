@@ -8,13 +8,10 @@
   "description": "把 d3dxSkinManage 的 Mod、分类和整理信息导入当前游戏，保留原文件。",
   "entry": "entry.py",
   "files": ["entry.py", "controller.py", "wizard.py", "preview.py", "legacy.py", "sources.py", "report.py", "README.md", "languages"],
-  "permissions": ["mods:read", "mods:write", "fs:read", "storage", "background", "ui:views", "ui:tools-page"],
+  "permissions": ["mods:read", "mods:write", "fs:read", "storage", "background", "ui:views"],
   "contributes": {
     "commands": [
       {"id": "official.legacy-migration.open", "title": "d3dxSkinManage数据迁移"}
-    ],
-    "toolsPage": [
-      {"command": "official.legacy-migration.open", "group": "插件", "icon": "navigation/tools"}
     ]
   }
 }

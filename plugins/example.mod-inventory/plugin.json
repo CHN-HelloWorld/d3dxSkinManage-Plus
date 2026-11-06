@@ -6,23 +6,19 @@
   "files": ["entry.py", "inventory.py", "README.md", "languages"],
   "minAppVersion": "1.0.0",
   "author": "d3dxSkinManage-Plus",
-  "description": "将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。",
+  "description": "教学示例：将当前游戏或分类子树的 Mod 信息导出为 CSV，便于整理和分享配置清单。用于演示插件开发，也可实际使用。",
   "entry": "entry.py",
   "permissions": [
     "mods:read",
     "fs:write",
     "background",
     "storage",
-    "ui:tools-page",
     "ui:menus",
     "ui:settings"
   ],
   "contributes": {
     "commands": [
       {"id": "example.mod-inventory.export", "title": "导出 Mod 清单"}
-    ],
-    "toolsPage": [
-      {"command": "example.mod-inventory.export", "group": "插件", "icon": "navigation/tools"}
     ],
     "menus": {
       "character-context": [
