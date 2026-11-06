@@ -13,6 +13,7 @@ import weakref
 from collections.abc import Awaitable, Callable
 from concurrent.futures import Future
 from datetime import datetime
+from functools import partial
 from pathlib import Path
 
 import shiboken6
@@ -955,8 +956,8 @@ class GameBananaStorePage(QWidget):
 
     # 面包屑
     def _on_breadcrumb_path_changed(self, new_path: list[GbCategory]) -> None:
-        """只对包含实际分类的面包屑路径启动新的分类查询。"""
-        if len(new_path) <= 2:
+        """按所选大类或游戏下的全部 Mod 启动分类查询。"""
+        if len(new_path) < 2:
             return
         self._set_path_and_query(new_path)
 
@@ -986,7 +987,13 @@ class GameBananaStorePage(QWidget):
     def _set_path_and_query(self, new_path: list[GbCategory]) -> None:
         """切换分类时重置搜索与分页并使旧请求失效，同一分类尚在加载时合并重复选择。"""
         # 同一分类仍在加载时忽略重复选择，避免连续递增请求代次使全部回调过期。
-        if self._path and new_path and new_path[-1].id == self._path[-1].id and self._in_flight > 0:
+        if (
+            self._mode == "category"
+            and self._path
+            and new_path
+            and new_path[-1].id == self._path[-1].id
+            and self._in_flight > 0
+        ):
             return
         self._path = new_path
         self.breadcrumb.set_path(new_path)
@@ -1085,6 +1092,10 @@ class GameBananaStorePage(QWidget):
             cat_id = leaf.id
             sort = self._sort
             coro_factory = lambda: self._client.mods_by_category(cat_id, page=page, sort=sort)  # noqa: E731
+        elif leaf is not None and leaf.id == -1:
+            gid = self._gb_game_id
+            sort = self._sort
+            coro_factory = partial(self._client.mods_by_game, gid, page=page, sort=sort)
         else:
             return
         runner = self._make_runner()

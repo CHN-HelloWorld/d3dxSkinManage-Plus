@@ -111,7 +111,7 @@ def test_category_failure_stays_in_dropdown_and_retry_recovers(qtbot, store_page
     offline[0] = False
     picker._retry.click()
     qtbot.wait_until(lambda: picker._stack.currentWidget() == picker._list, timeout=3000)
-    assert picker._all[0].id == 5100
+    assert [category.id for category in picker._all] == [5000, 5100]
     store_page._on_children_error(5000, "old failure", store_page._request_gen - 1)
     assert picker._stack.currentWidget() == picker._list
     asyncio.run(client.aclose())
@@ -125,6 +125,31 @@ def test_set_game_unknown_switches_to_unknown_view(qtbot, store_page):
         timeout=3000,
     )
     assert "my_homemade_game" in store_page.unknown_view.message_label.text()
+
+
+def test_all_at_mods_level_queries_current_game(qtbot, store_page, fake_gb_client):
+    qtbot.wait_until(lambda: store_page.grid.count() >= 2, timeout=3000)
+    fake_gb_client.mods_by_game.return_value = ([_rec(9)], False)
+    parent_path = store_page._path[:2]
+    store_page._on_breadcrumb_path_changed(parent_path)
+    qtbot.wait_until(lambda: fake_gb_client.mods_by_game.called, timeout=3000)
+    qtbot.wait_until(lambda: store_page.grid.count() == 1, timeout=3000)
+    fake_gb_client.mods_by_game.assert_called_once_with(101, page=1, sort=store_page._sort)
+    assert store_page._path == parent_path
+
+
+def test_all_at_parent_category_clears_search_and_queries_parent(qtbot, store_page, fake_gb_client):
+    qtbot.wait_until(lambda: store_page.grid.count() >= 2, timeout=3000)
+    parent_path = store_page._path[:3]
+    store_page._path = [*parent_path, GbCategory(5100, "Characters", 5000, 1, None)]
+    store_page._mode = "search"
+    store_page._search_query = "example"
+    fake_gb_client.mods_by_category.reset_mock()
+    store_page._on_breadcrumb_path_changed(parent_path)
+    qtbot.wait_until(lambda: fake_gb_client.mods_by_category.called, timeout=3000)
+    fake_gb_client.mods_by_category.assert_called_once_with(5000, page=1, sort=store_page._sort)
+    assert store_page._mode == "category"
+    assert store_page._search_query == ""
 
 
 def test_set_game_known_switches_back_to_browse(qtbot, store_page):

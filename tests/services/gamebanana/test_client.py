@@ -45,6 +45,18 @@ async def test_categories_happy(client, respx_mock):
     assert all(c.id > 0 for c in cats)
 
 
+async def test_mods_by_game_filters_mod_index_and_preserves_sort(client, respx_mock):
+    route = respx_mock.get("https://gamebanana.com/apiv11/Mod/Index").mock(return_value=httpx.Response(200, json=[]))
+    records, has_more = await client.mods_by_game(101, page=2, sort="latest")
+    params = route.calls.last.request.url.params
+    assert params["_aFilters[Generic_Game]"] == "101"
+    assert params["_nPage"] == "2"
+    assert "_aFilters[Generic_Category]" not in params
+    assert "_sSort" in params
+    assert records == []
+    assert not has_more
+
+
 async def test_requests_identify_current_application_version(client, respx_mock):
     from src.utils.constants import APP_VERSION
 

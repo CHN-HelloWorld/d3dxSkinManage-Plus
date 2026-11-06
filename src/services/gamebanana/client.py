@@ -373,6 +373,22 @@ class GameBananaClient:
         records = self._extract_records(payload)
         return [GbModRecord.from_api(r) for r in records], self._extract_has_more(payload)
 
+    async def mods_by_game(
+        self, game_id: int, page: int = 1, *, sort: str = "best_match"
+    ) -> tuple[list[GbModRecord], bool]:
+        """按游戏查询全部 Mod，保留与分类浏览一致的分页和排序。"""
+        params: dict[str, Any] = {
+            "_aFilters[Generic_Game]": game_id,
+            "_nPage": page,
+            "_nPerpage": DEFAULT_PAGE_SIZE,
+        }
+        sort_param = _SORT_ALIASES.get(sort)
+        if sort_param:
+            params["_sSort"] = sort_param
+        payload = await self._get("/Mod/Index", **params)
+        records = self._extract_records(payload)
+        return [GbModRecord.from_api(record) for record in records], self._extract_has_more(payload)
+
     async def get_profile(self, model: GbModel, mod_id: int) -> GbModProfile:
         """按资源类型与编号获取详情，使用可持久化缓存复用有效期内的响应。"""
         key = f"profile:{model.value}:{mod_id}"

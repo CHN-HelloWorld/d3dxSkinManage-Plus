@@ -63,4 +63,27 @@ def test_failed_dropdown_can_retry_then_display_categories(qtbot):
     assert requested == [5000, 5000]
     bar.set_children(5000, [_seg("Characters", 5100)])
     assert picker._stack.currentWidget() == picker._list
-    assert picker._list.item(0).data(Qt.ItemDataRole.UserRole).id == 5100
+    assert picker._list.item(0).text() == "全部"
+    assert picker._list.item(1).data(Qt.ItemDataRole.UserRole).id == 5100
+
+
+def test_all_category_selects_parent_without_duplicate_segment(qtbot):
+    bar = GbBreadcrumbBar()
+    qtbot.addWidget(bar)
+    path = [_seg("Game"), _seg("Mods", -1), _seg("Skins", 5000), _seg("Characters", 5100)]
+    bar.set_path(path)
+    bar.set_children(5000, [_seg("Characters", 5100)])
+    bar._populate_menu(2)
+    picker = bar._pickers[2]
+    with qtbot.waitSignal(bar.path_changed) as blocker:
+        picker._on_item(picker._list.item(0))
+    assert blocker.args[0] == path[:3]
+
+
+def test_all_category_available_when_parent_has_no_children(qtbot):
+    bar = GbBreadcrumbBar()
+    qtbot.addWidget(bar)
+    bar.set_path([_seg("Game"), _seg("Mods", -1), _seg("Skins", 5000)])
+    bar.set_children(5000, [])
+    bar._populate_menu(2)
+    assert bar._pickers[2]._list.item(0).text() == "全部"

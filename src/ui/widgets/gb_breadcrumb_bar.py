@@ -180,7 +180,13 @@ class GbBreadcrumbBar(QFrame):
             if 0 <= idx < len(self._path) and self._path[idx].id == parent_id:
                 picker = self._pickers.get(idx)
                 if picker is not None:
-                    picker.set_categories(children)
+                    picker.set_categories(self._picker_categories(parent_id, children))
+
+    @staticmethod
+    def _picker_categories(parent_id: int, children: list[GbCategory]) -> list[GbCategory]:
+        """将当前大类作为全部选项置顶，选择后直接查询该父分类。"""
+        all_category = GbCategory(id=parent_id, name=tr("全部"), parent_id=None, item_count=0, icon_url=None)
+        return [all_category, *children]
 
     def segment_texts(self) -> list[str]:
         """返回当前路径按钮显示的文字列表。"""
@@ -306,7 +312,7 @@ class GbBreadcrumbBar(QFrame):
         self._pickers[index] = picker
         self._open_picker_index = index
         if parent_id in self._children_cache:
-            picker.set_categories(self._children_cache[parent_id])
+            picker.set_categories(self._picker_categories(parent_id, self._children_cache[parent_id]))
         else:
             picker.set_loading()  # 先显示加载状态，子分类返回后填充列表。
             self.children_requested.emit(parent_id)
@@ -325,5 +331,7 @@ class GbBreadcrumbBar(QFrame):
     def _on_picker_picked(self, index: int, cat: GbCategory, menu: QMenu) -> None:
         """关闭菜单，将选中分类追加到对应祖先路径并发出路径变化信号。"""
         menu.hide()
-        new_path = self._path[: index + 1] + [cat]
+        new_path = self._path[: index + 1]
+        if cat.id != self._path[index].id:
+            new_path = [*new_path, cat]
         self.path_changed.emit(new_path)
