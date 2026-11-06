@@ -12,9 +12,11 @@ from pathlib import Path
 import pytest
 from PIL import Image
 from PySide6.QtCore import QCoreApplication, QEvent
+from PySide6.QtGui import QDesktopServices
 
 from src.core.mod_package import read_sidecar
 from src.ui import theme
+from tests.plugins.test_legacy_migration_ui import select_mod
 from tests.plugins.test_mainwindow_service import PluginWindow
 from tests.plugins.test_operations import library as library
 
@@ -22,11 +24,14 @@ PLUGIN_ID = "official.legacy-migration"
 
 
 @pytest.fixture
-def migration_window(library, temp_data_dir, qtbot):
+def migration_window(library, temp_data_dir, qtbot, monkeypatch):
     """仅把随包迁移插件复制到隔离目录，再走真实信任和惰性激活流程。"""
     source = Path(__file__).resolve().parents[2] / "plugins" / PLUGIN_ID
+    opened_reports = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: opened_reports.append(url.toLocalFile()) or True)
     shutil.copytree(source, temp_data_dir / "plugins" / PLUGIN_ID)
     window = PluginWindow(library[0])
+    window.opened_reports = opened_reports
     qtbot.addWidget(window)
     window.show()
     plugins = window._plugin_manager
@@ -114,6 +119,10 @@ def test_real_plugin_copies_legacy_metadata_and_reopening_skips_completed_items(
     wizard.copy_button.click()
     qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
     assert controller.summary.succeeded == 1, controller.items
+    assert len(migration_window.opened_reports) == 1
+    report_path = Path(migration_window.opened_reports[0])
+    assert report_path.is_file()
+    assert "Ocean outfit" in report_path.read_text(encoding="utf-8-sig")
     assert not controller.summary.failed
     imported = manager.get_mod(controller.items[0].target_id)
     assert imported.name == "Ocean outfit"
@@ -138,7 +147,89 @@ def test_real_plugin_copies_legacy_metadata_and_reopening_skips_completed_items(
     qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
     assert controller.summary.skipped == 1
     assert controller.items[0].target_id == imported.mod_id
+    assert imported.mod_id in Path(controller.report_path).read_text(encoding="utf-8-sig")
     assert len(manager.get_mods()) == 2
+
+
+def test_real_readable_index_key_imports_with_verified_archive_digest(migration_window, library, tmp_path, qtbot):
+    manager, _ = library
+    root, sha = legacy_collection(tmp_path)
+    key = "角色甲--作者-BuildA"
+    (root / "resources/mods" / sha).rename(root / "resources/mods" / key)
+    (root / "resources/preview" / (sha + ".png")).rename(root / "resources/preview" / (key + ".png"))
+    index = root / "home/Collection/modsIndex/collection.json"
+    data = json.loads(index.read_text(encoding="utf-8"))
+    data["mods"][key] = data["mods"].pop(sha)
+    index.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    _dialog, wizard, controller = open_and_scan(migration_window, root, qtbot)
+
+    assert controller.summary.pending == 1
+    assert controller.items[0].source.legacy_key == key
+    assert controller.items[0].source.sha == sha
+    wizard.copy_button.click()
+    qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
+
+    assert controller.summary.succeeded == 1, controller.items
+    imported = manager.get_mod(controller.items[0].target_id)
+    assert imported.name == "Ocean outfit"
+    assert Path(imported.preview_images[0]).read_bytes() == (root / "resources/preview" / (key + ".png")).read_bytes()
+    text = Path(controller.report_path).read_text(encoding="utf-8-sig")
+    assert "旧版索引键: " + key in text
+    assert "原包 SHA-1: " + sha in text
+    assert before == {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
+def test_real_cache_recovery_preserves_edits_and_does_not_reuse_original_history(
+    migration_window, library, tmp_path, qtbot
+):
+    manager, _ = library
+    root, sha = legacy_collection(tmp_path)
+    cache = root / "home/Collection/work/Mods" / ("disabled-" + sha)
+    (cache / "outfit").mkdir(parents=True)
+    changed_ini = "[Constants]\nglobal $outfit = 77\n"
+    (cache / "outfit/mod.ini").write_text(changed_ini, encoding="utf-8")
+    (cache / "preview").mkdir()
+    Image.new("RGB", (16, 16), "red").save(cache / "preview/preview_1.webp")
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    dialog, wizard, controller = open_and_scan(migration_window, root, qtbot)
+    assert controller.items[0].source.cache_changed
+    wizard.copy_button.click()
+    qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
+    assert controller.summary.succeeded == 1
+    original_id = controller.items[0].target_id
+    dialog.close()
+    QCoreApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+    _dialog, wizard, controller = open_and_scan(migration_window, root, qtbot)
+    select_mod(wizard)
+    assert wizard.source_combo.isEnabled()
+    wizard.source_combo.setCurrentIndex(wizard.source_combo.findData(True))
+    assert controller.items[0].source.source_path == str(cache)
+    wizard.copy_button.click()
+    qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
+    assert controller.summary.succeeded == 1, controller.items
+    recovered = manager.get_mod(controller.items[0].target_id)
+    assert recovered.mod_id != original_id
+    if Path(recovered.path).is_file():
+        with zipfile.ZipFile(recovered.path) as archive:
+            name = next(name for name in archive.namelist() if name.endswith("mod.ini"))
+            assert archive.read(name).decode().replace("\r\n", "\n") == changed_ini
+    else:
+        assert next(Path(recovered.path).rglob("mod.ini")).read_text() == changed_ini
+    assert not recovered.is_enabled
+    assert before == {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert len(manager.get_mods()) == 3
+
+
+def test_real_disabled_index_with_original_archive_is_migrated(migration_window, tmp_path, qtbot):
+    root, _sha = legacy_collection(tmp_path)
+    index = root / "home/Collection/modsIndex/collection.json"
+    index.rename(index.with_name("disabled-collection.json"))
+    _dialog, wizard, controller = open_and_scan(migration_window, root, qtbot)
+    assert controller.summary.total == 1
+    wizard.copy_button.click()
+    qtbot.waitUntil(lambda: controller.state == "finished", timeout=15000)
+    assert controller.summary.succeeded == 1, controller.items
 
 
 def test_host_stop_cancels_the_migration_batch_even_before_a_mod_id_exists(migration_window, library, tmp_path, qtbot):

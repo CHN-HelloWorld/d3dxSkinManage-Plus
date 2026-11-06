@@ -145,6 +145,7 @@ class ControlledLibrary:
 def migration_context():
     """提供受控宿主边界，插件本身仍使用实际 SDK 任务和释放对象。"""
     library = ControlledLibrary()
+    reports = []
     commands = {}
     events = {}
     ctx = SimpleNamespace(
@@ -157,7 +158,9 @@ def migration_context():
         subscriptions=DisposableStore(),
         commands=SimpleNamespace(register=lambda key, handler: commands.setdefault(key, handler)),
         events=SimpleNamespace(on=lambda key, handler: events.setdefault(key, handler)),
+        ui=SimpleNamespace(show_text_report=lambda text, title="": reports.append((text, title)) or "report.txt"),
     )
+    ctx.reports = reports
     ctx.registered_commands = commands
     ctx.registered_events = events
     yield ctx
@@ -564,6 +567,188 @@ def test_sdk_duplicate_result_records_actual_target_id(load_migration, migration
         assert controller.summary.skipped == 1
         assert controller.summary.succeeded == 0
         assert migration_context.storage.get("migration_history")["game-a"][scan.mods[0].sha] == "existing-target"
+    finally:
+        controller.shutdown()
+
+
+def test_completed_batch_exports_duplicate_details_to_text_report(load_migration, migration_context, qtbot):
+    scan = make_scan(load_migration("legacy"), count=1)
+    migration_context.storage.set("migration_history", {"game-a": {scan.mods[0].sha: "previous"}})
+    migration_context.mods.catalog["previous"] = ModInfo("previous", "Existing", game_id="game-a")
+    controller = ready_controller(load_migration, migration_context, scan, qtbot)
+    try:
+        controller.start_import()
+        qtbot.waitUntil(lambda: controller.state == "finished")
+        assert controller.summary.skipped == 1
+        assert len(migration_context.reports) == 1
+        text, title = migration_context.reports[0]
+        assert scan.mods[0].name in text and scan.mods[0].sha in text
+        assert scan.mods[0].source_path in text and "previous" in text
+        assert "跳过" in text and "game-a" in text
+        assert title
+        assert controller.report_path == "report.txt"
+    finally:
+        controller.shutdown()
+
+
+def test_selecting_cache_has_separate_history_and_checked_directory_request(load_migration, migration_context, qtbot):
+    from dataclasses import replace
+
+    scan = make_scan(load_migration("legacy"), count=1)
+    source = replace(
+        scan.mods[0],
+        archive_path=scan.mods[0].source_path,
+        cache_path="C:/legacy/cache",
+        cache_digest="a" * 64,
+        cache_changed=True,
+        cache_size_bytes=2048,
+    )
+    scan = replace(scan, mods=(source,))
+    migration_context.storage.set("migration_history", {"game-a": {source.sha: "original"}})
+    migration_context.mods.catalog["original"] = ModInfo("original", "Original", game_id="game-a")
+    controller = ready_controller(load_migration, migration_context, scan, qtbot)
+    try:
+        controller.select_source(0, True)
+        assert controller.items[0].source.source_path == source.cache_path
+        controller.start_import()
+        qtbot.waitUntil(lambda: controller.state == "finished")
+        assert controller.summary.succeeded == 1
+        request = migration_context.mods.imports[0]
+        assert request.source_path == source.cache_path
+        assert request.expected_directory_hash == source.cache_digest
+        assert not request.expected_sha1
+        history = migration_context.storage.get("migration_history")["game-a"]
+        assert history[source.sha] == "original"
+        assert history[source.sha + ":cache:" + source.cache_digest] == "mod-1"
+    finally:
+        controller.shutdown()
+
+
+def test_report_failure_does_not_undo_successful_import(load_migration, migration_context, qtbot):
+    def fail_report(*args, **kwargs):
+        """模拟报告写入失败，验证已成功导入的内容不会回滚。"""
+        raise OSError("report disk error")
+
+    migration_context.ui.show_text_report = fail_report
+    controller = ready_controller(
+        load_migration, migration_context, make_scan(load_migration("legacy"), count=1), qtbot
+    )
+    try:
+        controller.start_import()
+        qtbot.waitUntil(lambda: controller.state == "finished")
+        assert controller.summary.succeeded == 1
+        assert any("report disk error" in issue.source for issue in controller.issues)
+    finally:
+        controller.shutdown()
+
+
+@pytest.mark.parametrize("interrupt", ["close", "game"])
+def test_interruption_exports_committed_results_and_unsettled_operation(
+    load_migration, migration_context, qtbot, interrupt
+):
+    scan = make_scan(load_migration("legacy"), count=3)
+    migration_context.mods.defer_imports = True
+    controller = ready_controller(load_migration, migration_context, scan, qtbot)
+    controller.start_import()
+    qtbot.waitUntil(lambda: len(migration_context.mods.imports) == 1)
+    migration_context.mods.tasks[-1]._finish(OperationResult("game-a", ("mod-1",)))
+    qtbot.waitUntil(lambda: len(migration_context.mods.imports) == 2)
+    pending = migration_context.mods.tasks[-1]
+    if interrupt == "close":
+        controller.shutdown()
+    else:
+        migration_context.game.game_id = "game-b"
+        controller.game_changed("game-b")
+    assert pending in migration_context.mods.cancelled
+    assert len(migration_context.reports) == 1
+    text = migration_context.reports[0][0]
+    assert "mod-1" in text and "game-a" in text
+    assert "最终结果" in text
+    assert "正在复制" in text and "已取消" in text
+    controller.shutdown()
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_failed_and_cancelled_results_keep_recovery_warnings_in_report(
+    load_migration, migration_context, qtbot, cancelled
+):
+    warning = "Recovery receipt: C:/recovery/import-cleanup/receipt.json"
+    migration_context.mods.responses.append(
+        OperationResult("game-a", error="stopped", warnings=(warning,), cancel_requested=cancelled)
+    )
+    controller = ready_controller(
+        load_migration, migration_context, make_scan(load_migration("legacy"), count=1), qtbot
+    )
+    try:
+        controller.start_import()
+        qtbot.waitUntil(lambda: controller.state == "finished")
+        assert warning in controller.items[0].warnings
+        assert warning in migration_context.reports[0][0]
+    finally:
+        controller.shutdown()
+
+
+@pytest.mark.parametrize("outcome", ["failed", "cancelled", "succeeded"])
+def test_game_switch_report_keeps_known_category_diagnostics(load_migration, migration_context, qtbot, outcome):
+    warning = "Category recovery receipt: C:/recovery/category.json"
+    controller = ready_controller(
+        load_migration, migration_context, make_scan(load_migration("legacy"), count=1), qtbot
+    )
+    migration_context.game.immediate = False
+    try:
+        controller.start_import()
+        qtbot.waitUntil(lambda: bool(migration_context.game.tasks))
+        migration_context.game.game_id = "game-b"
+        migration_context.game.tasks[-1]._finish(
+            OperationResult(
+                "game-a",
+                node_id="created-category" if outcome == "succeeded" else "",
+                error="Category write failed" if outcome == "failed" else "",
+                warnings=(warning,),
+                cancel_requested=outcome == "cancelled",
+            )
+        )
+        assert len(migration_context.reports) == 1
+        text = migration_context.reports[0][0]
+        assert "game-a" in text
+        assert warning in text
+        if outcome == "failed":
+            assert "Category write failed" in text
+        assert not migration_context.mods.imports
+    finally:
+        controller.shutdown()
+
+
+@pytest.mark.parametrize("outcome", ["failed", "cancelled", "succeeded"])
+def test_close_report_keeps_completed_category_diagnostics(
+    load_migration, migration_context, qtbot, monkeypatch, outcome
+):
+    warning = "Completed category receipt: C:/recovery/category.json"
+    controller = ready_controller(
+        load_migration, migration_context, make_scan(load_migration("legacy"), count=1), qtbot
+    )
+    pending = OperationTask()
+    pending.on_finished(lambda result: controller.shutdown())
+    monkeypatch.setattr(migration_context.game, "create_category", lambda *args, **kwargs: pending)
+    try:
+        controller.start_import()
+        qtbot.waitUntil(lambda: controller._task is pending)
+        pending._finish(
+            OperationResult(
+                "game-a",
+                node_id="created-category" if outcome == "succeeded" else "",
+                error="Category write failed" if outcome == "failed" else "",
+                warnings=(warning,),
+                cancel_requested=outcome == "cancelled",
+            )
+        )
+        assert controller.state == "closed"
+        assert len(migration_context.reports) == 1
+        text = migration_context.reports[0][0]
+        assert warning in text
+        if outcome == "failed":
+            assert "Category write failed" in text
+        assert not migration_context.mods.imports
     finally:
         controller.shutdown()
 
