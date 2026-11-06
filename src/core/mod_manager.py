@@ -905,8 +905,9 @@ class ModManager:
             return False
 
     def get_characters_for_ui(self, game_id: str | None = None) -> list[dict]:
-        """获取角色数据 (适配 UI)"""
-        chars = self.get_characters(game_id)
+        """获取分类展示快照，过滤确认缺失的目录而不删除可恢复的索引记录。"""
+        gid = game_id or self.current_game_id
+        chars = self._existing_categories_for_ui(gid, self.get_characters(gid))
         return [
             {
                 "id": c.id,
@@ -921,6 +922,36 @@ class ModManager:
             }
             for c in chars
         ]
+
+    def _existing_categories_for_ui(self, game_id: str, characters: list[Node]) -> list[Node]:
+        """根可访问且库未变更时隐藏缺失类别；权限异常及在途移动不能当作删除。"""
+        root = self._index.paths.roots.get(game_id)
+        if root is None or self._library_mutations or self._index.in_transaction:
+            return characters
+        stamp = (self._library_epoch, self._index.change_stamp)
+        if check_path(str(root)).state != "exists":
+            return characters
+        try:
+            root_signature = source_directory_signature((root,))
+        except OSError:
+            return characters
+        missing_ids = set()
+        for character in characters:
+            path = self._index.paths.node_path(character.id)
+            if getattr(self, "_library_protection", None) is not None and self.is_library_path_protected(path):
+                continue
+            if check_path(str(path)).state == "missing":
+                missing_ids.add(character.id)
+        if self._library_mutations or stamp != (self._library_epoch, self._index.change_stamp):
+            return characters
+        if check_path(str(root)).state != "exists":
+            return characters
+        try:
+            if source_directory_signature((root,)) != root_signature:
+                return characters
+        except OSError:
+            return characters
+        return [character for character in characters if character.id not in missing_ids]
 
     # Mod 操作
 

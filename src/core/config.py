@@ -92,6 +92,8 @@ class Config:
             "game_card_scale": 100,
             # 类别总览的视图模式（"grid"=卡片 / "list"=列表）记忆，下次启动恢复。
             "overview_view_mode": "grid",
+            "overview_sort_key": "alpha_asc",
+            "overview_category_sort_key": "alpha_asc",
             # 布局宽度按像素保存；图文分栏保存两段像素高度，并按比例恢复。
             "game_detail_width": 320,  # 游戏页右侧详情栏宽度
             "overview_preview_width": 350,  # 类别总览右侧预览栏宽度
@@ -189,6 +191,19 @@ class Config:
         "export.format": ("zip", "7z", "rar", "folder"),
         "ui.adult_preview_mode": ("show", "hide", "blur"),
         "ui.overview_view_mode": ("grid", "list"),
+        "ui.overview_sort_key": (
+            "alpha_asc",
+            "alpha_desc",
+            "time_asc",
+            "time_desc",
+            "author_asc",
+            "author_desc",
+            "age_asc",
+            "age_desc",
+            "status_desc",
+            "custom",
+        ),
+        "ui.overview_category_sort_key": ("alpha_asc", "alpha_desc", "custom"),
         "ui.game_view_mode": ("grid", "list"),
         "appearance.background.fit": ("cover", "contain", "tile"),
         "appearance.background.source": ("off", "image", "video", "scene"),
@@ -435,6 +450,25 @@ class Config:
             write_json_atomic(self._config_path, self._map_file_paths(candidate, to_stored_path))
         except OSError as exc:
             logger.error("配置项 %s 保存失败，已保持原值: %s", key, exc)
+            return False
+        self._data = self._map_file_paths(candidate, resolve_stored_path)
+        return True
+
+    def remove_atomic(self, key: str) -> bool:
+        """原子删除迁出的设置键；失败保持磁盘及内存原值，缺失键不触发写入。"""
+        candidate = deepcopy(self._data)
+        node = candidate
+        keys = key.split(".")
+        for part in keys[:-1]:
+            node = node.get(part) if isinstance(node, dict) else None
+        if not isinstance(node, dict) or keys[-1] not in node:
+            return True
+        del node[keys[-1]]
+        candidate["schema_version"] = SETTINGS_SCHEMA_VERSION
+        try:
+            write_json_atomic(self._config_path, self._map_file_paths(candidate, to_stored_path))
+        except OSError as exc:
+            logger.error("配置项 %s 删除失败，已保持原值: %s", key, exc)
             return False
         self._data = self._map_file_paths(candidate, resolve_stored_path)
         return True

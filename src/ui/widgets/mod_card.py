@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QGraphicsBlurEffect,
     QHBoxLayout,
@@ -29,6 +30,7 @@ class ModCard(QFrame):
     """复用本地 Mod 预览与状态控件，通过信号向外层交付选择、标签筛选和启停请求。"""
 
     clicked = Signal(str)
+    reorder_requested = Signal(object)
     double_clicked = Signal(str)
     toggle_requested = Signal(str)
     tag_clicked = Signal(str)
@@ -51,6 +53,12 @@ class ModCard(QFrame):
         self._selected = False
         self._cut_state = False
         self._hover = False
+        self._reorder_enabled = False
+        self._press_pos = QPoint()
+        self._press_timer = QTimer(self)
+        self._press_timer.setSingleShot(True)
+        self._press_timer.setInterval(220)
+        self._press_timer.timeout.connect(self._request_reorder)
         # 成人级(X)预览模式："show"=正常 | "hide"=隐藏占位 | "blur"=模糊
         self._adult_mode = adult_mode
         self._card_width = card_width
@@ -65,8 +73,32 @@ class ModCard(QFrame):
         # 预览栏选中其他图片后记录覆盖路径，防止延迟加载或视图切换恢复为首张预览。
         self._preview_override_path: str | None = None
         self._setup_ui()
+        self._reorder_grip = QLabel(self)
+        self._reorder_grip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._reorder_grip.setFixedSize(24, 24)
+        self._reorder_grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._reorder_grip.setStyleSheet("background-color: rgba(0,0,0,0.35); border-radius: 4px;")
+        self._reorder_grip.move(self.width() - 28, 4)
+        self._reorder_grip.hide()
         if mod:
             self.set_mod(mod)
+
+    def set_reorder_enabled(self, enabled: bool) -> None:
+        """只在父层允许自定义排序时显示抓手，图库卡片默认不可拖动。"""
+        self._reorder_enabled = enabled
+        if not enabled:
+            self._press_timer.stop()
+        self._reorder_grip.setPixmap(icons.pixmap("actions/reorder", 16, "text.on_accent"))
+        self._reorder_grip.move(self.width() - 28, 4)
+        self._reorder_grip.setVisible(enabled)
+        self._reorder_grip.raise_()
+        self.setToolTip(tr("长按并拖动 Mod 卡片调整顺序，放下后自动保存。") if enabled else "")
+
+    def _request_reorder(self) -> None:
+        """停止长按计时并将当前可见的已绑定卡片交给父层启动拖动。"""
+        self._press_timer.stop()
+        if self._reorder_enabled and self.isVisible() and self.mod_id:
+            self.reorder_requested.emit(self)
 
     def _setup_ui(self) -> None:
         """按卡片高度分配预览与信息空间，建立透明内容层、状态标记和标签行。"""
@@ -160,6 +192,7 @@ class ModCard(QFrame):
 
     def set_mod(self, mod: Mod) -> None:
         """绑定 Mod 并同步文字、预览加载和启用状态显示。"""
+        self._press_timer.stop()
         self._mod = mod
         self._set_mod_text(mod)
         self._load_mod_pixmap(mod)
@@ -167,6 +200,7 @@ class ModCard(QFrame):
 
     def set_mod_deferred(self, mod: Mod) -> None:
         """仅设置文字/状态信息，跳过预览图加载（用于渐进式加载优化）"""
+        self._press_timer.stop()
         self._cached_pixmap = None
         self._preview_override_path = None
         self._preview_requested = False
@@ -217,6 +251,7 @@ class ModCard(QFrame):
             self._selected,
             bool(self._mod and self._mod.is_enabled),
             self._update_available,
+            self._reorder_enabled,
             self._adult_mode,
             self._tag_row._render_signature,
             self._cut_state,
@@ -477,6 +512,7 @@ class ModCard(QFrame):
         self._preview_height = int(new_h * preview_ratio)
 
         self.setFixedSize(new_w, new_h)
+        self._reorder_grip.move(new_w - 28, 4)
         self._preview_container.setFixedHeight(self._preview_height)
         self._preview_label.setFixedHeight(self._preview_height)
 
@@ -525,6 +561,7 @@ class ModCard(QFrame):
         self._preview_height = int(new_h * preview_ratio)
 
         self.setFixedSize(new_w, new_h)
+        self._reorder_grip.move(new_w - 28, 4)
         self._preview_container.setFixedHeight(self._preview_height)
         self._preview_label.setFixedHeight(self._preview_height)
 
@@ -591,19 +628,47 @@ class ModCard(QFrame):
         return self._mod.mod_id if self._mod else ""
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        """点击已绑定卡片时发出选择信号并消费左键事件，避免外层重复处理。"""
+        """左键点击立即选择当前 Mod，并在允许排序时记录长按起点。"""
         if event.button() == Qt.MouseButton.LeftButton and self._mod:
+            self._press_pos = event.position().toPoint()
+            if self._reorder_enabled:
+                self._press_timer.start()
             self.clicked.emit(self._mod.mod_id)
             event.accept()  # 阻止事件传播到父控件
             return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        """左键移动达到系统拖动距离后请求排序，不改变普通点击语义。"""
+        if (
+            self._reorder_enabled
+            and self._press_timer.isActive()
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance()
+        ):
+            self._request_reorder()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        """释放鼠标时取消长按，避免单击完成后启动拖动。"""
+        self._press_timer.stop()
+        super().mouseReleaseEvent(event)
+
+    def hideEvent(self, event) -> None:
+        """离开视口或归还控件池时取消尚未触发的长按。"""
+        self._press_timer.stop()
+        super().hideEvent(event)
+
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:
-        """双击已绑定卡片时发出双击及启停请求，由外层处理实际部署操作。"""
+        """双击时取消长按并保留双击及启停请求，默认事件处理后再次取消计时。"""
+        self._press_timer.stop()
         if event.button() == Qt.MouseButton.LeftButton and self._mod:
             self.double_clicked.emit(self._mod.mod_id)
             self.toggle_requested.emit(self._mod.mod_id)
         super().mouseDoubleClickEvent(event)
+        self._press_timer.stop()
 
     def contextMenuEvent(self, event) -> None:
         """收集插件 Mod 菜单项，无可用扩展时不显示菜单。"""

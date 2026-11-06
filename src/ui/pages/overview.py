@@ -16,7 +16,9 @@ from PySide6.QtCore import (
     QItemSelection,
     QItemSelectionModel,
     QLocale,
+    QMimeData,
     QPoint,
+    QRect,
     QRectF,
     QSignalBlocker,
     QSize,
@@ -26,7 +28,7 @@ from PySide6.QtCore import (
     QUrl,
     Signal,
 )
-from PySide6.QtGui import QColor, QDesktopServices, QFontMetrics, QKeyEvent, QPainter, QPixmap
+from PySide6.QtGui import QColor, QDesktopServices, QDrag, QFontMetrics, QKeyEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -57,6 +59,7 @@ from src.core.ini_keys import IniWriteError, KeyBinding
 from src.models.mod import AgeRating, Mod
 from src.models.tag import TagDefinition, tag_key
 from src.ui import acrylic, anim, icons, theme
+from src.ui.category_order import CategoryOrderStore
 from src.ui.smooth_scroll import SmoothScroller
 from src.ui.widgets.card_pool import CardPool
 from src.ui.widgets.card_render_cache import preview_cache_key
@@ -123,6 +126,9 @@ _AGE_RATING_LABELS = {
 }
 
 _ALPHABETICAL_SORTS = ("alpha_asc", "alpha_desc")
+_CATEGORY_FIRST_SORTS = (*_ALPHABETICAL_SORTS, "custom")
+_CATEGORY_ID_MIME = "application/x-d3dx-category-id"
+_MOD_ID_MIME = "application/x-d3dx-mod-id"
 
 
 def _age_rating_text(rating: AgeRating) -> str:
@@ -165,10 +171,31 @@ class _ElidedLabel(QLabel):
         super().setText(text)
 
 
+class _CategoryListTable(ModListTable):
+    """沿用列表选择行为，将原生行拖动交给页面按类别 ID 验证。"""
+
+    reorder_requested = Signal(object)
+
+    def __init__(self, parent=None):
+        """保存鼠标按下位置供行截图定位。"""
+        super().__init__(parent)
+        self._press_pos = QPoint()
+
+    def mousePressEvent(self, event) -> None:
+        """记录行内拖动起点，保留点击、多选及标签处理。"""
+        self._press_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def startDrag(self, supportedActions) -> None:
+        """只使用页面私有拖动通道，不让表格模型自行移动混合行。"""
+        self.reorder_requested.emit(self)
+
+
 class CharacterCard(QFrame):
     """角色/类别卡片"""
 
     clicked = Signal(str)
+    reorder_requested = Signal(object)
     clipboard_menu_requested = Signal(object)
     double_clicked = Signal(str)
     edit_requested = Signal(str)
@@ -208,7 +235,59 @@ class CharacterCard(QFrame):
         self._card_width = card_width
         self._card_height = card_height
         self._defer_pixmap = defer_pixmap
+        self._reorder_enabled = False
+        self._press_pos = QPoint()
+        self._press_timer = QTimer(self)
+        self._press_timer.setSingleShot(True)
+        self._press_timer.setInterval(220)
+        self._press_timer.timeout.connect(self._request_reorder)
         self._setup_ui()
+        self._reorder_grip = QLabel(self)
+        self._reorder_grip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._reorder_grip.setFixedSize(24, 24)
+        self._reorder_grip.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._reorder_grip.setStyleSheet("background-color: rgba(0,0,0,0.35); border-radius: 4px;")
+        self._reorder_grip.hide()
+
+    def set_reorder_enabled(self, enabled: bool) -> None:
+        """只在完整的自定义卡片视图中允许长按排序，并显示拖动抓手。"""
+        self._reorder_enabled = enabled
+        if not enabled:
+            self._press_timer.stop()
+        self._reorder_grip.setPixmap(icons.pixmap("actions/reorder", 16, "text.on_accent"))
+        self._reorder_grip.move(self.width() - 28, 4)
+        self._reorder_grip.setVisible(enabled)
+        self._reorder_grip.raise_()
+        self.setToolTip(tr("长按并拖动类别卡片调整顺序，放下后自动保存。") if enabled else "")
+
+    def _request_reorder(self) -> None:
+        """停止长按计时并将当前绑定交给页面验证，池卡片不能携带旧类别启动拖动。"""
+        self._press_timer.stop()
+        if self._reorder_enabled and self.isVisible() and self._data.get("id"):
+            self.reorder_requested.emit(self)
+
+    def mouseMoveEvent(self, event) -> None:
+        """左键移动达到系统拖动距离后启动排序，不改变普通点击语义。"""
+        if (
+            self._reorder_enabled
+            and self._press_timer.isActive()
+            and event.buttons() & Qt.MouseButton.LeftButton
+            and (event.position().toPoint() - self._press_pos).manhattanLength() >= QApplication.startDragDistance()
+        ):
+            self._request_reorder()
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:
+        """释放鼠标时停止长按判定，避免单击完成后启动拖动。"""
+        self._press_timer.stop()
+        super().mouseReleaseEvent(event)
+
+    def hideEvent(self, event) -> None:
+        """卡片离开视口或归还控件池时取消尚未开始的长按。"""
+        self._press_timer.stop()
+        super().hideEvent(event)
 
     def _setup_ui(self):
         """构建分类预览、节点类型徽章、名称和启用数量，并连接菜单与数据绑定。"""
@@ -285,6 +364,7 @@ class CharacterCard(QFrame):
 
     def set_category(self, data: dict, *, defer_pixmap: bool = True) -> None:
         """绑定新记录时复用卡片控件树。"""
+        self._press_timer.stop()
         self._data = data
         self._selected = False
         self._cut_state = False
@@ -439,12 +519,16 @@ class CharacterCard(QFrame):
     def mousePressEvent(self, event):
         """左键点击时发布分类标识，交由概览处理选择。"""
         if event.button() == Qt.MouseButton.LeftButton:
+            self._press_pos = event.position().toPoint()
+            if self._reorder_enabled:
+                self._press_timer.start()
             self.clicked.emit(self._data.get("id", ""))
         super().mousePressEvent(event)
 
     def mouseDoubleClickEvent(self, event):
         """左键双击时请求进入分类并接收事件，避免默认双击处理再次选中已离开的卡片。"""
         if event.button() == Qt.MouseButton.LeftButton:
+            self._press_timer.stop()
             self.double_clicked.emit(self._data.get("id", ""))
             # QWidget 的默认双击处理会再次调用 mousePressEvent，导航后会重新选中旧卡片。
             event.accept()
@@ -499,6 +583,7 @@ class CharacterCard(QFrame):
         self._card_width = new_w
         self._card_height = new_h
         self.setFixedSize(new_w, new_h)
+        self._reorder_grip.move(new_w - 28, 4)
 
         # 更新预览图容器和缩略图高度（动态比例）
         compact = new_h < 160
@@ -1493,8 +1578,15 @@ class OverviewPage(QWidget):
         self._selected_mod: Mod | None = None
         self._mod_manager = None  # 主窗口注入（parse_mod_key_bindings/edit_mod_key/部署用）
         self._adult_mode = "show"
-        self._sort_key = "alpha_asc"  # 排序方式
-        self._category_sort_key = "alpha_asc"
+        self._category_order = CategoryOrderStore(_Cfg.instance())
+        self._sort_key = _Cfg.instance().get("ui.overview_sort_key", "alpha_asc")
+        self._category_sort_key = _Cfg.instance().get("ui.overview_category_sort_key", "alpha_asc")
+        self._category_drag_source: QWidget | None = None
+        self._category_drag_scope: tuple[str, str, str, str, str] | None = None
+        self._category_list_drag_position = QPoint()
+        self._category_list_drag_timer = QTimer(self)
+        self._category_list_drag_timer.setInterval(50)
+        self._category_list_drag_timer.timeout.connect(self._scroll_category_list_drag)
         self._collator = QCollator()
         self._collator.setLocale(QLocale(QLocale.Language.Chinese, QLocale.Country.China))
         self._collator.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
@@ -1743,6 +1835,8 @@ class OverviewPage(QWidget):
         self._sort_combo.addItem(tr("按年龄分级升序"), "age_asc")
         self._sort_combo.addItem(tr("按年龄分级降序"), "age_desc")
         self._sort_combo.addItem(tr("按Mod启用状态降序"), "status_desc")
+        self._sort_combo.addItem(tr("自定义排序"), "custom")
+        self._sort_combo.setCurrentIndex(max(0, self._sort_combo.findData(self._sort_key)))
         self._sort_combo.setToolTip(tr("排序方式"))
         self._sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         search_layout.addWidget(self._sort_combo)
@@ -1856,7 +1950,12 @@ class OverviewPage(QWidget):
         left_layout.addWidget(scroll)
 
         # 列表视图 (QTableWidget)
-        self._table = ModListTable()
+        self._table = _CategoryListTable()
+        self._table.reorder_requested.connect(self._start_category_list_drag)
+        self._table.setAcceptDrops(True)
+        self._category_drop_line = QFrame(self._table.viewport())
+        self._category_drop_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self._category_drop_line.hide()
         self._table.tag_clicked.connect(self.select_tag_filter)
         self._table.setColumnCount(5)
         self._table.setHorizontalHeaderLabels(
@@ -2417,6 +2516,8 @@ class OverviewPage(QWidget):
             if isinstance(card, CharacterCard):
                 card.update_counts(node)
         self._characters = self._children_map.get(self._current_parent_id, [])
+        if structural:
+            self._category_order.reconcile_game(self._current_game_id, self._all_characters)
         if current_children_changed:
             self._refresh_current_level()
         elif structural:
@@ -2436,6 +2537,7 @@ class OverviewPage(QWidget):
         self._delta_node_parents = {node["id"]: node.get("parent_id") or "" for node in characters}
         self._delta_node_positions = {node["id"]: i for i, node in enumerate(characters)}
         self._build_children_map()
+        self._category_order.reconcile_game(self._current_game_id, characters)
         if force_root:
             # 切换游戏时强制回到根目录
             self._request_view_position(parent_id="")
@@ -2497,6 +2599,10 @@ class OverviewPage(QWidget):
         """设置当前层级下的 Mod 列表"""
         self._end_loading()
         self._current_mods = list(mods)
+        if self._current_game_id:
+            self._category_order.reconcile_mod_scope(
+                self._current_game_id, self._current_parent_id, [mod.mod_id for mod in self._current_mods]
+            )
         self._subtree_mods = list(subtree_mods) if subtree_mods is not None else list(mods)
         self._delta_direct_positions = {mod.mod_id: i for i, mod in enumerate(self._current_mods)}
         self._delta_subtree_positions = {mod.mod_id: i for i, mod in enumerate(self._subtree_mods)}
@@ -2710,6 +2816,8 @@ class OverviewPage(QWidget):
         self._end_card_scale()
         self._set_searching_state(True)
         self._table.cancel_row_reveal()
+        self._table.setDragEnabled(False)
+        self._clear_category_drop_hover()
         if self._mods_loading:
             return
         self._cancel_directory_intro()
@@ -2881,6 +2989,9 @@ class OverviewPage(QWidget):
         for mid in affected:
             self._delta_by_id.pop(mid, None)
         self._delta_by_id.update({mod.mod_id: mod for mod in mods if mod.mod_id in self._delta_subtree_positions})
+        self._category_order.reconcile_mod_scope(
+            self._current_game_id, parent, [mod.mod_id for mod in self._current_mods]
+        )
         removed_tags = any(mid not in old_mods or old_mods[mid].info.tags for mid in removed_ids)
         if removed_tags or any(
             mod.mod_id not in old_mods
@@ -2899,7 +3010,7 @@ class OverviewPage(QWidget):
         rating = self._age_filter.currentData() or ""
         has_tags = bool(self._tag_filter.selected_ids) and self._tag_filter.button.isEnabled()
         category_count = sum(item["type"] == "category" for item in desired)
-        mods_first = self._sort_key not in _ALPHABETICAL_SORTS
+        mods_first = self._sort_key not in _CATEGORY_FIRST_SORTS
         for mod in mods:
             membership = self._delta_subtree_positions if query or has_tags else self._delta_direct_positions
             if mod.mod_id not in membership or type_filter in ("category", "character"):
@@ -3356,7 +3467,7 @@ class OverviewPage(QWidget):
         sorted_cats, sorted_mods = self._apply_sort(sorted_cats, sorted_mods)
 
         items_order: list[tuple[str, object]] = []
-        if self._sort_key not in _ALPHABETICAL_SORTS:
+        if self._sort_key not in _CATEGORY_FIRST_SORTS:
             items_order.extend([("mod", mod) for mod in sorted_mods])
             items_order.extend([("category", cat) for cat in sorted_cats])
         else:
@@ -3694,7 +3805,7 @@ class OverviewPage(QWidget):
         self._display_items = []
         self._display_idx_map = {}
         items_order: list[tuple[str, object]] = []
-        if self._sort_key not in _ALPHABETICAL_SORTS:
+        if self._sort_key not in _CATEGORY_FIRST_SORTS:
             items_order.extend([("mod", mod) for mod in filtered_mods])
             items_order.extend([("category", cat) for cat in filtered_cats])
         else:
@@ -4355,6 +4466,7 @@ class OverviewPage(QWidget):
             card_height=self._vs_card_h,
         )
         card.clicked.connect(self._on_mod_card_clicked)
+        card.reorder_requested.connect(self._start_mod_drag)
         card.double_clicked.connect(self._on_mod_card_double_clicked)
         card.tag_clicked.connect(self.select_tag_filter)
         card.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -4379,6 +4491,7 @@ class OverviewPage(QWidget):
                     defer_pixmap=defer_pixmap,
                 )
                 card.clicked.connect(self._on_card_clicked)
+                card.reorder_requested.connect(self._start_category_drag)
                 card.double_clicked.connect(self._on_card_double_clicked)
                 card.edit_requested.connect(self._on_edit_character)
                 card.delete_requested.connect(self._on_category_card_delete)
@@ -4391,6 +4504,7 @@ class OverviewPage(QWidget):
             else:
                 card.set_category(item["data"], defer_pixmap=defer_pixmap)
                 card.resize_card(self._vs_card_w, self._vs_card_h)
+            card.set_reorder_enabled(self._can_reorder_categories())
         else:
             mod = item["data"]
             card = pooled_card if pooled_card is not None else self._vs_card_pool.take(ModCard)
@@ -4409,6 +4523,7 @@ class OverviewPage(QWidget):
                 card.load_pixmap_deferred()  # 立即加载预览图
             # defer_pixmap=True 时 pixmap 由 _vs_load_deferred_pixmaps 延迟加载
             card.set_update_available(mod.mod_id in self._updatable_ids)
+            card.set_reorder_enabled(self._can_reorder_mods())
 
         # 回收卡片的子布局可能延迟更新，复用时始终恢复实际控件边界。
         card.setFixedSize(self._vs_card_w, self._vs_card_h)
@@ -5880,8 +5995,291 @@ class OverviewPage(QWidget):
 
     # 拖拽导入
 
+    def _can_reorder_categories(self) -> bool:
+        """判断当前完整同级类别集合是否可自定义重排。"""
+        return self._can_reorder_items("category")
+
+    def _can_reorder_mods(self) -> bool:
+        """判断当前完整直属 Mod 集合是否可自定义重排。"""
+        return self._can_reorder_items("mod")
+
+    def _can_reorder_items(self, item_type: str) -> bool:
+        """分别验证排序模式，搜索、筛选和加载期间不允许保存不完整集合。"""
+        sort_key = self._category_sort_key if item_type == "category" else self._sort_key
+        return bool(
+            self._current_game_id
+            and sort_key == "custom"
+            and self._view_mode in ("grid", "list")
+            and not self._mods_loading
+            and not self._search_input.text().strip()
+            and not self._type_filter.currentData()
+            and not self._age_filter.currentData()
+            and not self._tag_filter.selected_ids
+        )
+
+    def _start_category_drag(self, card: CharacterCard) -> None:
+        """验证卡片仍绑定当前类别后，使用与游戏卡片相同的拖动通道。"""
+        if self._view_mode != "grid" or not self._can_reorder_categories():
+            return
+        category_id = card._data.get("id", "")
+        if self._vs_card_cache.get(category_id) is not card:
+            return
+        self._exec_category_drag(card, category_id, card.grab(), card._press_pos)
+
+    def _start_mod_drag(self, card: ModCard) -> None:
+        """验证 Mod 卡片仍绑定当前直属对象，再发起私有拖动。"""
+        if self._view_mode != "grid" or not self._can_reorder_mods():
+            return
+        if self._vs_card_cache.get(card.mod_id) is not card:
+            return
+        self._exec_category_drag(card, card.mod_id, card.grab(), card._press_pos, item_type="mod")
+
+    def _start_category_list_drag(self, table: _CategoryListTable) -> None:
+        """以当前类别或 Mod 行发起拖动，分别保存到各自的同级顺序。"""
+        if table is not self._table or self._view_mode != "list":
+            return
+        identity = table.item(table.currentRow(), 0)
+        if identity is None:
+            return
+        item_type = identity.data(Qt.ItemDataRole.UserRole + 1)
+        if item_type not in ("category", "mod") or not self._can_reorder_items(item_type):
+            return
+        category_id = identity.data(Qt.ItemDataRole.UserRole)
+        row_rect = table.visualItemRect(identity)
+        preview_rect = QRect(0, row_rect.top(), table.viewport().width(), row_rect.height())
+        self._exec_category_drag(
+            table,
+            category_id,
+            table.viewport().grab(preview_rect),
+            table._press_pos - preview_rect.topLeft(),
+            item_type=item_type,
+        )
+
+    def _reorder_ids(self, item_type: str) -> list[str]:
+        """返回当前作用域的完整类别或直属 Mod 身份集合。"""
+        if item_type == "mod":
+            return [mod.mod_id for mod in self._current_mods]
+        return [category["id"] for category in self._children_map.get(self._current_parent_id, [])]
+
+    @staticmethod
+    def _is_reorder_drag(event) -> bool:
+        """识别私有项目载荷，避免将类别或 Mod 排序误交给文件导入。"""
+        return event.mimeData().hasFormat(_CATEGORY_ID_MIME) or event.mimeData().hasFormat(_MOD_ID_MIME)
+
+    def _exec_category_drag(
+        self, source: QWidget, category_id: str, pixmap: QPixmap, hotspot: QPoint, *, item_type: str = "category"
+    ) -> None:
+        """冻结游戏、父类别、视图、类型及身份，结束后统一释放平台通道和提示。"""
+        if self._category_drag_source is not None or category_id not in self._reorder_ids(item_type):
+            return
+        if item_type == "mod" and category_id in getattr(self, "_pending_missing_mods", ()):
+            return
+        from src.ui import win_dnd_admin
+
+        self._category_drag_source = source
+        self._category_drag_scope = (
+            self._current_game_id,
+            self._current_parent_id,
+            self._view_mode,
+            item_type,
+            category_id,
+        )
+        drag = QDrag(source)
+        mime = QMimeData()
+        mime.setData(_MOD_ID_MIME if item_type == "mod" else _CATEGORY_ID_MIME, category_id.encode("utf-8"))
+        drag.setMimeData(mime)
+        drag.setPixmap(pixmap)
+        drag.setHotSpot(hotspot)
+        try:
+            with win_dnd_admin.suspend_for_internal_drag(self):
+                drag.exec(Qt.DropAction.MoveAction)
+        finally:
+            self._category_drag_source = None
+            self._category_drag_scope = None
+            self._clear_category_drop_hover()
+            drag.deleteLater()
+
+    def _category_drag_id(self, event) -> str:
+        """只接受本页启动且作用域未变化的内部拖动，拒绝其他页面或外部伪造载荷。"""
+        if self._category_drag_scope is None:
+            return ""
+        game_id, parent_id, view_mode, item_type, category_id = self._category_drag_scope
+        if not self._can_reorder_items(item_type):
+            return ""
+        if (game_id, parent_id, view_mode) != (self._current_game_id, self._current_parent_id, self._view_mode):
+            return ""
+        if event.source() is not self._category_drag_source:
+            return ""
+        mime_type = _MOD_ID_MIME if item_type == "mod" else _CATEGORY_ID_MIME
+        other_type = _CATEGORY_ID_MIME if item_type == "mod" else _MOD_ID_MIME
+        if event.mimeData().hasFormat(other_type) or bytes(event.mimeData().data(mime_type)) != category_id.encode(
+            "utf-8"
+        ):
+            return ""
+        if category_id not in self._reorder_ids(item_type):
+            return ""
+        if item_type == "mod" and category_id in getattr(self, "_pending_missing_mods", ()):
+            return ""
+        return category_id
+
+    def _clear_category_drop_hover(self) -> None:
+        """撤销卡片高亮、列表插入线及自动滚动，兼容拖动期间控件退场。"""
+        self._category_list_drag_timer.stop()
+        self._category_drop_line.hide()
+        card = self._drag_hover_card
+        self._drag_hover_card = None
+        if card is not None and shiboken6.isValid(card):
+            card._apply_style()
+
+    def _move_category_before(self, category_id: str, target_id: str | None) -> bool:
+        """仅重排当前直接子类别并立即保存，不改变 Mod 分组。"""
+        return self._move_item_before("category", category_id, target_id)
+
+    def _move_mod_before(self, mod_id: str, target_id: str | None) -> bool:
+        """仅重排当前直属 Mod 并立即保存，不改变类别分组。"""
+        return self._move_item_before("mod", mod_id, target_id)
+
+    def _move_item_before(self, item_type: str, category_id: str, target_id: str | None) -> bool:
+        """按稳定 ID 保存当前同类型完整集合，已删除或移出的源不能提交。"""
+        if not self._can_reorder_items(item_type):
+            return False
+        if item_type == "mod" and category_id in getattr(self, "_pending_missing_mods", ()):
+            return False
+        categories, mods = self._apply_sort(self._children_map.get(self._current_parent_id, []), self._current_mods)
+        current_ids = (
+            [mod.mod_id for mod in mods] if item_type == "mod" else [category["id"] for category in categories]
+        )
+        if category_id not in current_ids or (target_id is not None and target_id not in current_ids):
+            return False
+        if category_id == target_id:
+            return False
+        ordered_ids = [existing_id for existing_id in current_ids if existing_id != category_id]
+        target_index = len(ordered_ids) if target_id is None else ordered_ids.index(target_id)
+        ordered_ids.insert(target_index, category_id)
+        if ordered_ids == current_ids:
+            return False
+        if not self._category_order.save_order(
+            self._current_game_id, self._current_parent_id, ordered_ids, item_type=item_type
+        ):
+            QMessageBox.warning(
+                self,
+                tr("提示"),
+                tr("无法保存自定义排序，请检查配置目录权限或文件占用。"),
+            )
+            return False
+        scrollbar = self._view_scrollbar(self._view_mode)
+        position = scrollbar.value()
+        self._refresh_current_level()
+        scrollbar.setValue(position)
+        self._last_clicked_index = self._display_idx_map.get(category_id, -1)
+        return True
+
+    def _category_drop_target(self, position: QPoint, *, item_type: str | None = None) -> tuple[bool, str | None]:
+        """将落点限定在当前视口同类型项目，列表行上下半区对应前后插入。"""
+        item_type = item_type or (self._category_drag_scope[3] if self._category_drag_scope else "category")
+        if self._view_mode == "list":
+            viewport = self._table.viewport()
+            local = viewport.mapFrom(self, position)
+            if not viewport.rect().contains(local):
+                return False, None
+            row = self._table.rowAt(local.y())
+            if row < 0:
+                return True, None
+            item = self._table.item(row, 0)
+            if item is None or item.data(Qt.ItemDataRole.UserRole + 1) != item_type:
+                return False, None
+            if local.y() < self._table.rowViewportPosition(row) + self._table.rowHeight(row) // 2:
+                return True, item.data(Qt.ItemDataRole.UserRole)
+            next_item = self._table.item(row + 1, 0)
+            if next_item is not None and next_item.data(Qt.ItemDataRole.UserRole + 1) == item_type:
+                return True, next_item.data(Qt.ItemDataRole.UserRole)
+            return True, None
+        viewport = self._scroll_area.viewport()
+        if not viewport.rect().contains(viewport.mapFrom(self, position)):
+            return False, None
+        child = self.childAt(position)
+        while child is not None and child is not self:
+            if isinstance(child, ModCard):
+                return (True, child.mod_id) if item_type == "mod" else (False, None)
+            if isinstance(child, CharacterCard):
+                return (True, child._data.get("id")) if item_type == "category" else (False, None)
+            child = child.parentWidget()
+        content_position = self._scroll_content.mapFrom(self, position)
+        padding = max(0, self._grid_layout.spacing() // 2)
+        for item in self._display_items:
+            if item["type"] != item_type:
+                continue
+            card = self._vs_card_cache.get(item["id"])
+            if (
+                card is not None
+                and card.isVisible()
+                and card.geometry().adjusted(-padding, -padding, padding, padding).contains(content_position)
+            ):
+                return True, item["id"]
+        return True, None
+
+    def _update_category_list_drop_hover(self, position: QPoint) -> None:
+        """根据列表落点显示插入线，边缘悬停时持续滚动以访问屏外类别。"""
+        viewport = self._table.viewport()
+        self._category_list_drag_position = viewport.mapFrom(self, position)
+        valid, target_id = self._category_drop_target(position)
+        if valid:
+            if target_id is None:
+                rows = self._table_category_rows
+                if self._category_drag_scope and self._category_drag_scope[3] == "mod":
+                    last = self._table.rowCount() - 1 if self._table.rowCount() > len(rows) else -1
+                else:
+                    last = rows[-1] if rows else -1
+                line_y = self._table.rowViewportPosition(last) + self._table.rowHeight(last) if last >= 0 else 0
+            else:
+                line_y = self._table.rowViewportPosition(self._display_idx_map[target_id])
+            self._category_drop_line.setStyleSheet(f"background-color: {theme.color('accent')}; border: none;")
+            self._category_drop_line.setGeometry(0, line_y, viewport.width(), 2)
+            self._category_drop_line.show()
+            self._category_drop_line.raise_()
+        else:
+            self._category_drop_line.hide()
+        local = self._category_list_drag_position
+        if viewport.rect().contains(local) and (local.y() < 24 or local.y() >= viewport.height() - 24):
+            if not self._category_list_drag_timer.isActive():
+                self._category_list_drag_timer.start()
+        else:
+            self._category_list_drag_timer.stop()
+
+    def _scroll_category_list_drag(self) -> None:
+        """只在有效的列表内部拖动期间滚动，视图或筛选变化时立即停止。"""
+        if (
+            self._category_drag_scope is None
+            or not self._can_reorder_items(self._category_drag_scope[3])
+            or self._category_drag_scope[:3] != (self._current_game_id, self._current_parent_id, "list")
+        ):
+            self._clear_category_drop_hover()
+            return
+        position = self._category_list_drag_position
+        scrollbar = self._table.verticalScrollBar()
+        direction = -1 if position.y() < 24 else 1
+        scrollbar.setValue(scrollbar.value() + direction * scrollbar.singleStep())
+        self._update_category_list_drop_hover(self._table.viewport().mapTo(self, position))
+
+    def _drop_category_drag(self, event, position: QPoint) -> None:
+        """卡片及列表共用验证与保存，不向表格模型或外部导入转交内部载荷。"""
+        category_id = self._category_drag_id(event)
+        self._clear_category_drop_hover()
+        valid_target, target_id = self._category_drop_target(position)
+        if not category_id or not valid_target:
+            event.ignore()
+            return
+        self._move_item_before(self._category_drag_scope[3], category_id, target_id)
+        event.acceptProposedAction()
+
     def dragEnterEvent(self, event) -> None:
         """仅检查外部 URL 格式以接受拖放，不在进入事件中读取实际路径列表。"""
+        if self._is_reorder_drag(event):
+            if self._category_drag_id(event):
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
         # 仅检查 hasUrls 即可，不调用 urls 避免大量文件时 IPC 卡顿
         if event.mimeData().hasUrls():
             event.acceptProposedAction()
@@ -5890,6 +6288,27 @@ class OverviewPage(QWidget):
 
     def dragMoveEvent(self, event) -> None:
         """拖拽移动时高亮光标下的类别/角色卡片（仅对单张图片拖拽场景）"""
+        if self._is_reorder_drag(event) and not self._category_drag_id(event):
+            self._clear_category_drop_hover()
+            event.ignore()
+            return
+        if self._is_reorder_drag(event) and self._view_mode == "list":
+            valid, _target_id = self._category_drop_target(event.position().toPoint())
+            self._update_category_list_drop_hover(event.position().toPoint())
+            if valid:
+                event.acceptProposedAction()
+            else:
+                event.ignore()
+            return
+        if self._is_reorder_drag(event):
+            valid, _target_id = self._category_drop_target(event.position().toPoint())
+            if not valid or self._category_drag_scope[3] == "mod":
+                self._clear_category_drop_hover()
+                if valid:
+                    event.acceptProposedAction()
+                else:
+                    event.ignore()
+                return
         event.acceptProposedAction()
         # 尝试检测光标下的 CharacterCard 并添加高亮
         gpos = event.position().toPoint()
@@ -5909,9 +6328,7 @@ class OverviewPage(QWidget):
 
     def dragLeaveEvent(self, event) -> None:
         """拖拽离开时恢复高亮卡片样式"""
-        if self._drag_hover_card is not None:
-            self._drag_hover_card._apply_style()
-            self._drag_hover_card = None
+        self._clear_category_drop_hover()
         super().dragLeaveEvent(event)
 
     def dropEvent(self, event) -> None:
@@ -5919,6 +6336,9 @@ class OverviewPage(QWidget):
 
         单张预览图就地处理，批量路径解析及导入交给后台任务。
         """
+        if self._is_reorder_drag(event):
+            self._drop_category_drag(event, event.position().toPoint())
+            return
         # 恢复拖拽悬停高亮
         if self._drag_hover_card is not None:
             self._drag_hover_card._apply_style()
@@ -6166,6 +6586,27 @@ class OverviewPage(QWidget):
 
     def eventFilter(self, obj, event) -> bool:
         """处理滚动区视口的空白点击，并在列表空白处被点击时清理预览。"""
+        if hasattr(self, "_table") and obj is self._table.viewport():
+            if event.type() == QEvent.Type.DragLeave:
+                self._clear_category_drop_hover()
+            elif event.type() in (QEvent.Type.DragEnter, QEvent.Type.DragMove, QEvent.Type.Drop) and (
+                self._is_reorder_drag(event)
+            ):
+                position = self._table.viewport().mapTo(self, event.position().toPoint())
+                if event.type() == QEvent.Type.Drop:
+                    self._drop_category_drag(event, position)
+                elif not self._category_drag_id(event):
+                    self._clear_category_drop_hover()
+                    event.ignore()
+                elif event.type() == QEvent.Type.DragMove:
+                    self._update_category_list_drop_hover(position)
+                    if self._category_drop_target(position)[0]:
+                        event.acceptProposedAction()
+                    else:
+                        event.ignore()
+                else:
+                    event.acceptProposedAction()
+                return True
         if (
             event.type() == QEvent.Type.DevicePixelRatioChange
             and obj is self._scroll_area.viewport()
@@ -6256,8 +6697,28 @@ class OverviewPage(QWidget):
     def _on_sort_changed(self, _index: int = 0) -> None:
         """排序方式变更 — 先持久化预览图切换状态，刷新后恢复选中面板"""
         self._sort_key = self._sort_combo.currentData() or "alpha_asc"
-        if self._sort_key in _ALPHABETICAL_SORTS:
+        if self._sort_key == "custom" and not self._category_order.has_order(
+            self._current_game_id, self._current_parent_id
+        ):
+            categories, _mods = self._apply_sort(self._children_map.get(self._current_parent_id, []), [])
+            if self._current_game_id and categories:
+                self._category_order.save_order(
+                    self._current_game_id, self._current_parent_id, [category["id"] for category in categories]
+                )
+        if self._sort_key == "custom" and not self._category_order.has_order(
+            self._current_game_id, self._current_parent_id, item_type="mod"
+        ):
+            _categories, mods = self._apply_sort([], self._current_mods)
+            if self._current_game_id and mods:
+                self._category_order.save_order(
+                    self._current_game_id, self._current_parent_id, [mod.mod_id for mod in mods], item_type="mod"
+                )
+        if self._sort_key in _CATEGORY_FIRST_SORTS:
             self._category_sort_key = self._sort_key
+        from src.core.config import Config
+
+        Config.instance().set("ui.overview_sort_key", self._sort_key)
+        Config.instance().set("ui.overview_category_sort_key", self._category_sort_key)
 
         # 记住当前选中的Mod和正在显示的预览图 *路径*（而非索引，因为 flush 会重排列表）
         saved_mod = self._selected_mod
@@ -6300,15 +6761,34 @@ class OverviewPage(QWidget):
                 self._update_card_preview_by_path(fresh_mod.mod_id, saved_preview_path)
 
     def _apply_sort(self, cats: list[dict], mods: list[Mod]) -> tuple[list[dict], list[Mod]]:
-        """类别沿用最近的字母排序方向，Mod 使用当前排序规则。"""
+        """类别和 Mod 分别采用自定义顺序或对应内置排序，递归搜索不套用当前层级顺序。"""
         category_sort = self._sort_key if self._sort_key in _ALPHABETICAL_SORTS else self._category_sort_key
         cats = sorted(
             cats,
             key=lambda c: self._sort_text_key(c.get("name", "")),
             reverse=category_sort == "alpha_desc",
         )
-        if self._sort_key == "alpha_asc":
+        if category_sort == "custom" and not self._search_input.text().strip():
+            ordered_ids = self._category_order.ordered_ids(
+                self._current_game_id,
+                self._current_parent_id,
+                [category["id"] for category in self._children_map.get(self._current_parent_id, [])],
+            )
+            positions = {category_id: index for index, category_id in enumerate(ordered_ids)}
+            cats.sort(key=lambda category: positions.get(category["id"], len(positions)))
+        if self._sort_key in ("alpha_asc", "custom"):
             mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name))
+            if (
+                self._sort_key == "custom"
+                and not self._search_input.text().strip()
+                and not self._tag_filter.selected_ids
+                and self._category_order.has_order(self._current_game_id, self._current_parent_id, item_type="mod")
+            ):
+                ordered_ids = self._category_order.ordered_ids(
+                    self._current_game_id, self._current_parent_id, self._reorder_ids("mod"), item_type="mod"
+                )
+                positions = {mod_id: index for index, mod_id in enumerate(ordered_ids)}
+                mods.sort(key=lambda mod: positions.get(mod.mod_id, len(positions)))
         elif self._sort_key == "alpha_desc":
             mods = sorted(mods, key=lambda m: self._sort_text_key(m.display_name), reverse=True)
         elif self._sort_key == "time_asc":
@@ -6683,6 +7163,11 @@ class OverviewPage(QWidget):
 
     def _refresh_table(self, filter_text: str = "") -> None:
         """刷新列表视图 - 混合显示类别和 Mod"""
+        reorder_enabled = self._view_mode == "list" and (self._can_reorder_categories() or self._can_reorder_mods())
+        self._table.setDragEnabled(reorder_enabled)
+        self._table.viewport().setToolTip(
+            tr("按住并拖动类别或 Mod 行调整顺序，放下后自动保存。") if reorder_enabled else ""
+        )
         if self._mods_loading:
             return
         view, position = self._prepare_view_position(filter_text)
@@ -6710,7 +7195,7 @@ class OverviewPage(QWidget):
         category_items = [{"id": cat.get("id", ""), "type": "category", "data": cat} for cat in filtered_cats]
         mod_items = [{"id": mod.mod_id, "type": "mod", "data": mod} for mod in filtered_mods]
         self._display_items = (
-            mod_items + category_items if self._sort_key not in _ALPHABETICAL_SORTS else category_items + mod_items
+            mod_items + category_items if self._sort_key not in _CATEGORY_FIRST_SORTS else category_items + mod_items
         )
         self._display_idx_map = {item["id"]: i for i, item in enumerate(self._display_items)}
 
