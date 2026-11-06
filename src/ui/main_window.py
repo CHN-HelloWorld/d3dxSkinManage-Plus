@@ -944,6 +944,7 @@ class MainWindow(QMainWindow):
         from src.services.app_update import AppUpdateManager
 
         self._app_update_manager = AppUpdateManager(self, self._config)
+        self._connect_app_update_manager()
 
     def _build_gb_store_page(self) -> QWidget:
         """构建 GameBanana Mod Store 页面（懒加载 services 资源）"""
@@ -1226,6 +1227,19 @@ class MainWindow(QMainWindow):
                 dlg.set_check_snapshot(svc.check_snapshot())
 
     # 程序自身更新接线
+
+    def _connect_app_update_manager(self) -> None:
+        """将实际检查的开始和结束同步到当前设置页，避免接线绑定已重建的旧页。"""
+        self._app_update_manager.check_started.connect(self._sync_app_update_check_state)
+        self._app_update_manager.check_finished.connect(self._sync_app_update_check_state)
+        self._sync_app_update_check_state()
+
+    def _sync_app_update_check_state(self, _info: dict | None = None) -> None:
+        """读取管理器的检查态，兼容静默检查、重复请求及设置页整页重建。"""
+        page = getattr(self, "_settings_page", None)
+        manager = getattr(self, "_app_update_manager", None)
+        if page is not None:
+            page.set_app_update_checking(manager is not None and manager.is_checking)
 
     def _on_app_update_check_requested(self) -> None:
         """设置页「立即检查程序更新」——非静默，会反馈「已是最新/失败」。"""
@@ -4631,6 +4645,7 @@ class MainWindow(QMainWindow):
         self._stack.removeWidget(old)
         old.deleteLater()
         self._settings_page = new
+        self._sync_app_update_check_state()
         self._refresh_bg_overlay()
         if was_current:
             self._stack.setCurrentWidget(new)

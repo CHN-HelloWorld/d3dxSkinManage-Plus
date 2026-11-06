@@ -59,6 +59,7 @@ from src.ui.widgets.settings_components import (
 )
 from src.ui.widgets.settings_navigation import SettingsCategoryPage
 from src.ui.widgets.settings_shell import SettingsShellMixin
+from src.ui.widgets.spinner import Spinner
 from src.ui.widgets.toggle_switch import ToggleSwitch
 from src.utils.i18n import get_i18n, t
 from src.utils.i18n import t as tr
@@ -914,10 +915,16 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         version_card, version_rows = self._make_group(tr("当前版本"), icon="refresh")
         self._app_upd_check_btn = style_button(QPushButton(tr("检查程序更新")), icon="refresh")
         self._app_upd_check_btn.clicked.connect(lambda: self.app_update_check_requested.emit())
+        self._app_upd_check_spinner = Spinner(size=16, line_width=2)
+        self._app_upd_check_spinner.hide()
+        check_controls = QHBoxLayout()
+        check_controls.setSpacing(8)
+        check_controls.addWidget(self._app_upd_check_btn)
+        check_controls.addWidget(self._app_upd_check_spinner)
         self._add_row(
             version_rows,
             "d3dxSkinManage Plus",
-            self._app_upd_check_btn,
+            check_controls,
             tr("当前版本 v{APP_VERSION}", APP_VERSION=APP_VERSION),
         )
         g2, gl2 = self._make_group(tr("更新偏好"), icon="settings")
@@ -954,6 +961,14 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
                 ("app-update", tr("程序更新"), tr("管理 d3dxSkinManage Plus 自身的版本更新。"), [version_card, g2]),
             ],
         )
+
+    def set_app_update_checking(self, checking: bool) -> None:
+        """按实际检查生命周期同步按钮和加载反馈，结束时停止旋转并恢复点击。"""
+        self._app_upd_check_btn.setEnabled(not checking)
+        self._app_upd_check_btn.setText(tr("正在检查更新…") if checking else tr("检查程序更新"))
+        self._app_upd_check_spinner.setVisible(checking)
+        if not checking:
+            self._app_upd_check_spinner.stop()
 
     def _on_proxy_active_toggled(self, active: bool):
         """同步代理总开关的显示和生效状态。

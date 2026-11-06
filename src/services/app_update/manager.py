@@ -66,7 +66,10 @@ class _CheckWorker(QThread):
 
     def run(self) -> None:
         """在工作线程执行版本检查，通过信号将结构化结果送回管理器。"""
-        info = self._checker.check()
+        try:
+            info = self._checker.check()
+        except Exception as exc:
+            info = AppUpdateInfo(error=tr("检查更新失败：{error}", error=str(exc)))
         self.finished_ok.emit(info)
 
 
@@ -127,6 +130,7 @@ class AppUpdateManager(QObject):
         self._info: AppUpdateInfo | None = None
         self._silent = False
         self._is_busy = False
+        self._is_checking = False
         # 下载信号绑定会话编号，取消后屏蔽已经排入界面事件队列的结果。
         self._download_id = 0
         self._dl_cancelled = False
@@ -163,6 +167,8 @@ class AppUpdateManager(QObject):
             if manager is not None:
                 if manager._check_worker is worker:
                     manager._check_worker = None
+                    if manager.is_checking:
+                        manager._on_check_finished(AppUpdateInfo(error=tr("更新检查已中断，请重试。")))
                 if manager._install_worker is worker:
                     manager._install_worker = None
                 if manager._download_worker is worker:
@@ -183,6 +189,11 @@ class AppUpdateManager(QObject):
 
     # 对外入口
 
+    @property
+    def is_checking(self) -> bool:
+        """返回是否仍在获取版本信息，不将后续下载或安装任务视为检查。"""
+        return self._is_checking
+
     def check_on_startup(self) -> None:
         """启动后按启动检查偏好静默检查，距上次检查不足 24 小时则跳过。"""
         if not self._config.get("app_update.on_startup", True):
@@ -199,29 +210,42 @@ class AppUpdateManager(QObject):
             logger.info("程序更新：已有任务进行中，忽略重复请求")
             return
         self._is_busy = True
+        self._is_checking = True
         self._silent = silent
         self.check_started.emit()
 
-        repo = (self._config.get("app_update.repo", "") or "").strip() or None
-        checker = AppUpdateChecker(
-            current_version=APP_VERSION,
-            repo=repo,
-            # 程序更新遵循代理总开关，不受 Mod 商店的代理设置影响。
-            proxy=get_configured_proxy_url(self._config),
-        )
-        self._check_worker = _CheckWorker(checker, self)
-        self._track_worker(self._check_worker)
-        self._check_worker.finished_ok.connect(self._on_check_finished)
-        self._check_worker.start()
+        worker = None
+        try:
+            repo = (self._config.get("app_update.repo", "") or "").strip() or None
+            checker = AppUpdateChecker(
+                current_version=APP_VERSION,
+                repo=repo,
+                # 程序更新遵循代理总开关，不受 Mod 商店的代理设置影响。
+                proxy=get_configured_proxy_url(self._config),
+            )
+            worker = _CheckWorker(checker, self)
+            self._check_worker = worker
+            self._track_worker(worker)
+            worker.finished_ok.connect(self._on_check_finished)
+            worker.start()
+        except Exception as exc:
+            if worker is not None:
+                self._check_worker = None
+                _active_workers.discard(worker)
+                worker.deleteLater()
+            self._on_check_finished(AppUpdateInfo(error=tr("检查更新失败：{error}", error=str(exc))))
 
     # 检查结果
 
     def _on_check_finished(self, info: AppUpdateInfo) -> None:
         """保存检查时间并发布结果，按静默模式和跳过版本设置决定错误提示或更新对话框。"""
         self._is_busy = False
+        self._is_checking = False
         self._info = info
-        self._config.set("app_update.last_check_time", time.time())
-        self.check_finished.emit(info.to_dict())
+        try:
+            self._config.set("app_update.last_check_time", time.time())
+        finally:
+            self.check_finished.emit(info.to_dict())
 
         if info.error:
             logger.warning("程序更新检查失败: %s", info.error)
