@@ -61,7 +61,15 @@ def test_release_zip_plugins_load_translate_and_uninstall(temp_data_dir, monkeyp
             for relative in ("plugin.json", "entry.py", "languages/en-US/strings.json", "README.md")
         } | {"plugins/example.mod-inventory/inventory.py"} | {
             f"plugins/official.legacy-migration/{relative}"
-            for relative in ("legacy.py", "controller.py", "wizard.py", "preview.py", "languages/zh-CN/strings.json")
+            for relative in (
+                "legacy.py",
+                "controller.py",
+                "wizard.py",
+                "preview.py",
+                "sources.py",
+                "report.py",
+                "languages/zh-CN/strings.json",
+            )
         }
         package.extractall(released)
     application = next(released.iterdir())
@@ -104,7 +112,7 @@ def test_staging_copies_only_declared_example_assets(tmp_path, monkeypatch):
         if plugin_id == "example.mod-inventory":
             (directory / "inventory.py").write_text("# 导出计算模块", encoding="utf-8")
         if plugin_id == "official.legacy-migration":
-            for filename in ("legacy.py", "controller.py", "wizard.py", "preview.py"):
+            for filename in ("legacy.py", "controller.py", "wizard.py", "preview.py", "sources.py", "report.py"):
                 (directory / filename).write_text("# 迁移模块", encoding="utf-8")
             (directory / "languages/zh-CN").mkdir()
             (directory / "languages/zh-CN/strings.json").write_text("{}", encoding="utf-8")

@@ -65,6 +65,8 @@ SHIPPED_PLUGIN_FILES = {
         "controller.py",
         "wizard.py",
         "preview.py",
+        "sources.py",
+        "report.py",
         "languages/zh-CN/strings.json",
     ),
 }
