@@ -4,6 +4,13 @@
     "name": "English"
   },
   "messages": {
+    "导入来源不是目录：{path}": "The import source is not a directory: {path}",
+    "导入来源包含链接：{path}": "The import source contains a symbolic link or junction: {path}",
+    "导入来源包含不支持的文件：{path}": "The import source contains an unsupported file: {path}",
+    "目录来源指纹必须为六十四位十六进制字符串": "The directory source fingerprint must be a sixty-four-character hexadecimal string",
+    "文件摘要与目录指纹不能同时指定": "A file digest and a directory fingerprint cannot both be specified",
+    "无法打开 {title}，报告已保存：{path}": "Could not open {title}. The report is saved at: {path}",
+    "文本报告": "Text report",
     "导入产物尚待清理，下次导入时将重试：{paths}": "Import files are awaiting cleanup. The next import will retry: {paths}",
     "清理路径包含链接或目录联接：{path}": "The cleanup path contains a symbolic link or junction: {path}",
     "清理对象的身份或内容已变化：{path}": "The identity or contents of the cleanup target changed: {path}",

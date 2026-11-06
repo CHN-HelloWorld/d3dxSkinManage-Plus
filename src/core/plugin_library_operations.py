@@ -14,7 +14,7 @@ from src.core.mod_intake import DuplicateIntakeError, ModIntakeService
 from src.core.mod_package import build_local_manifest, local_meta_from_mod, read_sidecar, write_sidecar
 from src.core.preview_cache_index import capture_source_version
 from src.models.mod import AgeRating
-from src.plugin_sdk.imports import ModImportRequest
+from src.plugin_sdk.imports import ModImportRequest, directory_fingerprint
 from src.utils import fs
 from src.utils.constants import ARCHIVE_EXTENSIONS, IMAGE_EXTENSIONS
 from src.utils.i18n import t as tr
@@ -70,6 +70,28 @@ def _apply_import_metadata(prepared, spec: ModImportRequest, worker) -> None:
     manifest = read_sidecar(mod.path) or {}
     local = dict(manifest.get("local") or {})
     references, previews = [], []
+
+    def preview_digest(path):
+        """以流式字节摘要排除重复预览，避免一次读取整个图片文件。"""
+        digest = hashlib.sha256()
+        with open(fs.native_path(path), "rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                _check_cancel(worker)
+                digest.update(chunk)
+        return digest.digest()
+
+    existing_previews, existing_references = [], []
+    seen = set()
+    if spec.expected_directory_hash:
+        local["preview_selection_locked"] = True
+    else:
+        for path, reference in zip(mod.preview_images, local.get("preview_references") or []):
+            _check_cancel(worker)
+            digest = preview_digest(path)
+            if digest not in seen:
+                seen.add(digest)
+                existing_previews.append(path)
+                existing_references.append(reference)
     for path in spec.preview_paths:
         _check_cancel(worker)
         source = Path(path)
@@ -78,14 +100,20 @@ def _apply_import_metadata(prepared, spec: ModImportRequest, worker) -> None:
         version = capture_source_version(source)
         with Image.open(fs.native_path(source)) as image:
             image.verify()
+        digest = preview_digest(source)
+        if capture_source_version(source) != version:
+            raise ValueError(tr("预览图在导入期间发生变化：{path}", path=path))
+        if digest in seen:
+            continue
         target = prepared.container_path / ".d3dxmeta" / "previews" / (uuid.uuid4().hex + source.suffix.lower())
         fs.copy_path(source, target, should_cancel=worker.isInterruptionRequested)
         if capture_source_version(source) != version:
             raise ValueError(tr("预览图在导入期间发生变化：{path}", path=path))
         references.append({"scope": "container", "path": target.relative_to(prepared.container_path).as_posix()})
         previews.append(str(target))
-    local["preview_references"] = references + list(local.get("preview_references") or [])
-    mod.preview_images = previews + mod.preview_images
+        seen.add(digest)
+    local["preview_references"] = references + existing_references
+    mod.preview_images = previews + existing_previews
     prepared.preview_paths = [Path(path) for path in mod.preview_images]
     _check_cancel(worker)
     if not write_sidecar(mod.path, build_local_manifest(local_meta_from_mod(mod), local, extra=manifest)):
@@ -134,6 +162,12 @@ class PluginLibraryOperations:
                 recovery.retry_pending(request.game_id, plan.existing_mod_ids)
                 _check_cancel(worker)
                 version = capture_source_version(source)
+                if (
+                    spec.expected_directory_hash
+                    and directory_fingerprint(str(source), worker.isInterruptionRequested)
+                    != spec.expected_directory_hash
+                ):
+                    raise ValueError(tr("Mod 来源已变化，请重新扫描"))
                 _check_source_digest(source, spec.expected_sha1, worker)
                 actual_plan = replace(plan, source_version=version)
                 if fs.is_file(source) and source.suffix.lower() not in ARCHIVE_EXTENSIONS:
@@ -163,6 +197,12 @@ class PluginLibraryOperations:
                     progress=lambda fraction, _text: worker.progress.emit("", float(fraction or 0)),
                 )
                 _apply_import_metadata(prepared, spec, worker)
+                if (
+                    spec.expected_directory_hash
+                    and directory_fingerprint(str(source), worker.isInterruptionRequested)
+                    != spec.expected_directory_hash
+                ):
+                    raise ValueError(tr("Mod 来源已变化，请重新扫描"))
                 if capture_source_version(source) != version:
                     raise ValueError(tr("Mod 来源已变化，请重新扫描"))
                 return prepared
