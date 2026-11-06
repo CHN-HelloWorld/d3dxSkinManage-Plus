@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import json
 import re
 import stat
@@ -10,6 +11,12 @@ from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from urllib.parse import urlsplit
+
+from rapidfuzz import fuzz
+
+from src.plugin_sdk.imports import directory_fingerprint
+
+from .sources import IMAGE_SUFFIXES, archive_entries, cache_entries
 
 
 @dataclass(frozen=True)
@@ -47,6 +54,12 @@ class LegacyMod:
     preview_paths: tuple[str, ...] = ()
     source_url: str = ""
     size_bytes: int = 0
+    archive_path: str = ""
+    cache_path: str = ""
+    cache_digest: str = ""
+    cache_size_bytes: int = 0
+    cache_changed: bool = False
+    legacy_key: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +90,7 @@ class _IndexRecord:
     sha: str
     item: dict
     source: Path
+    disabled: bool = False
 
 
 class _UnsafePath(ValueError):
@@ -88,8 +102,19 @@ class _DuplicateKey(ValueError):
 
 
 _SHA = re.compile(r"[0-9a-fA-F]{40}\Z")
-_IMAGE_SUFFIXES = (".png", ".jpg")
+_IMAGE_SUFFIXES = IMAGE_SUFFIXES
 _MOD_FIELDS = frozenset({"object", "type", "name", "author", "explain", "grading", "tags", "get"})
+
+
+def _valid_index_key(key: str) -> bool:
+    """接受普通文件名索引键，拒绝路径、设备名、流和 Windows 文件名别名。"""
+    if not key or key in {".", ".."} or key.endswith((".", " ")) or re.search(r'[<>:"/\\|?*\x00-\x1f]', key):
+        return False
+    stem = key.split(".", 1)[0].rstrip(" ").upper()
+    return (
+        stem not in {"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}
+        and re.fullmatch(r"(?:COM|LPT)[1-9¹²³]", stem) is None
+    )
 
 
 def _bounded_path(root: Path, path: Path) -> Path:
@@ -192,6 +217,7 @@ class _Scanner:
             raise ValueError("旧版用户环境路径无效") from error
         self.thumbnails: dict[str, Path] = {}
         self.approximate_thumbnails = False
+        self.thumbnail_mode = "similarity/key-in"
         self.classifications: dict[str, tuple[str, ...]] = {}
         self.classifications_complete = True
         self.categories: dict[tuple[str, ...], LegacyCategory] = {}
@@ -257,12 +283,12 @@ class _Scanner:
         return None
 
     def index_files(self, directory: Path) -> Iterator[Path]:
-        """递归索引目录，先排除 disabled 前缀，再拒绝链接和目录循环。"""
+        """递归所有索引；停用状态在原包和元数据优先级检查时处理。"""
         pending = [directory]
         while pending:
             self.check_cancel()
             for path in self.children(pending.pop()):
-                if path.name.casefold().startswith("disabled") or not self.safe(path):
+                if not self.safe(path):
                     continue
                 if path.is_dir():
                     pending.append(path)
@@ -270,7 +296,7 @@ class _Scanner:
                     yield path
 
     def records(self) -> dict[str, list[_IndexRecord]]:
-        """收集全部启用索引后再处理 SHA 交集，避免依赖目录枚举顺序。"""
+        """收集文件名索引键；键可为 SHA 或可读名称，但不允许作为任意路径。"""
         directory = self.profile / "modsIndex"
         if self.safe(directory) and not directory.exists():
             self.issue("invalid", "旧版索引目录不存在", source=directory)
@@ -289,8 +315,8 @@ class _Scanner:
                 variables = {}
             for sha, item in mods.items():
                 self.check_cancel()
-                if not _SHA.fullmatch(sha):
-                    self.issue("invalid", "旧版索引 SHA 无效，已跳过", sha, path)
+                if not _valid_index_key(sha):
+                    self.issue("invalid", "旧版索引键无效，已跳过", sha, path)
                     continue
                 if not isinstance(item, dict):
                     self.issue("invalid", "旧版 Mod 元数据无效，已跳过", sha, path)
@@ -298,7 +324,9 @@ class _Scanner:
                 expanded = dict(item)
                 if isinstance(item.get("get"), list):
                     expanded["get"] = [self.expand_address(address, variables) for address in item["get"]]
-                records.setdefault(sha.lower(), []).append(_IndexRecord(sha.lower(), expanded, path))
+                disabled = any(part.casefold().startswith("disabled") for part in path.relative_to(directory).parts)
+                key = sha.lower() if _SHA.fullmatch(sha) else sha
+                records.setdefault(key, []).append(_IndexRecord(key, expanded, path, disabled))
         return records
 
     @staticmethod
@@ -352,7 +380,10 @@ class _Scanner:
         if self.safe(configuration) and configuration.is_file():
             data = self.document(configuration)
             if data is not None:
-                self.approximate_thumbnails = bool(data.get("thumbnail_approximate_algorithm"))
+                self.thumbnail_mode = data.get("thumbnail_approximate_algorithm", "similarity/key-in")
+                self.approximate_thumbnails = bool(self.thumbnail_mode)
+        else:
+            self.approximate_thumbnails = True
         directory = self.profile / "thumbnail"
         self.thumbnails.update(self.thumbnail_directory(directory))
         configuration = directory / "_redirection.ini"
@@ -388,12 +419,35 @@ class _Scanner:
                 self.issue("warning", "无法识别旧版缩略图指令，已跳过", line, configuration)
 
     def thumbnail(self, name: str) -> str:
-        """只返回同名图片；显式近似匹配配置无法精确复现时给出诊断。"""
+        """优先精确匹配，再复现旧版四种近似规则并保留可见提示。"""
         path = self.thumbnails.get(name)
         if path is not None:
             return str(path)
         if self.approximate_thumbnails and self.thumbnails:
-            self.issue("warning", "仅迁移精确匹配的缩略图，未应用旧版近似匹配", name)
+            mode = self.thumbnail_mode
+            if not isinstance(mode, str) or mode not in {
+                "key-in only",
+                "similarity only",
+                "similarity threshold",
+                "similarity/key-in",
+            }:
+                self.issue("warning", "旧版缩略图匹配方式不受支持，仅使用精确匹配", name)
+                return ""
+            best = None
+            score = 0.0
+            for candidate, image in self.thumbnails.items():
+                similarity = fuzz.ratio(name, candidate)
+                if mode == "key-in only":
+                    if candidate in name:
+                        best = image
+                        break
+                elif similarity > score and (
+                    mode == "similarity only" or similarity >= 50 or mode == "similarity/key-in" and candidate in name
+                ):
+                    best, score = image, similarity
+            if best is not None:
+                self.issue("warning", "已按旧版规则近似匹配缩略图，请检查结果", name, best)
+                return str(best)
         return ""
 
     def category_path(self, name: str) -> tuple[str, ...] | None:
@@ -441,31 +495,93 @@ class _Scanner:
                 result = url
         return result
 
+    def cache_paths(self, sha: str) -> tuple[Path, ...]:
+        """由文件系统解析启用与停用缓存路径，不折叠可读索引键。"""
+        candidates = (self.profile / "work/Mods" / sha, self.profile / "work/Mods" / ("disabled-" + sha))
+        return tuple(path for path in candidates if self.safe(path) and path.is_dir())
+
+    def archive_sha1(self, source: Path) -> str:
+        """为可读索引键的原包计算实际摘要，并检查读取期间文件身份未变化。"""
+        before = source.stat()
+        digest = hashlib.sha1()
+        with source.open("rb") as stream:
+            while chunk := stream.read(1024 * 1024):
+                self.check_cancel()
+                digest.update(chunk)
+        after = source.stat()
+        if (before.st_dev, before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_dev,
+            after.st_ino,
+            after.st_size,
+            after.st_mtime_ns,
+            after.st_ctime_ns,
+        ):
+            raise ValueError("Mod 来源已变化，请重新扫描")
+        self.check_cancel()
+        return digest.hexdigest()
+
     def previews(self, sha: str) -> tuple[str, ...]:
-        """优先共享预览，再只读部署缓存中的对应图片，不反向写入共享目录。"""
-        images: list[str] = []
+        """读取已知预览布局，按图片字节去重，不把普通纹理当作预览。"""
+        images = []
+        digests = set()
+
+        def add(path: Path) -> None:
+            """加入安全且可读取的图片路径，保持默认预览的优先顺序。"""
+            if path.suffix.casefold() not in _IMAGE_SUFFIXES or not self.safe(path) or not path.is_file():
+                return
+            try:
+                digest = hashlib.sha256()
+                with path.open("rb") as stream:
+                    while chunk := stream.read(1024 * 1024):
+                        self.check_cancel()
+                        digest.update(chunk)
+                key = digest.digest()
+                if key not in digests:
+                    images.append(str(path))
+                    digests.add(key)
+            except OSError:
+                self.issue("warning", "无法读取旧版预览图，已跳过", source=path)
+
+        def directory(path: Path, all_images: bool = False) -> None:
+            """只在专用预览目录中放宽文件名，递归仍拒绝链接和越界路径。"""
+            pending = [(path, all_images)]
+            while pending:
+                parent, dedicated = pending.pop()
+                for image in self.children(parent):
+                    if not self.safe(image):
+                        continue
+                    if image.is_dir():
+                        pending.append((image, dedicated or image.name.casefold() in {"preview", "preview_screen"}))
+                    elif dedicated or image.stem.casefold().startswith("preview"):
+                        add(image)
+
         for kind in ("preview", "preview_screen"):
             shared = self.root / "resources" / kind
-            found: list[str] = []
             for suffix in _IMAGE_SUFFIXES:
-                path = shared / (sha + suffix)
-                if self.safe(path) and path.is_file():
-                    found.append(str(path))
-            if not found:
-                for suffix in _IMAGE_SUFFIXES:
-                    path = self.profile / "work/Mods" / sha / (kind + suffix)
-                    if self.safe(path) and path.is_file():
-                        found.append(str(path))
-            images.extend(found)
+                add(shared / (sha + suffix))
+            directory(shared / sha, True)
+        for cache in self.cache_paths(sha):
+            directory(cache)
         return tuple(images)
 
     def mod(self, sha: str, records: list[_IndexRecord]) -> LegacyMod | None:
         """验证索引交集、元数据和本体后生成可交给宿主验证的导入条目。"""
+        records = sorted(records, key=lambda value: (value.disabled, str(value.source).casefold()))
         record = records[0]
+        sha = record.sha
+        active = [value for value in records if not value.disabled]
+        if active and len(active) != len(records):
+            self.issue(
+                "warning",
+                "相同 Mod 的停用索引已跳过，保留启用索引信息",
+                sha,
+                "\n".join(str(value.source) for value in records if value.disabled),
+            )
+            records = active
         if len(records) > 1:
             sources = "\n".join(str(item.source) for item in records)
             if any(item.item != record.item for item in records[1:]):
-                self.issue("invalid", "同一 SHA 的索引元数据冲突，已跳过", sha, sources)
+                self.issue("invalid", "同一索引键的元数据冲突，已跳过", sha, sources)
                 return None
             self.issue("warning", "多个索引包含相同 Mod，已合并重复项", sha, sources)
         item = record.item
@@ -483,19 +599,67 @@ class _Scanner:
         if not self.safe(source):
             return None
         try:
-            if not source.is_file():
-                self.issue("missing", "旧版 Mod 本体缺失，仅有索引或解压缓存", item["name"], source)
+            has_archive = source.is_file()
+            if not has_archive and record.disabled:
+                self.issue("missing", "停用索引没有本地原包，已跳过", item["name"], source)
                 return None
-            size = source.stat().st_size
+            size = source.stat().st_size if has_archive else 0
+            archive_sha = sha if _SHA.fullmatch(sha) else ""
+            if has_archive and not archive_sha:
+                archive_sha = self.archive_sha1(source)
+        except InterruptedError:
+            raise
+        except ValueError as error:
+            self.issue("invalid", str(error), item["name"], source)
+            return None
         except OSError:
             self.issue("invalid", "无法读取旧版文件或目录", item["name"], source)
             return None
+        cache_path = ""
+        cache_digest = ""
+        cache_size = 0
+        changed = False
+        caches = self.cache_paths(sha)
+        if len(caches) > 1:
+            self.issue("warning", "存在多个解压缓存，无法确定恢复来源，已忽略缓存", item["name"])
+        elif caches:
+            cache = caches[0]
+            try:
+
+                def cancelled():
+                    """给目录比较提供不触碰界面对象的取消检查。"""
+                    return self.should_cancel is not None and self.should_cancel()
+
+                fingerprint = directory_fingerprint(str(cache), cancelled)
+                entries, cache_size = cache_entries(cache, cancelled)
+                if directory_fingerprint(str(cache), cancelled) != fingerprint:
+                    raise ValueError
+                if entries:
+                    cache_path, cache_digest = str(cache), fingerprint
+                    if has_archive:
+                        try:
+                            changed = entries != archive_entries(source)
+                        except Exception:
+                            changed = True
+                        if changed:
+                            self.issue(
+                                "warning", "缓存与原包不同或无法确认一致，可选择恢复缓存修改", item["name"], cache
+                            )
+            except (OSError, ValueError, RuntimeError):
+                self.issue("warning", "解压缓存无效或包含链接，已忽略缓存", item["name"], cache)
+        if not has_archive:
+            if not cache_path:
+                self.issue("missing", "旧版 Mod 本体缺失，仅有索引或解压缓存", item["name"], source)
+                return None
+            self.issue("warning", "原包缺失，将恢复解压缓存；缓存可能不完整，请检查结果", item["name"], cache_path)
+        elif record.disabled:
+            self.issue("warning", "停用索引的本地原包已纳入迁移", item["name"], record.source)
         category_path = self.category_path(item["object"])
         if category_path is None:
             return None
         return LegacyMod(
-            sha=sha,
-            source_path=str(source),
+            sha=archive_sha,
+            source_path=str(source) if has_archive else cache_path,
             name=item["name"],
             object_name=item["object"],
             category_path=category_path,
@@ -505,7 +669,13 @@ class _Scanner:
             tags=tuple(item.get("tags", [])),
             preview_paths=self.previews(sha),
             source_url=self.source_url(record),
-            size_bytes=size,
+            size_bytes=size if has_archive else cache_size,
+            archive_path=str(source) if has_archive else "",
+            cache_path=cache_path,
+            cache_digest=cache_digest,
+            cache_size_bytes=cache_size,
+            cache_changed=changed,
+            legacy_key=sha,
         )
 
     def scan(self) -> LegacyScan:

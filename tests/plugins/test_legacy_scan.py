@@ -9,6 +9,7 @@ import json
 import sys
 import zipfile
 from pathlib import Path
+from types import ModuleType
 
 import pytest
 
@@ -17,8 +18,12 @@ def _reader():
     """直接加载独立解析模块，避免扫描测试依赖插件界面与宿主。"""
     path = Path(__file__).resolve().parents[2] / "plugins/official.legacy-migration/legacy.py"
     assert path.is_file(), "旧版只读解析器尚未实现"
-    module_name = "_legacy_scan_test_reader"
+    package_name = "_legacy_scan_test_package"
+    module_name = package_name + ".legacy"
     if module_name not in sys.modules:
+        package = ModuleType(package_name)
+        package.__path__ = [str(path.parent)]
+        sys.modules[package_name] = package
         spec = importlib.util.spec_from_file_location(module_name, path)
         module = importlib.util.module_from_spec(spec)
         sys.modules[module_name] = module
@@ -71,7 +76,7 @@ def _archive(root: Path, content: str = "sample") -> tuple[str, Path]:
 def _image(path: Path) -> Path:
     """提供用于定位测试的图片文件；图像解码由宿主导入测试负责。"""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(b"local image bytes")
+    path.write_bytes(b"local image bytes:" + path.name.encode("utf-8"))
     return path
 
 
@@ -94,6 +99,191 @@ def _symlink(path: Path, target: Path, *, directory: bool = False) -> None:
         path.symlink_to(target, target_is_directory=directory)
     except OSError as error:
         pytest.skip(f"当前平台不能创建测试链接: {error}")
+
+
+@pytest.mark.parametrize("disabled", [False, True])
+def test_readable_index_key_resolves_archive_cache_and_previews_with_real_sha(tmp_path, disabled):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, original = _archive(root)
+    key = "角色甲--作者-BuildA"
+    archive = original.with_name(key)
+    original.rename(archive)
+    index_name = "disabled-collection.json" if disabled else "collection.json"
+    _json(profile / "modsIndex" / index_name, {"mods": {key: _entry()}})
+    cache = profile / "work/Mods" / ("disabled-" + key)
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text("sample", encoding="utf-8")
+    preview = _image(root / "resources/preview" / (key + ".png"))
+    before = _snapshot(root)
+
+    result = _scan(reader, root)
+
+    assert len(result.mods) == 1
+    mod = result.mods[0]
+    assert mod.legacy_key == key
+    assert mod.sha == sha
+    assert mod.archive_path == str(archive)
+    assert mod.cache_path == str(cache)
+    assert not mod.cache_changed
+    assert mod.preview_paths == (str(preview),)
+    assert before == _snapshot(root)
+
+
+def test_readable_cache_only_key_does_not_invent_an_archive_sha(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    key = "角色甲--自定义缓存"
+    _json(profile / "modsIndex/collection.json", {"mods": {key: _entry()}})
+    cache = profile / "work/Mods" / key
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text("edited", encoding="utf-8")
+
+    result = _scan(reader, root)
+
+    assert len(result.mods) == 1
+    mod = result.mods[0]
+    assert mod.legacy_key == key
+    assert mod.sha == ""
+    assert mod.source_path == str(cache)
+    assert len(mod.cache_digest) == 64
+    assert any("缓存可能不完整" in issue.message for issue in result.issues)
+
+
+def test_unicode_casefold_distinct_named_archives_remain_independent(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    expected = {}
+    for key in ("Stra\u00dfe", "STRASSE"):
+        sha, original = _archive(root, key)
+        archive = original.with_name(key)
+        original.rename(archive)
+        expected[key] = (sha, str(archive))
+    _json(profile / "modsIndex/main.json", {"mods": {key: _entry(name=key) for key in expected}})
+    before = _snapshot(root)
+
+    result = _scan(reader, root)
+
+    assert len(result.mods) == 2
+    assert {mod.legacy_key: (mod.sha, mod.archive_path) for mod in result.mods} == expected
+    assert {mod.name for mod in result.mods} == set(expected)
+    assert not result.issues
+    assert before == _snapshot(root)
+
+
+@pytest.mark.parametrize("key", ["Stra\u00dfe", "STRASSE"])
+@pytest.mark.parametrize("prefix", ["", "disabled-"])
+@pytest.mark.parametrize("matching_cache_exists", [False, True])
+def test_unicode_casefold_distinct_named_cache_lookup_does_not_mix_sources(
+    tmp_path, key, prefix, matching_cache_exists
+):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    other_key = "STRASSE" if key == "Stra\u00dfe" else "Stra\u00dfe"
+    other_cache = profile / "work/Mods" / (prefix + other_key)
+    other_cache.mkdir(parents=True)
+    (other_cache / "unit.ini").write_text("unrelated content", encoding="utf-8")
+    matching_cache = profile / "work/Mods" / (prefix + key)
+    if matching_cache_exists:
+        matching_cache.mkdir()
+        (matching_cache / "unit.ini").write_text("selected content", encoding="utf-8")
+    _json(profile / "modsIndex/main.json", {"mods": {key: _entry(name=key)}})
+    before = _snapshot(root)
+
+    result = _scan(reader, root)
+
+    if matching_cache_exists:
+        assert len(result.mods) == 1
+        mod = result.mods[0]
+        assert mod.legacy_key == key
+        assert mod.sha == ""
+        assert mod.source_path == mod.cache_path == str(matching_cache)
+        assert mod.cache_digest == reader.directory_fingerprint(str(matching_cache))
+        assert not any("????????" in issue.message for issue in result.issues)
+    else:
+        assert not result.mods
+        assert any(issue.code == "missing" for issue in result.issues)
+    assert before == _snapshot(root)
+
+
+def test_ascii_sha_index_aliases_keep_normalization_and_active_precedence(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, archive = _archive(root)
+    _json(profile / "modsIndex/active.json", {"mods": {sha.upper(): _entry(name="Active")}})
+    _json(profile / "modsIndex/disabled-main.json", {"mods": {sha: _entry(name="Disabled")}})
+    cache = profile / "work/Mods" / ("disabled-" + sha)
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text("sample", encoding="utf-8")
+    before = _snapshot(root)
+
+    result = _scan(reader, root)
+
+    assert len(result.mods) == 1
+    mod = result.mods[0]
+    assert mod.sha == mod.legacy_key == sha
+    assert mod.name == "Active"
+    assert mod.archive_path == str(archive)
+    assert mod.cache_path == str(cache)
+    assert not mod.cache_changed
+    assert before == _snapshot(root)
+
+
+def test_distinct_named_keys_preserve_cancellation_between_mods(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    mods = {}
+    for key in ("Stra\u00dfe", "STRASSE"):
+        _, original = _archive(root, key)
+        original.rename(original.with_name(key))
+        mods[key] = _entry(name=key)
+    _json(profile / "modsIndex/main.json", {"mods": mods})
+    before = _snapshot(root)
+    updates = []
+
+    def progress(completed, total, message):
+        """记录逐项扫描进度，在首项完成后触发取消检查。"""
+        updates.append((completed, total, message))
+
+    with pytest.raises(InterruptedError):
+        _scan(reader, root, progress=progress, should_cancel=lambda: any(row[0] == 1 for row in updates))
+
+    assert updates[-1][0:2] == (1, 2)
+    assert before == _snapshot(root)
+
+
+def test_readable_archive_key_uses_new_content_identity_after_replacement(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, original = _archive(root, "original")
+    key = "角色甲--自定义原包"
+    archive = original.with_name(key)
+    original.rename(archive)
+    _json(profile / "modsIndex/collection.json", {"mods": {key: _entry()}})
+    first = _scan(reader, root)
+    changed_sha, replacement = _archive(root, "changed")
+    archive.write_bytes(replacement.read_bytes())
+    replacement.unlink()
+    second = _scan(reader, root)
+
+    assert len(first.mods) == len(second.mods) == 1
+    assert first.mods[0].sha == sha
+    assert second.mods[0].sha == changed_sha != sha
+    assert first.mods[0].legacy_key == second.mods[0].legacy_key == key
+
+
+@pytest.mark.parametrize(
+    "key", ["../escape", "..\\escape", "C:\\escape", "name:stream", "CON", "NUL.zip", "name.", "name ", "bad\x00key"]
+)
+def test_readable_index_keys_cannot_escape_or_alias_windows_paths(tmp_path, key):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    _json(profile / "modsIndex/collection.json", {"mods": {key: _entry()}})
+
+    result = _scan(reader, root)
+
+    assert not result.mods
+    assert any(issue.code == "invalid" and issue.name == key for issue in result.issues)
 
 
 def test_discover_uses_direct_home_directories_and_preserves_environment_names(tmp_path):
@@ -156,7 +346,7 @@ def test_scan_preserves_metadata_shared_resources_and_literal_category_names(tmp
     assert _snapshot(root) == before
 
 
-def test_disabled_index_files_and_ancestor_directories_are_ignored(tmp_path):
+def test_active_index_takes_precedence_over_disabled_conflicting_metadata(tmp_path):
     reader = _reader()
     root, profile = _layout(tmp_path)
     sha, _ = _archive(root)
@@ -166,10 +356,10 @@ def test_disabled_index_files_and_ancestor_directories_are_ignored(tmp_path):
     result = _scan(reader, root)
     assert [mod.name for mod in result.mods] == ["Sample Mod"]
     assert result.mods[0].category_path == ("未分类", "Unit A")
-    assert result.issues == ()
+    assert any("停用索引已跳过" in issue.message for issue in result.issues)
 
 
-def test_missing_archive_is_reported_without_download_or_deployed_directory_fallback(tmp_path):
+def test_missing_archive_restores_cache_without_downloading(tmp_path):
     reader = _reader()
     root, profile = _layout(tmp_path)
     sha = "a" * 40
@@ -192,9 +382,9 @@ def test_missing_archive_is_reported_without_download_or_deployed_directory_fall
     (profile / "work/Mods" / sha / "unit.ini").write_text("local", encoding="utf-8")
     before = _snapshot(root)
     result = _scan(reader, root)
-    assert result.mods == ()
-    assert result.total_bytes == 0
-    assert any(issue.code == "missing" and issue.name == "Sample Mod" for issue in result.issues)
+    assert len(result.mods) == 1
+    assert result.total_bytes == len("local")
+    assert any("原包缺失" in issue.message and issue.name == "Sample Mod" for issue in result.issues)
     assert _snapshot(root) == before
 
 
@@ -308,7 +498,7 @@ def test_thumbnail_redirection_outside_selected_root_is_rejected(tmp_path):
     assert any(issue.code == "invalid" and issue.source == str(outside) for issue in result.issues)
 
 
-def test_approximate_thumbnails_and_unknown_directives_are_reported_without_guessing(tmp_path):
+def test_approximate_thumbnails_and_unknown_directives_remain_visible(tmp_path):
     reader = _reader()
     root, profile = _layout(tmp_path)
     sha, _ = _archive(root)
@@ -317,7 +507,7 @@ def test_approximate_thumbnails_and_unknown_directives_are_reported_without_gues
     _image(profile / "thumbnail/Unit.png")
     (profile / "thumbnail/_redirection.ini").write_text("[recursive] pack\n", encoding="utf-8")
     result = _scan(reader, root)
-    assert not any(category.thumbnail_path for category in result.categories)
+    assert any(category.thumbnail_path for category in result.categories)
     assert any(issue.code == "warning" for issue in result.issues)
 
 
@@ -492,3 +682,161 @@ def test_unsupported_get_mode_preserves_provenance_and_reports_the_custom_config
     result = _scan(reader, root)
     assert result.mods[0].source_url == "https://example.invalid/item"
     assert any(issue.code == "warning" for issue in result.issues)
+
+
+def test_disabled_index_with_original_archive_is_importable(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, archive = _archive(root)
+    _json(profile / "modsIndex/disabled-folder/disabled-collection.json", {"mods": {sha: _entry()}})
+    result = _scan(reader, root)
+    assert len(result.mods) == 1
+    assert result.mods[0].source_path == str(archive)
+    assert any("停用" in issue.message for issue in result.issues)
+
+
+def test_cache_only_source_is_recoverable_and_warned(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha = "b" * 40
+    cache = profile / "work/Mods" / ("disabled-" + sha)
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text("modified", encoding="utf-8")
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    result = _scan(reader, root)
+    assert len(result.mods) == 1
+    mod = result.mods[0]
+    assert mod.source_path == mod.cache_path == str(cache)
+    assert not mod.archive_path
+    assert len(mod.cache_digest) == 64
+    assert any("缓存" in issue.message for issue in result.issues)
+
+
+@pytest.mark.parametrize("cache_content, changed", [("sample", False), ("edited", True)])
+def test_original_is_preferred_and_cache_differences_are_exposed(tmp_path, cache_content, changed):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, archive = _archive(root)
+    cache = profile / "work/Mods" / sha
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text(cache_content, encoding="utf-8")
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    result = _scan(reader, root)
+    mod = result.mods[0]
+    assert mod.source_path == mod.archive_path == str(archive)
+    assert mod.cache_path == str(cache)
+    assert mod.cache_changed is changed
+    assert mod.cache_size_bytes == len(cache_content)
+
+
+def test_disabled_cache_without_original_is_not_restored(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha = "c" * 40
+    cache = profile / "work/Mods" / sha
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text("cached", encoding="utf-8")
+    _json(profile / "modsIndex/disabled-main.json", {"mods": {sha: _entry()}})
+    result = _scan(reader, root)
+    assert not result.mods
+    assert any(issue.code == "missing" for issue in result.issues)
+
+
+def test_preview_directories_and_extended_formats_are_deduplicated(tmp_path):
+    from PIL import Image
+
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, _ = _archive(root)
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    directory = profile / "work/Mods" / ("disabled-" + sha) / "preview"
+    directory.mkdir(parents=True)
+    first = directory / "preview_1.png"
+    Image.new("RGB", (8, 8), "red").save(first)
+    (directory / "preview_copy.png").write_bytes(first.read_bytes())
+    Image.new("RGB", (8, 8), "blue").save(directory / "preview_2.webp")
+    Image.new("RGB", (8, 8), "green").save(directory.parent / "texture.png")
+    result = _scan(reader, root)
+    assert len(result.mods[0].preview_paths) == 2
+    assert not any(Path(path).name == "texture.png" for path in result.mods[0].preview_paths)
+
+
+def test_configured_approximate_thumbnail_matching_is_preserved(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, _ = _archive(root)
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry(object="Unit A costume")}})
+    _json(root / "local/configuration", {"thumbnail_approximate_algorithm": "key-in only"})
+    image = _image(profile / "thumbnail/Unit A.png")
+    result = _scan(reader, root)
+    leaf = next(category for category in result.categories if category.node_type == "character")
+    assert leaf.thumbnail_path == str(image)
+
+
+@pytest.mark.parametrize("mode", [{"invalid": "configuration"}, ["similarity only"], 4, True])
+def test_invalid_thumbnail_algorithm_does_not_abort_mod_scan(tmp_path, mode):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, _ = _archive(root)
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    _json(root / "local/configuration", {"thumbnail_approximate_algorithm": mode})
+    _image(profile / "thumbnail/Unit.png")
+    result = _scan(reader, root)
+    assert len(result.mods) == 1
+    assert any("匹配方式不受支持" in issue.message for issue in result.issues)
+
+
+def test_nested_named_previews_are_found_without_sweeping_textures(tmp_path):
+    from PIL import Image
+
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, _ = _archive(root)
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    directory = profile / "work/Mods" / sha / "outfit/details"
+    directory.mkdir(parents=True)
+    Image.new("RGB", (8, 8), "red").save(directory / "preview_alternate.png")
+    Image.new("RGB", (8, 8), "blue").save(directory / "texture.png")
+    result = _scan(reader, root)
+    assert [Path(path).name for path in result.mods[0].preview_paths] == ["preview_alternate.png"]
+
+
+def test_linked_cache_is_not_offered_as_recovery(tmp_path):
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    sha, _ = _archive(root)
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry()}})
+    outside = tmp_path / "outside-cache"
+    outside.mkdir()
+    (outside / "mod.ini").write_text("outside", encoding="utf-8")
+    path = profile / "work/Mods" / sha
+    path.parent.mkdir(parents=True)
+    _symlink(path, outside, directory=True)
+    result = _scan(reader, root)
+    assert len(result.mods) == 1
+    assert not result.mods[0].cache_path
+    assert any(issue.code == "invalid" for issue in result.issues)
+
+
+@pytest.mark.parametrize("content, changed", [("original", False), ("modified", True)])
+def test_7z_cache_comparison_reads_members_without_extracting(tmp_path, content, changed):
+    import py7zr
+
+    reader = _reader()
+    root, profile = _layout(tmp_path)
+    original = tmp_path / "unit.ini"
+    original.write_text("original", encoding="utf-8")
+    archive = tmp_path / "original.7z"
+    with py7zr.SevenZipFile(archive, "w") as package:
+        package.write(original, "unit.ini")
+    payload = archive.read_bytes()
+    sha = hashlib.sha1(payload).hexdigest()
+    (root / "resources/mods" / sha).write_bytes(payload)
+    cache = profile / "work/Mods" / sha
+    cache.mkdir(parents=True)
+    (cache / "unit.ini").write_text(content, encoding="utf-8")
+    _json(profile / "modsIndex/main.json", {"mods": {sha: _entry(type="7z")}})
+    before = _snapshot(root)
+    result = _scan(reader, root)
+    assert result.mods[0].cache_changed is changed
+    assert _snapshot(root) == before
