@@ -191,6 +191,9 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         phase_started = time.perf_counter()
         self._config = Config()
+        from src.ui.window_close_behavior import WindowCloseBehavior
+
+        self._close_behavior = WindowCloseBehavior(self, self._config)
         from src.ui.image_memory_runtime import ImageMemoryMonitor
 
         self._image_memory_monitor = ImageMemoryMonitor(self._config, self)
@@ -6286,6 +6289,9 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         """先请求业务与探测任务退出，必要时推迟关闭；取消退出后恢复暂停的控制器。"""
+        close_behavior = getattr(self, "_close_behavior", None)
+        if close_behavior is not None and close_behavior.handle_close(event):
+            return
         publication = getattr(self, "_enable_publication", None)
         if publication is not None and publication.busy:
             self._enable_publication_close_pending = True
@@ -6349,6 +6355,8 @@ class MainWindow(QMainWindow):
                 event.ignore()
                 return
         self._close_after_library_probe(event)
+        if close_behavior is not None and not event.isAccepted():
+            close_behavior.cancel_exit()
         if variants is not None and not event.isAccepted():
             variants.resume()
         if probe is not None and not event.isAccepted():
@@ -6518,6 +6526,9 @@ class MainWindow(QMainWindow):
                 self._background_controller.dispose()
             self._bg_overlay.dispose()
         logger.info("应用关闭")
+        close_behavior = getattr(self, "_close_behavior", None)
+        if close_behavior is not None:
+            close_behavior.dispose()
         super().closeEvent(event)
 
     # 预设

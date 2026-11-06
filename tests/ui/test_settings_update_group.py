@@ -8,6 +8,26 @@ def test_settings_has_update_group(qtbot, temp_data_dir):
     assert hasattr(page, "_upd_notify_combo")
 
 
+def test_close_behavior_defaults_to_exit_and_autosaves(qtbot, temp_data_dir):
+    from unittest.mock import patch
+
+    from src.core.config import Config
+    from src.ui.pages.settings import SettingsPage
+
+    page = SettingsPage()
+    qtbot.addWidget(page)
+    combo = page._close_behavior_combo
+    assert [combo.itemData(index) for index in range(combo.count())] == ["exit", "tray"]
+    assert combo.currentData() == "exit"
+    combo.setCurrentIndex(1)
+    assert Config().get("ui.close_behavior") == "tray"
+    page._load_settings()
+    page._load_settings()
+    with patch.object(page, "_autosave") as autosave:
+        combo.setCurrentIndex(0)
+    autosave.assert_called_once_with("ui.close_behavior", "exit")
+
+
 def test_settings_uses_unified_import_format(qtbot, temp_data_dir):
     from src.ui.pages.settings import SettingsPage
 

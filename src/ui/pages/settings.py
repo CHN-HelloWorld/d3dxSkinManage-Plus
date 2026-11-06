@@ -242,6 +242,18 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
 
     def _build_general_page(self) -> QWidget:
         """构建 Mod 管理、统一代理、下载归档和图片缓存设置，并启动占用统计。"""
+        window_card, window_rows = self._make_group(tr("窗口行为"))
+        self._close_behavior_combo = QComboBox()
+        self._close_behavior_combo.addItem(tr("关闭程序"), "exit")
+        self._close_behavior_combo.addItem(tr("隐藏到托盘"), "tray")
+        self._close_behavior_combo.setMinimumWidth(210)
+        self._add_row(
+            window_rows,
+            tr("关闭行为"),
+            self._close_behavior_combo,
+            tr("点击窗口关闭按钮时执行的操作。"),
+            details=tr("隐藏到托盘后程序继续运行；点击托盘图标恢复窗口，右键菜单可退出程序。"),
+        )
         # Mod 管理
         management_card, gml = self._make_group(tr("Mod 管理"))
         self._delete_method_combo = QComboBox()
@@ -439,6 +451,7 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         return SettingsCategoryPage(
             tr("常规"),
             [
+                ("window", tr("窗口行为"), tr("选择关闭按钮的操作，默认为关闭程序。"), [window_card]),
                 ("management", tr("Mod 管理"), tr("调整删除方式与部署时的任务并发。"), [management_card]),
                 (
                     "network",
@@ -1280,6 +1293,9 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
                 self._language_combo.setCurrentIndex(i)
                 break
 
+        close_behavior = self._config.get("ui.close_behavior", "exit")
+        close_index = self._close_behavior_combo.findData(close_behavior)
+        self._close_behavior_combo.setCurrentIndex(max(0, close_index))
         delete_method = self._config.get("mods.delete_method", "permanent")
         for i in range(self._delete_method_combo.count()):
             if self._delete_method_combo.itemData(i) == delete_method:
@@ -1411,6 +1427,9 @@ class SettingsPage(BackgroundSettingsMixin, SettingsShellMixin, QWidget):
         self._font_combo.activated.connect(self._on_font_changed)
         self._font_combo.lineEdit().editingFinished.connect(self._on_font_edit_finished)
         uc = "gamebanana.update_check"
+        self._close_behavior_combo.currentIndexChanged.connect(
+            lambda _index: self._autosave("ui.close_behavior", self._close_behavior_combo.currentData())
+        )
         self._delete_method_combo.currentIndexChanged.connect(
             lambda _i: self._autosave("mods.delete_method", self._delete_method_combo.currentData())
         )

@@ -78,6 +78,7 @@ class Config:
             "include_metadata": False,
         },
         "ui": {
+            "close_behavior": "exit",
             # 类别总览 / 画廊的成人级(X) Mod 预览模式：
             # "show"=正常显示 | "hide"=隐藏占位 | "blur"=模糊（与 Mod 商店 NSFW 模糊一致）
             "adult_preview_mode": "show",

@@ -456,6 +456,7 @@ class AppUpdateManager(QObject):
 
         self._close_install_progress()
         logger.info("程序更新：更新器已启动，退出主程序以让其替换文件")
+        self._win.setProperty("applicationExitRequested", True)
         QApplication.quit()
 
     def _close_install_progress(self) -> None:
