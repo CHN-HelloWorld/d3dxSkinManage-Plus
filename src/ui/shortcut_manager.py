@@ -9,7 +9,7 @@ from weakref import WeakKeyDictionary, ref
 
 import shiboken6
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtGui import QKeyEvent, QKeySequence
+from PySide6.QtGui import QKeyEvent, QKeySequence, QMouseEvent
 from PySide6.QtWidgets import QApplication, QLineEdit, QPlainTextEdit, QTextEdit, QWidget
 
 from src.core.config import Config
@@ -18,25 +18,29 @@ from src.utils.i18n import t as tr
 
 _MODIFIER_KEYS = {Qt.Key.Key_Control, Qt.Key.Key_Alt, Qt.Key.Key_Shift, Qt.Key.Key_Meta, Qt.Key.Key_AltGr}
 _SHIFTED_SYMBOLS = dict(zip('~!@#$%^&*()_+{}|:"<>?', "`1234567890-=[]\\;',./"))
+_MOUSE_BUTTONS = {Qt.MouseButton.BackButton: "XButton1", Qt.MouseButton.ForwardButton: "XButton2"}
 
 
-def binding_from_event(event: QKeyEvent) -> str:
-    """使用与配置一致的主键名称；左右修饰键、数字键盘等价。"""
+def binding_from_event(event: QKeyEvent | QMouseEvent) -> str:
+    """使用与配置一致的主键或侧键名称；左右修饰键、数字键盘等价。"""
     modifiers = event.modifiers()
-    if (
-        event.key() in _MODIFIER_KEYS
-        or event.nativeVirtualKey() == 0xE5
-        or modifiers & (Qt.KeyboardModifier.MetaModifier | Qt.KeyboardModifier.GroupSwitchModifier)
-    ):
+    if modifiers & (Qt.KeyboardModifier.MetaModifier | Qt.KeyboardModifier.GroupSwitchModifier):
         return ""
-    key = event.key()
-    if key == Qt.Key.Key_Backtab:
-        key = Qt.Key.Key_Tab
-        modifiers |= Qt.KeyboardModifier.ShiftModifier
-    main = QKeySequence(key).toString(QKeySequence.SequenceFormat.PortableText)
-    # Windows 的 Shift 标点事件报告变换后的符号，显示时还原物理主键。
-    if modifiers & Qt.KeyboardModifier.ShiftModifier:
-        main = _SHIFTED_SYMBOLS.get(main, main)
+    if isinstance(event, QMouseEvent):
+        main = _MOUSE_BUTTONS.get(event.button(), "")
+        if not main:
+            return ""
+    else:
+        if event.key() in _MODIFIER_KEYS or event.nativeVirtualKey() == 0xE5:
+            return ""
+        key = event.key()
+        if key == Qt.Key.Key_Backtab:
+            key = Qt.Key.Key_Tab
+            modifiers |= Qt.KeyboardModifier.ShiftModifier
+        main = QKeySequence(key).toString(QKeySequence.SequenceFormat.PortableText)
+        # Windows 的 Shift 标点事件报告变换后的符号，显示时还原物理主键。
+        if modifiers & Qt.KeyboardModifier.ShiftModifier:
+            main = _SHIFTED_SYMBOLS.get(main, main)
     parts = [
         name
         for flag, name in (
@@ -143,6 +147,16 @@ class _Context:
     children: bool
 
 
+class _MouseShortcutFilter(QObject):
+    """仅转发侧键按下事件，避免非焦点鼠标目标遗漏及其他应用事件进入分发器。"""
+
+    def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        """在应用范围监听侧键，其余事件继续交给原有控件处理。"""
+        if event.type() != QEvent.Type.MouseButtonPress or event.button() not in _MOUSE_BUTTONS:
+            return False
+        return self.parent().eventFilter(watched, event)
+
+
 class ShortcutDispatcher(QObject):
     """先处理焦点所在编辑器，再处理明确登记的列表，最后处理主窗口命令。
 
@@ -151,7 +165,7 @@ class ShortcutDispatcher(QObject):
     """
 
     def __init__(self, settings: ShortcutSettings, window: QWidget):
-        """读取绑定并订阅配置和焦点变化，将按键过滤器安装到当前有效焦点控件。"""
+        """按键过滤器跟踪有效焦点，独立侧键过滤器监听应用内非焦点鼠标目标。"""
         super().__init__(window)
         self.settings = settings
         self.window = window
@@ -163,6 +177,8 @@ class ShortcutDispatcher(QObject):
         settings.changed.connect(self._reload)
         self._focus_ref = lambda: None
         app = QApplication.instance()
+        self._mouse_filter = _MouseShortcutFilter(self)
+        app.installEventFilter(self._mouse_filter)
         app.focusChanged.connect(self._focus_changed)
         self._focus_changed(None, app.focusWidget())
 
@@ -262,6 +278,7 @@ class ShortcutDispatcher(QObject):
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         """在当前窗口焦点上解析快捷键，按文本、局部和窗口上下文选择动作。
 
+        鼠标目标必须与焦点属于同一窗口，上下文仍由焦点决定。
         输入法预编辑、快捷键录制、模态限制和原生输入场景不接管；已被改绑的默认按键被消费，非文本动作忽略自动重复。"""
         if not isinstance(watched, QWidget):
             return False
@@ -273,14 +290,18 @@ class ShortcutDispatcher(QObject):
         if kind == QEvent.Type.FocusOut:
             self._composing.pop(watched, None)
             return False
-        if kind not in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress):
+        mouse = kind == QEvent.Type.MouseButtonPress
+        if kind not in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress, QEvent.Type.MouseButtonPress):
             return False
         app = QApplication.instance()
         focus = app.focusWidget()
         if (
             focus is None
-            or watched is not focus
+            or not mouse
+            and watched is not focus
             or not self._belongs(focus)
+            or mouse
+            and (not self._belongs(watched) or watched.window() is not focus.window() or not watched.isEnabled())
             or not self.window.isVisible()
             or self.window.isMinimized()
             or not self._belongs(app.activeWindow())
@@ -292,6 +313,8 @@ class ShortcutDispatcher(QObject):
 
         if (
             QWidget.keyboardGrabber() is not None
+            or mouse
+            and QWidget.mouseGrabber() is not None
             or focus.window().property("shortcutRecording")
             or isinstance(focus, KeyCaptureField)
             and focus._capturing
@@ -303,8 +326,10 @@ class ShortcutDispatcher(QObject):
         binding = binding_from_event(event)
         if not binding:
             return False
-        if editor is not None and not event.modifiers() & (
-            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier
+        if (
+            not mouse
+            and editor is not None
+            and not event.modifiers() & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier)
         ):
             if event.key() in (Qt.Key.Key_Space, Qt.Key.Key_Delete):
                 return False  # 文本输入/删除不是可改派的业务单键。
@@ -345,7 +370,7 @@ class ShortcutDispatcher(QObject):
         if kind == QEvent.Type.ShortcutOverride:
             event.accept()
             return True
-        if action is not None and (editor is not None or not event.isAutoRepeat()):
+        if action is not None and (mouse or editor is not None or not event.isAutoRepeat()):
             action()
         event.accept()
         return True

@@ -24,6 +24,12 @@ from src.utils.i18n import t as tr
 color = theme.shortcut_color
 
 
+def _binding_parts(binding: str | None) -> list[str]:
+    """将保存的侧键名称转成易读键帽文字，键盘名称保持不变。"""
+    labels = {"XButton1": tr("侧键1"), "XButton2": tr("侧键2")}
+    return [labels.get(part, part) for part in binding.split("+")] if binding else []
+
+
 def _key_geometry(parts: list[str], scale: str = "normal", width: int = 10000):
     """根据字体、缩放规格和可用宽度计算键帽及加号的位置，返回布局尺寸和绘制字体。"""
     size, height, minimum, padding = {"small": (11, 22, 24, 6), "normal": (12, 26, 27, 7), "large": (16, 37, 38, 10)}[
@@ -99,8 +105,9 @@ class KeyCaps(QWidget):
 
     def set_binding(self, binding: str | None):
         """按加号拆分绑定为键帽内容，并同步辅助技术可读的绑定名称。"""
-        self.set_parts(binding.split("+") if binding else [])
-        self.setAccessibleName(binding.replace("+", " + ") if binding else tr("未绑定"))
+        parts = _binding_parts(binding)
+        self.set_parts(parts)
+        self.setAccessibleName(" + ".join(parts) if binding else tr("未绑定"))
 
     def set_parts(self, parts: list[str]):
         """复制键帽文字列表并使布局尺寸和绘制内容失效。"""
@@ -161,7 +168,7 @@ class BindingButton(QAbstractButton):
     def set_binding(self, binding: str | None):
         """更新绑定和无障碍说明，根据是否已绑定选择按钮宽度并重新计算所需高度。"""
         self.binding = binding
-        value = binding.replace("+", " + ") if binding else tr("未绑定")
+        value = " + ".join(_binding_parts(binding)) if binding else tr("未绑定")
         self.setAccessibleName(tr("修改{title}的快捷键，当前{value}", title=self.title, value=value))
         self.setFixedWidth(self._column_width if binding else 130)
         self.setFixedHeight(self.heightForWidth(self.width()))
@@ -176,7 +183,9 @@ class BindingButton(QAbstractButton):
 
     def heightForWidth(self, width):
         """返回容纳键帽换行和内边距的按钮高度，未绑定时使用固定最小高度。"""
-        return max(34, _key_geometry(self.binding.split("+"), width=width - 32)[1].height() + 6) if self.binding else 34
+        if not self.binding:
+            return 34
+        return max(34, _key_geometry(_binding_parts(self.binding), width=width - 32)[1].height() + 6)
 
     def sizeHint(self):
         """返回当前按钮宽度及该宽度下所需的键帽高度。"""
@@ -202,7 +211,7 @@ class BindingButton(QAbstractButton):
             painter.setPen(pen)
             painter.drawRoundedRect(box, 4, 4)
         if self.binding:
-            draw_keys(painter, self.binding.split("+"), box.adjusted(6, 3, -26, -3))
+            draw_keys(painter, _binding_parts(self.binding), box.adjusted(6, 3, -26, -3))
             if hovered:
                 icons.get_icon("actions/edit", "text.tertiary").paint(
                     painter, self.width() - 19, (self.height() - 13) // 2, 13, 13

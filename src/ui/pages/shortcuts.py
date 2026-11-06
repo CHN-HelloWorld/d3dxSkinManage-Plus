@@ -176,6 +176,14 @@ class ShortcutsPage(QWidget):
         body.addSpacing(16)
         self._rebuild_groups()
         body.addWidget(settings_note(tr("系统保留组合键不可覆盖；快捷键冲突会在录入时提示。")))
+        body.addWidget(
+            settings_note(
+                tr(
+                    "鼠标侧键1（BackButton / XButton1）和侧键2（ForwardButton / XButton2）可单独使用，"
+                    "也可组合 Ctrl / Alt / Shift。"
+                )
+            )
+        )
         body.addSpacing(16)
         body.addWidget(self._build_system_card())
         body.addStretch(1)

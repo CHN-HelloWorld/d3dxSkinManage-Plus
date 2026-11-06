@@ -273,7 +273,7 @@ class ShortcutEditDialog(_PrototypeDialog):
         self.capture_icon.setFixedSize(30, 30)
         icons.apply_pixmap(self.capture_icon, "actions/keyboard", 30, "accent")
         capture_layout.addWidget(self.capture_icon, 0, Qt.AlignmentFlag.AlignHCenter)
-        self.placeholder = _label(tr("按下新的组合键"))
+        self.placeholder = _label(tr("按下新的按键或鼠标侧键"))
         self.placeholder.setStyleSheet("font-size: 15px; font-weight: 500;")
         self.placeholder.setAlignment(Qt.AlignmentFlag.AlignCenter)
         capture_layout.addWidget(self.placeholder)
@@ -356,9 +356,9 @@ class ShortcutEditDialog(_PrototypeDialog):
         self.caption.setText(
             tr("已暂停录制，回到此窗口后继续")
             if self._suspended
-            else tr("继续按键可更换候选，也可点击「重新录制」")
+            else tr("继续按键或按鼠标侧键可更换候选")
             if self.candidate
-            else tr("支持 Ctrl / Alt / Shift 与单个按键组合")
+            else tr("侧键可单独使用，也可组合 Ctrl / Alt / Shift")
         )
         tone = "danger" if self._error else "warning" if conflicts else "accent"
         background = "bg.base" if self._error else "warning.subtle" if conflicts else "accent.subtle"
@@ -452,6 +452,20 @@ class ShortcutEditDialog(_PrototypeDialog):
                 self._error = tr("请结束输入法组合输入后，再录制快捷键。")
                 self._draw_recording()
             return True
+        if kind == QEvent.Type.MouseButtonPress:
+            if event.button() not in (Qt.MouseButton.BackButton, Qt.MouseButton.ForwardButton):
+                return False
+            if self._suspended or self._composing:
+                return True
+            binding = binding_from_event(event)
+            if binding:
+                self.set_candidate(binding)
+            else:
+                self.candidate = None
+                self._error = tr("暂不支持这个修饰组合，请选择 Ctrl、Alt 或 Shift。")
+                self._draw_recording()
+            event.accept()
+            return True
         if kind not in (QEvent.Type.ShortcutOverride, QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             return False
         if kind == QEvent.Type.ShortcutOverride:
@@ -508,6 +522,6 @@ class ShortcutEditDialog(_PrototypeDialog):
             self.set_candidate(binding)
         else:
             self.candidate = None
-            self._error = tr("暂不支持这个按键，请试试字母、数字或功能键。")
+            self._error = tr("暂不支持这个按键，请试试字母、数字、功能键或鼠标侧键。")
             self._draw_recording()
         return True

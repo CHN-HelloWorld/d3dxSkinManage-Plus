@@ -1,3 +1,5 @@
+"""验证管理器快捷键的规范化、上下文冲突及配置事务。"""
+
 import json
 
 import pytest
@@ -48,6 +50,10 @@ def test_saved_custom_binding_has_priority_over_a_new_default(temp_data_dir):
         ("Ctrl+,", "Ctrl+,"),
         ("F12", "F12"),
         ("Ctrl+PgUp", "Ctrl+PageUp"),
+        ("BackButton", "XButton1"),
+        ("forwardbutton", "XButton2"),
+        ("shift+ctrl+xbutton1", "Ctrl+Shift+XButton1"),
+        ("alt+ForwardButton", "Alt+XButton2"),
     ],
 )
 def test_binding_normalization(key, expected):
@@ -84,7 +90,21 @@ def test_window_bindings_reject_reserved_or_typing_keys(key):
     assert validate_binding(key, COMMAND_BY_ID["view.refresh"])
 
 
-@pytest.mark.parametrize("key", ["Ctrl+Shift+K", "Alt+1", "F1", "F12", "Ctrl+,", "Ctrl+PageUp"])
+@pytest.mark.parametrize(
+    "key",
+    [
+        "Ctrl+Shift+K",
+        "Alt+1",
+        "F1",
+        "F12",
+        "Ctrl+,",
+        "Ctrl+PageUp",
+        "XButton1",
+        "XButton2",
+        "Shift+BackButton",
+        "Ctrl+Alt+Shift+ForwardButton",
+    ],
+)
 def test_supported_single_combination(key):
     from src.core.shortcuts import COMMAND_BY_ID, validate_binding
 
@@ -96,6 +116,21 @@ def test_conflicts_include_shared_text_context(temp_data_dir):
     assert [c.id for c in store.conflicts("edit.copy", "Ctrl+X")] == ["edit.cut"]
     assert [c.id for c in store.conflicts("view.refresh", "Ctrl+V")] == ["edit.paste"]
     assert store.conflicts("edit.paste", "Ctrl+V") == []
+
+
+def test_mouse_side_button_conflicts_persist_and_restore(temp_data_dir):
+    """侧键别名参与相同冲突事务，替换后可从快照恢复原有绑定。"""
+    store = make_store()
+    before = store.bindings
+    assert store.save_binding("edit.copy", "BackButton")
+    assert store.binding("edit.copy") == "XButton1"
+    assert [command.id for command in store.conflicts("view.refresh", "xbutton1")] == ["edit.copy"]
+    assert not store.save_binding("view.refresh", "XButton1")
+    assert store.save_binding("view.refresh", "BackButton", replace=True)
+    assert store.binding("edit.copy") is None
+    assert make_store().binding("view.refresh") == "XButton1"
+    assert store.restore(before)
+    assert store.bindings == before
 
 
 def test_replacement_is_one_persisted_transaction_and_undo_preserves_other_settings(temp_data_dir):

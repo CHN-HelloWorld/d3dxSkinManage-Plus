@@ -1,3 +1,5 @@
+"""验证快捷键页面的录入、冲突替换、撤销及录制状态保护。"""
+
 import pytest
 from PySide6.QtCore import QCoreApplication, QEvent, Qt
 from PySide6.QtGui import QInputMethodEvent
@@ -6,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QScrollArea
 
 @pytest.fixture
 def page(qtbot, temp_data_dir):
+    """打开使用隔离配置的快捷键子页，交由 Qt 测试夹具清理窗口。"""
     from src.ui.pages.settings import SettingsPage
 
     settings = SettingsPage()
@@ -20,6 +23,7 @@ def page(qtbot, temp_data_dir):
 
 
 def record(page, command_id, qtbot):
+    """从指定命令打开模态编辑窗口，并将焦点移至录制区域。"""
     qtbot.mouseClick(page.binding_buttons[command_id], Qt.MouseButton.LeftButton)
     QCoreApplication.processEvents()
     dialog = page._dialog
@@ -63,6 +67,66 @@ def test_record_cancel_does_not_persist_and_returns_focus(page, qtbot):
     QCoreApplication.processEvents()
     assert page.settings.bindings == before
     assert page.binding_buttons["edit.copy"].hasFocus()
+
+
+@pytest.mark.parametrize(
+    "button, binding",
+    [(Qt.MouseButton.BackButton, "XButton1"), (Qt.MouseButton.ForwardButton, "XButton2")],
+)
+@pytest.mark.parametrize(
+    "modifiers, prefix",
+    [
+        (Qt.KeyboardModifier.NoModifier, ""),
+        (Qt.KeyboardModifier.ShiftModifier, "Shift+"),
+        (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier, "Ctrl+Alt+"),
+    ],
+)
+def test_mouse_side_button_records_saves_and_undoes(page, qtbot, button, binding, modifiers, prefix):
+    """录制侧键及修饰组合时不执行动作，显式保存后支持显示和撤销。"""
+    from src.ui.shortcut_manager import ShortcutDispatcher
+
+    before = page.settings.bindings
+    calls = []
+    dispatcher = ShortcutDispatcher(page.settings, page.window())
+    dispatcher.register_window_action("view.refresh", lambda: calls.append("refresh"))
+    dialog = record(page, "view.refresh", qtbot)
+    qtbot.mouseClick(dialog.capture, button, modifiers)
+    assert dialog.candidate == prefix + binding
+    assert dialog.save_button.isEnabled()
+    assert page.settings.bindings == before
+    qtbot.keyClick(dialog.capture, Qt.Key.Key_F5)
+    assert calls == []
+    qtbot.mouseClick(dialog.capture, button, modifiers)
+    qtbot.mouseClick(dialog.save_button, Qt.MouseButton.LeftButton)
+    assert page.settings.binding("view.refresh") == prefix + binding
+    assert "侧键" in page.binding_buttons["view.refresh"].accessibleName()
+    page.undo()
+    assert page.settings.bindings == before
+
+
+def test_mouse_side_button_recording_preserves_conflict_and_pause_guards(page, qtbot):
+    """侧键录制遵循冲突替换、失焦暂停、输入法组合及系统修饰键限制。"""
+    assert page.settings.save_binding("mod.import", "XButton1")
+    dialog = record(page, "view.refresh", qtbot)
+    qtbot.mouseClick(dialog.capture, Qt.MouseButton.BackButton)
+    assert dialog.save_button.text() == "替换并保存"
+    assert "导入 Mod" in dialog.feedback.text()
+    QApplication.sendEvent(dialog, QEvent(QEvent.Type.WindowDeactivate))
+    qtbot.mouseClick(dialog.capture, Qt.MouseButton.ForwardButton)
+    assert dialog.candidate == "XButton1"
+    assert not dialog.save_button.isEnabled()
+    QApplication.sendEvent(dialog, QEvent(QEvent.Type.WindowActivate))
+    QApplication.sendEvent(dialog.capture, QInputMethodEvent("拼", []))
+    qtbot.mouseClick(dialog.capture, Qt.MouseButton.ForwardButton)
+    assert dialog.candidate is None
+    QApplication.sendEvent(dialog.capture, QInputMethodEvent("", []))
+    qtbot.mouseClick(dialog.capture, Qt.MouseButton.ForwardButton, Qt.KeyboardModifier.MetaModifier)
+    assert dialog.candidate is None
+    assert not dialog.save_button.isEnabled()
+    qtbot.mouseClick(dialog.capture, Qt.MouseButton.BackButton)
+    qtbot.mouseClick(dialog.save_button, Qt.MouseButton.LeftButton)
+    assert page.settings.binding("view.refresh") == "XButton1"
+    assert page.settings.binding("mod.import") is None
 
 
 def test_conflict_replace_save_and_undo_are_atomic(page, qtbot):

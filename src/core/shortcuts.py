@@ -189,6 +189,7 @@ GROUPS = (
     ("launch", N_("启动"), "actions/launch"),
 )
 MODIFIERS = ("Ctrl", "Alt", "Shift")
+MOUSE_BUTTONS = ("XButton1", "XButton2")
 _SPECIAL_KEYS = (
     "Space",
     "Delete",
@@ -206,7 +207,7 @@ _SPECIAL_KEYS = (
     "Enter",
     "Esc",
 )
-_ALIASES = {key.lower(): key for key in (*MODIFIERS, *_SPECIAL_KEYS)}
+_ALIASES = {key.lower(): key for key in (*MODIFIERS, *_SPECIAL_KEYS, *MOUSE_BUTTONS)}
 _ALIASES.update(
     {
         "control": "Ctrl",
@@ -217,6 +218,8 @@ _ALIASES.update(
         "pgdown": "PageDown",
         "pgdn": "PageDown",
         "ins": "Insert",
+        "backbutton": "XButton1",
+        "forwardbutton": "XButton2",
     }
 )
 _MAIN_KEY = re.compile(r"^(?:[A-Z0-9]|F[1-9]|F1[0-2]|[,./;'\[\]\\\-=\x60])$")
@@ -236,7 +239,7 @@ def normalize_binding(value: object) -> str:
         or any(part not in MODIFIERS for part in modifiers)
     ):
         return ""
-    if main not in _SPECIAL_KEYS and not _MAIN_KEY.fullmatch(main):
+    if main not in (*_SPECIAL_KEYS, *MOUSE_BUTTONS) and not _MAIN_KEY.fullmatch(main):
         return ""
     return "+".join([part for part in MODIFIERS if part in modifiers] + [main])
 
@@ -245,14 +248,14 @@ def validate_binding(value: object, command: ShortcutCommand) -> str:
     """返回可展示的不可用原因；空字符串表示合法。不接受直接清除绑定。"""
     binding = normalize_binding(value)
     if not binding:
-        return tr("请录入一个有效的组合键，支持 Ctrl / Alt / Shift 与单个按键。")
+        return tr("请录入一个有效的快捷键，支持 Ctrl / Alt / Shift 与单个按键或鼠标侧键。")
     if binding in _RESERVED:
         return tr("这个组合键由系统使用，请选择其他按键。")
     *modifiers, main = binding.split("+")
     strong = "Ctrl" in modifiers or "Alt" in modifiers
     if not strong and main in {"Esc", "Enter", "Tab"}:
         return tr("Esc、Enter、Tab 用于取消、确认和焦点移动，请选择其他按键。")
-    if not strong and not re.fullmatch(r"F\d+", main) and main not in {"Space", "Delete"}:
+    if not strong and not re.fullmatch(r"F\d+", main) and main not in {"Space", "Delete", *MOUSE_BUTTONS}:
         return tr("请加入 Ctrl 或 Alt，避免普通文字输入时误触发。")
     if not strong and main in {"Space", "Delete"} and "window" in command.contexts:
         return tr("Space 和 Delete 的单键绑定仅用于列表操作，请加入 Ctrl 或 Alt。")

@@ -1,3 +1,5 @@
+"""验证管理器快捷键按当前焦点分发，并保留录制及窗口状态保护。"""
+
 import pytest
 from PySide6.QtCore import QCoreApplication, Qt
 from PySide6.QtGui import QInputMethodEvent
@@ -6,6 +8,7 @@ from PySide6.QtWidgets import QApplication, QDialog, QLineEdit, QListWidget, QPu
 
 @pytest.fixture
 def shortcut_window(qtbot, temp_data_dir):
+    """构建含文本、列表及未注册控件的隔离窗口，收集实际分发动作。"""
     from src.ui.shortcut_manager import ShortcutDispatcher, ShortcutSettings
 
     window = QWidget()
@@ -42,9 +45,126 @@ def shortcut_window(qtbot, temp_data_dir):
 
 
 def focus(widget):
+    """激活目标所属窗口并处理焦点事件，使分发器同步当前上下文。"""
     widget.window().activateWindow()
     widget.setFocus()
     QCoreApplication.processEvents()
+
+
+@pytest.mark.parametrize(
+    "button, binding",
+    [(Qt.MouseButton.BackButton, "XButton1"), (Qt.MouseButton.ForwardButton, "XButton2")],
+)
+@pytest.mark.parametrize(
+    "modifiers, prefix",
+    [
+        (Qt.KeyboardModifier.NoModifier, ""),
+        (Qt.KeyboardModifier.ShiftModifier, "Shift+"),
+        (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.AltModifier, "Ctrl+Alt+"),
+    ],
+)
+def test_mouse_side_button_dispatches_once_from_unfocused_viewport(
+    qtbot, shortcut_window, button, binding, modifiers, prefix
+):
+    """侧键事件落在非焦点视口时仍执行列表动作，单次点击不重复触发。"""
+    _window, _edit, listing, _other, settings, _dispatcher, calls = shortcut_window
+    assert settings.save_binding("edit.delete", prefix + binding)
+    focus(listing)
+    assert QApplication.focusWidget() is listing
+    qtbot.mouseClick(listing.viewport(), button, modifiers)
+    assert calls == ["delete"]
+
+
+def test_mouse_side_button_uses_focus_not_background_target(qtbot, shortcut_window):
+    """禁止目标列表自动取焦，验证侧键不会采用鼠标下方的后台列表上下文。"""
+    _window, edit, listing, other, settings, _dispatcher, calls = shortcut_window
+    listing.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    assert settings.save_binding("edit.select_all", "BackButton")
+    focus(edit)
+    qtbot.mouseClick(listing.viewport(), Qt.MouseButton.BackButton)
+    assert edit.selectedText() == edit.text()
+    assert calls == []
+    focus(other)
+    qtbot.mouseClick(listing.viewport(), Qt.MouseButton.BackButton)
+    assert calls == []
+
+
+def test_mouse_side_button_window_rebind_and_composition(qtbot, shortcut_window):
+    """输入法预编辑屏蔽侧键执行，保存改绑后新组合立即替代旧入口。"""
+    _window, edit, _listing, other, settings, _dispatcher, calls = shortcut_window
+    assert settings.save_binding("view.refresh", "XButton2")
+    focus(edit)
+    QCoreApplication.sendEvent(edit, QInputMethodEvent("拼", []))
+    qtbot.mouseClick(other, Qt.MouseButton.ForwardButton)
+    assert calls == []
+    QCoreApplication.sendEvent(edit, QInputMethodEvent("", []))
+    qtbot.keyClick(edit, Qt.Key.Key_F5)
+    qtbot.mouseClick(other, Qt.MouseButton.ForwardButton)
+    assert calls == ["refresh"]
+    assert settings.save_binding("view.refresh", "Shift+XButton2")
+    qtbot.mouseClick(other, Qt.MouseButton.ForwardButton)
+    qtbot.mouseClick(other, Qt.MouseButton.ForwardButton, Qt.KeyboardModifier.ShiftModifier)
+    assert calls == ["refresh", "refresh"]
+
+
+def test_mouse_side_button_rejects_foreign_target_and_inactive_window(qtbot, shortcut_window):
+    """其他窗口的鼠标目标及失活、最小化的宿主窗口均不能触发命令。"""
+    window, edit, _listing, other, settings, _dispatcher, calls = shortcut_window
+    assert settings.save_binding("view.refresh", "XButton1")
+    unrelated = QWidget()
+    unrelated.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+    qtbot.addWidget(unrelated)
+    unrelated.show()
+    focus(edit)
+    qtbot.mouseClick(unrelated, Qt.MouseButton.BackButton)
+    assert calls == []
+    focus(unrelated)
+    qtbot.mouseClick(other, Qt.MouseButton.BackButton)
+    window.showMinimized()
+    qtbot.mouseClick(other, Qt.MouseButton.BackButton)
+    assert calls == []
+
+
+def test_mouse_side_button_modal_text_keeps_window_actions_blocked(qtbot, shortcut_window):
+    """模态窗口内允许文本侧键操作，不触发宿主窗口及后台列表动作。"""
+    window, _edit, listing, _other, settings, _dispatcher, calls = shortcut_window
+    assert settings.save_binding("edit.select_all", "XButton1")
+    assert settings.save_binding("view.refresh", "XButton2")
+    dialog = QDialog(window)
+    dialog.setModal(True)
+    layout = QVBoxLayout(dialog)
+    text = QLineEdit("modal text")
+    target = QWidget()
+    layout.addWidget(text)
+    layout.addWidget(target)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    focus(text)
+    qtbot.mouseClick(target, Qt.MouseButton.BackButton)
+    assert text.selectedText() == "modal text"
+    qtbot.mouseClick(target, Qt.MouseButton.ForwardButton)
+    qtbot.mouseClick(listing.viewport(), Qt.MouseButton.BackButton)
+    assert calls == []
+    dialog.close()
+
+
+def test_mouse_side_button_ini_capture_takes_priority(qtbot, shortcut_window):
+    """INI 按键录制时管理器不接管侧键，也不改变外部按键令牌。"""
+    from src.ui.widgets.key_capture import KeyCaptureField
+
+    window, _edit, _listing, other, settings, _dispatcher, calls = shortcut_window
+    assert settings.save_binding("view.refresh", "XButton1")
+    field = KeyCaptureField("a", window)
+    window.layout().addWidget(field)
+    field.show()
+    focus(field)
+    field.enter_capture()
+    try:
+        qtbot.mouseClick(other, Qt.MouseButton.BackButton)
+        assert calls == []
+        assert field.token() == "a"
+    finally:
+        qtbot.keyClick(field, Qt.Key.Key_Escape)
 
 
 def test_dispatch_only_observes_current_focus(shortcut_window):
