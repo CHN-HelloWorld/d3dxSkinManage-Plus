@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import zipfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 from src.services.seven_zip import open_7z
 from src.utils import fs
 from src.utils.constants import ARCHIVE_EXTENSIONS, META_DIR
+from src.utils.i18n import t as tr
 from src.utils.logger import logger
 
 # 可选依赖
@@ -128,7 +130,6 @@ class ArchiveService:
         """
         archive = Path(archive_path)
         dest = Path(dest_dir)
-        fs.ensure_dir(dest)
 
         suffix = archive.suffix.lower()
 
@@ -168,13 +169,84 @@ class ArchiveService:
             raise _ExtractCancelled()
 
     @staticmethod
+    def _safe_member_name(name: str) -> str:
+        """统一两种路径分隔符，拒绝绝对路径、父目录及 Windows 路径别名。"""
+        normalized = name.replace("\\", "/")
+        parts = [part for part in normalized.split("/") if part and part != "."]
+        if (
+            not parts
+            or normalized.startswith("/")
+            or PureWindowsPath(normalized).drive
+            or any(part == ".." or ":" in part or "\x00" in part or part.rstrip(" .") != part for part in parts)
+        ):
+            raise ValueError(tr("不安全的归档路径：{path}", path=name))
+        return "/".join(parts)
+
+    @staticmethod
+    def _safe_output_path(target: Path, name: str) -> Path:
+        """写盘前解析已有符号链接及连接点，确保目标根与成员路径均未越界。"""
+        output = target / ArchiveService._safe_member_name(name)
+        root = target.absolute()
+        try:
+            if root.resolve() != root:
+                raise ValueError
+            output.resolve().relative_to(root)
+        except (OSError, RuntimeError, ValueError) as error:
+            raise ValueError(tr("不安全的归档路径：{path}", path=name)) from error
+        return output
+
+    def _validate_zip_members(self, infos, target: Path) -> None:
+        """整包预检 ZIP 路径与 Unix 链接标记，避免先写安全成员再发现危险成员。"""
+        for info in infos:
+            self._safe_output_path(target, info.filename)
+            if stat.S_ISLNK(info.external_attr >> 16):
+                raise ValueError(tr("不支持归档链接：{path}", path=info.filename))
+
+    def _validate_7z_members(self, reader, target: Path | None = None) -> None:
+        """预检原始成员、链接及重复成员生成的名称；临时目录创建前先检查元数据。"""
+        duplicates: dict[str, int] = {}
+        for info in reader.files:
+            if target is None:
+                self._safe_member_name(info.filename)
+            else:
+                self._safe_output_path(target, info.filename)
+            if info.is_symlink or info.is_junction:
+                raise ValueError(tr("不支持归档链接：{path}", path=info.filename))
+            if info.filename in duplicates:
+                output_name = f"{info.filename}_{duplicates[info.filename]}"
+                duplicates[info.filename] += 1
+                if target is not None:
+                    self._safe_output_path(target, output_name)
+            else:
+                duplicates[info.filename] = 0
+
+    @staticmethod
+    def _rar_is_link(info, kind: str) -> bool:
+        """拒绝 RAR 符号链接及目录连接，保留仅指向同包文件的类型 4、5 引用。"""
+        if kind == "cffi":
+            header = info._header.headerDataEx
+            redirection = getattr(header, "RedirType", 0)
+            mode = getattr(header, "FileAttr", getattr(info._header, "FileAttr", 0))
+            return redirection not in (0, 4, 5) or (getattr(info, "create_system", None) == 3 and stat.S_ISLNK(mode))
+        is_link = getattr(info, "is_symlink", False)
+        redirection = getattr(info, "file_redir", None)
+        return bool(is_link() if callable(is_link) else is_link) or bool(redirection and redirection[0] not in (4, 5))
+
+    def _validate_rar_members(self, reader, kind: str, target: Path) -> None:
+        """写盘前检查全部 RAR 成员及复制引用，目录成员的重定向也不得被跳过。"""
+        for info in reader.infolist():
+            self._safe_output_path(target, info.filename)
+            if self._rar_is_link(info, kind):
+                raise ValueError(tr("不支持归档链接：{path}", path=info.filename))
+            if not self._rar_is_dir(info, kind):
+                self._rar_resolve_member(reader, kind, info)
+
+    @staticmethod
     def _single_top_directory(entries) -> str | None:
         """根据成员类型判断解压根，避免将单个根文件当作目录。"""
         tops: set[str] = set()
         for name, is_directory in entries:
-            normalized = name.replace("\\", "/").rstrip("/")
-            if not normalized:
-                continue
+            normalized = ArchiveService._safe_member_name(name)
             first, separator, _rest = normalized.partition("/")
             if not first or (not separator and not is_directory):
                 return None
@@ -190,7 +262,7 @@ class ArchiveService:
         should_cancel=None,
     ) -> Path | None:
         """解压 ZIP（逐数据块上报/暂停，避免大文件在暂停后继续写盘）。"""
-        extract_folder = dest / archive.stem
+        extract_folder = self._safe_output_path(dest, archive.stem)
         if extract_folder.exists():
             extract_folder = self._get_unique_path(extract_folder)
 
@@ -198,23 +270,15 @@ class ArchiveService:
             infos = zf.infolist()
             top = self._single_top_directory((info.filename, info.is_dir()) for info in infos)
             target = dest if top else extract_folder
-            if not top:
-                fs.ensure_dir(extract_folder)
+            self._validate_zip_members(infos, target)
+            fs.ensure_dir(target)
 
             total_bytes = max(1, sum(max(0, info.file_size) for info in infos))
             done_bytes = 0
-            target_root = os.path.abspath(str(target))
             self._emit_progress(progress_cb, 0.02)
             for info in infos:
                 self._check_extract_continue(checkpoint, should_cancel)
-                rel = info.filename.replace("\\", "/")
-                outp = target / rel
-                try:
-                    if os.path.commonpath([target_root, os.path.abspath(str(outp))]) != target_root:
-                        logger.warning("跳过越界 ZIP 条目: %s", info.filename)
-                        continue
-                except ValueError:
-                    continue
+                outp = self._safe_output_path(target, info.filename)
                 if info.is_dir():
                     fs.ensure_dir(outp)
                     continue
@@ -246,15 +310,15 @@ class ArchiveService:
             logger.error("py7zr 未安装，无法解压 .7z 文件")
             return None
 
-        extract_folder = dest / archive.stem
+        extract_folder = self._safe_output_path(dest, archive.stem)
         if extract_folder.exists():
             extract_folder = self._get_unique_path(extract_folder)
 
         with open_7z(archive) as sz:
             top = self._single_top_directory((info.filename, info.is_directory) for info in sz.list())
             target = dest if top else extract_folder
-            if not top:
-                fs.ensure_dir(extract_folder)
+            self._validate_7z_members(sz, target)
+            fs.ensure_dir(target)
 
             self._check_extract_continue(checkpoint, should_cancel)
             self._emit_progress(progress_cb, 0.05)
@@ -353,7 +417,7 @@ class ArchiveService:
             )
             return None
 
-        extract_folder = dest / archive.stem
+        extract_folder = self._safe_output_path(dest, archive.stem)
         if extract_folder.exists():
             extract_folder = self._get_unique_path(extract_folder)
 
@@ -363,6 +427,8 @@ class ArchiveService:
 
         # cffi 目录项不带尾斜杠，必须按 infolist 的目录标记区分根文件。
         top = self._single_top_directory((info.filename, self._rar_is_dir(info, kind)) for info in rf.infolist())
+        target = dest if top else extract_folder
+        self._validate_rar_members(rf, kind, target)
 
         # 粗粒度进度：rar 两后端 extractall 均不逐条回调 → 只报起止（0.05→0.95）。
         self._emit_progress(progress_cb, 0.05)
@@ -370,7 +436,6 @@ class ArchiveService:
             self._rar_extract_all(rf, kind, dest, progress_cb, checkpoint, should_cancel)
             self._emit_progress(progress_cb, 0.95)
             return dest / top
-        fs.ensure_dir(extract_folder)
         self._rar_extract_all(rf, kind, extract_folder, progress_cb, checkpoint, should_cancel)
         self._emit_progress(progress_cb, 0.95)
         return extract_folder
@@ -404,9 +469,74 @@ class ArchiveService:
         return info.is_dir() if kind == "cffi" else info.isdir()
 
     @staticmethod
+    def _rar_crc32(info, kind: str) -> int | None:
+        """按 RAR 校验类型判断 CRC 是否可用，保留有效的零值。
+
+        随包引擎的 HashType 为 1 时记录 CRC-32，其他类型没有可用于内容指纹的 CRC。
+        rarfile 已将未记录的 CRC 表示为 None。
+        """
+        if kind == "cffi" and info._header.headerDataEx.HashType != 1:
+            return None
+        return getattr(info, "CRC", None)
+
+    @staticmethod
     def _rar_file_names(rf, kind: str) -> list[str]:
         """RAR 内文件清单（排除目录项）。cffi 的目录项不带尾斜杠，故统一走 infolist 过滤。"""
         return [it.filename for it in rf.infolist() if not ArchiveService._rar_is_dir(it, kind)]
+
+    @staticmethod
+    def _rar_resolve_member(rf, kind: str, info):
+        """将文件复制或硬链接引用解析为归档内的真实文件成员。
+
+        随包引擎未填充引用目标名，使用 rarfile 的纯元数据解析补齐，仍由随包引擎读取内容。
+        引用链不得循环，不接受符号链接或目录连接，也不访问归档外的文件。
+        """
+        ArchiveService._safe_member_name(info.filename)
+        if ArchiveService._rar_is_link(info, kind):
+            raise ValueError(tr("不支持归档链接：{path}", path=info.filename))
+        if kind == "cffi":
+            redir_type = getattr(info._header.headerDataEx, "RedirType", 0)
+            if not redir_type:
+                return info
+            if redir_type not in (4, 5):
+                raise ValueError(f"Unsupported RAR redirection: {info.filename}")
+            if not RARFILE_AVAILABLE:
+                raise ValueError("RAR file references require rarfile metadata support")
+            with rarfile.RarFile(rf.filename) as metadata:
+                resolved = ArchiveService._rar_resolve_member(
+                    metadata, "rarfile", metadata.getinfo(info.filename.replace("\\", "/"))
+                )
+            by_name = {member.filename.replace("\\", "/"): member for member in rf.infolist()}
+            resolved = by_name[resolved.filename.replace("\\", "/")]
+        else:
+            visited: set[str] = set()
+            resolved = info
+            while getattr(resolved, "file_redir", None):
+                if resolved.filename in visited:
+                    raise ValueError(f"Cyclic RAR file reference: {resolved.filename}")
+                visited.add(resolved.filename)
+                redir_type, _flags, target = resolved.file_redir
+                if redir_type not in (4, 5):
+                    raise ValueError(f"Unsupported RAR redirection: {resolved.filename}")
+                ArchiveService._safe_member_name(target)
+                resolved = rf.getinfo(target)
+                ArchiveService._safe_member_name(resolved.filename)
+                if ArchiveService._rar_is_link(resolved, kind):
+                    raise ValueError(tr("不支持归档链接：{path}", path=resolved.filename))
+        if ArchiveService._rar_is_dir(resolved, kind):
+            raise ValueError(f"RAR file reference points to a directory: {info.filename}")
+        return resolved
+
+    @staticmethod
+    def _rar_read_member(rf, kind: str, name: str) -> bytes:
+        """读取成员的真实内容并校验长度，防止文件引用被误读取为空字节。"""
+        by_name = {member.filename.replace("\\", "/"): member for member in rf.infolist()}
+        info = by_name[name.replace("\\", "/")]
+        resolved = ArchiveService._rar_resolve_member(rf, kind, info)
+        data = rf.read(resolved.filename)
+        if len(data) != resolved.file_size:
+            raise ValueError(f"Incomplete RAR member: {name}")
+        return data
 
     def _rar_extract_all(
         self,
@@ -419,30 +549,25 @@ class ArchiveService:
     ) -> None:
         """将 RAR 内容解压到目标目录。
 
-        rarfile 使用整体解压接口，unrar.cffi 逐成员读取并写入；成员路径须通过目录范围校验。
+        两种后端均逐成员读取并写入；全部成员须在首次写盘前通过路径与链接预检。
         """
-        target_root = target.resolve()
+        self._validate_rar_members(rf, kind, target)
+        fs.ensure_dir(target)
         infos = list(rf.infolist())
         files = [it for it in infos if not self._rar_is_dir(it, kind)]
         total = max(1, len(files))
         done = 0
         for it in infos:
             self._check_extract_continue(checkpoint, should_cancel)
-            rel = it.filename.replace("\\", "/")
-            outp = target / rel
-            # 防目录穿越：解析后必须仍落在 target 内
-            try:
-                outp.resolve().relative_to(target_root)
-            except ValueError:
-                logger.warning("跳过越界 RAR 条目: %s", it.filename)
-                continue
+            outp = self._safe_output_path(target, it.filename)
             if self._rar_is_dir(it, kind):
                 fs.ensure_dir(outp)
                 continue
             fs.ensure_dir(outp.parent)
             with open(fs.native_path(outp), "wb") as out_fh:
                 if kind == "rarfile":
-                    with rf.open(it) as src_fh:
+                    resolved = self._rar_resolve_member(rf, kind, it)
+                    with rf.open(resolved) as src_fh:
                         while True:
                             self._check_extract_continue(checkpoint, should_cancel)
                             chunk = src_fh.read(4 * 1024 * 1024)
@@ -451,7 +576,7 @@ class ArchiveService:
                             out_fh.write(chunk)
                 else:
                     # unrar.cffi 当前只提供整成员 read；至少在成员边界严格暂停。
-                    out_fh.write(rf.read(it.filename))
+                    out_fh.write(self._rar_read_member(rf, kind, it.filename))
             done += 1
             self._emit_progress(progress_cb, 0.05 + 0.90 * done / total)
 
@@ -771,10 +896,11 @@ class ArchiveService:
         if not PY7ZR_AVAILABLE:
             return False
         archive = Path(archive_path)
-        arcname = arcname.replace("\\", "/")
         try:
+            arcname = self._safe_member_name(arcname)
             # 探测是否已存在同名成员，决定走「追加快路径」还是回退外置 sidecar
             with open_7z(archive) as sz:
+                self._validate_7z_members(sz)
                 existing = set(sz.getnames())
             if arcname in existing:
                 if not allow_rewrite:
@@ -798,11 +924,16 @@ class ArchiveService:
             return False
         from src.utils.temp_dirs import mkdtemp
 
-        tmpdir = Path(mkdtemp(prefix="7z_inject_"))
+        tmpdir = None
+        tmp_out = None
         try:
+            arcname = self._safe_member_name(arcname)
             with open_7z(archive) as sz:
+                self._validate_7z_members(sz)
+                tmpdir = Path(mkdtemp(prefix="7z_inject_"))
+                self._validate_7z_members(sz, tmpdir)
                 sz.extractall(path=str(tmpdir))
-            target = tmpdir / arcname
+            target = self._safe_output_path(tmpdir, arcname)
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(data)
             tmp_out = archive.with_name(archive.stem + "_inject_tmp.7z")
@@ -817,12 +948,14 @@ class ArchiveService:
         except Exception as e:
             logger.error("7z 注入成员失败 (%s): %s", arcname, e)
             try:
-                (archive.with_name(archive.stem + "_inject_tmp.7z")).unlink(missing_ok=True)
+                if tmp_out is not None:
+                    tmp_out.unlink(missing_ok=True)
             except OSError:
                 pass
             return False
         finally:
-            shutil.rmtree(str(tmpdir), ignore_errors=True)
+            if tmpdir is not None:
+                shutil.rmtree(str(tmpdir), ignore_errors=True)
 
     def remove_members_7z(self, archive_path: str | Path, pred) -> bool:
         """从 .7z 移除满足 ``pred(name)`` 的成员（整包重压实现）。无匹配则免重压直接成功。"""
@@ -831,13 +964,15 @@ class ArchiveService:
         archive = Path(archive_path)
         from src.utils.temp_dirs import mkdtemp
 
-        tmpdir = Path(mkdtemp(prefix="7z_strip_"))
+        tmpdir = None
         try:
             with open_7z(archive) as sz:
+                self._validate_7z_members(sz)
                 names = [n for n in sz.getnames()]
-            if not any(pred(n) for n in names):
-                return True
-            with open_7z(archive) as sz:
+                if not any(pred(n) for n in names):
+                    return True
+                tmpdir = Path(mkdtemp(prefix="7z_strip_"))
+                self._validate_7z_members(sz, tmpdir)
                 sz.extractall(path=str(tmpdir))
             tmp_out = archive.with_name(archive.stem + "_strip_tmp.7z")
             tmp_out.unlink(missing_ok=True)
@@ -856,7 +991,8 @@ class ArchiveService:
             logger.error("7z 移除成员失败: %s", e)
             return False
         finally:
-            shutil.rmtree(str(tmpdir), ignore_errors=True)
+            if tmpdir is not None:
+                shutil.rmtree(str(tmpdir), ignore_errors=True)
 
     def inject_member_rar(self, archive_path: str | Path, arcname: str, data: bytes) -> bool:
         """向已存在的 .rar 追加/覆盖成员（WinRAR ``rar a`` + ``-ap<内部路径前缀>``）。
@@ -868,7 +1004,11 @@ class ArchiveService:
         if not rar_exe:
             return False
         archive = Path(archive_path)
-        arcname = arcname.replace("\\", "/")
+        try:
+            arcname = self._safe_member_name(arcname)
+        except ValueError as error:
+            logger.error("RAR 注入成员异常: %s", error)
+            return False
         # 拆出「归档内目录前缀」与「文件名」：rar 用 -ap 指定前缀、参数只给要加的本地文件
         if "/" in arcname:
             prefix, fname = arcname.rsplit("/", 1)
@@ -882,7 +1022,7 @@ class ArchiveService:
         try:
             # 先剔除旧的同路径成员（覆盖语义），再加新的
             self.remove_members_rar(archive, lambda n: n.replace("\\", "/") == arcname)
-            local = tmpdir / fname
+            local = self._safe_output_path(tmpdir, fname)
             local.write_bytes(data)
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
             cmd = [rar_exe, "a", "-o+", "-idq", "-ep"]
@@ -983,9 +1123,6 @@ class ArchiveService:
                 return None
             size = int(size or 0)
             crc = int(crc) & 0xFFFFFFFF
-            # CRC32 为 0 且有内容 → 后端没记 CRC（空文件的 CRC32 天然是 0，是合法值）
-            if crc == 0 and size > 0:
-                return None
             return rel.replace("\\", "/"), size, crc
 
         try:
@@ -1005,11 +1142,12 @@ class ArchiveService:
                 rf, kind = self._rar_open(archive)
                 if rf is None:
                     return None
-                raw = [
-                    (i.filename, i.file_size, getattr(i, "CRC", None))
-                    for i in rf.infolist()
-                    if not self._rar_is_dir(i, kind)
-                ]
+                raw = []
+                for info in rf.infolist():
+                    if self._rar_is_dir(info, kind):
+                        continue
+                    resolved = self._rar_resolve_member(rf, kind, info)
+                    raw.append((info.filename, resolved.file_size, self._rar_crc32(resolved, kind)))
             else:
                 return None
         except Exception as e:
@@ -1054,14 +1192,16 @@ class ArchiveService:
                 from src.utils.temp_dirs import mkdtemp
 
                 with open_7z(archive) as sz:
+                    self._validate_7z_members(sz)
                     names = [n for n in sz.getnames() if _is_ini(n)]
                     if not names:
                         return {}
                     tmpdir = Path(mkdtemp(prefix="7z_inis_"))
                     try:
+                        self._validate_7z_members(sz, tmpdir)
                         sz.extract(path=str(tmpdir), targets=names)
                         for n in names:
-                            fp2 = tmpdir / n.replace("\\", "/")
+                            fp2 = self._safe_output_path(tmpdir, n)
                             if fp2.is_file():
                                 result[n] = fp2.read_bytes()
                     finally:
@@ -1075,7 +1215,7 @@ class ArchiveService:
                 for n in self._rar_file_names(rf, kind):
                     if _is_ini(n):
                         try:
-                            result[n] = rf.read(n)
+                            result[n] = self._rar_read_member(rf, kind, n)
                         except Exception:
                             pass
         except Exception as e:
@@ -1096,6 +1236,7 @@ class ArchiveService:
         suffix = archive.suffix.lower()
 
         try:
+            self._safe_member_name(internal_path)
             if suffix == ".zip":
                 with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
                     return zf.read(internal_path)
@@ -1105,21 +1246,23 @@ class ArchiveService:
                 # 使用 py7zr 的 extract 接口提取单个成员到临时目录，再读取其内容。
                 from src.utils.temp_dirs import mkdtemp
 
-                tmpdir = Path(mkdtemp(prefix="7z_read_"))
-                try:
-                    with open_7z(archive) as sz:
+                with open_7z(archive) as sz:
+                    self._validate_7z_members(sz)
+                    tmpdir = Path(mkdtemp(prefix="7z_read_"))
+                    try:
+                        self._validate_7z_members(sz, tmpdir)
                         sz.extract(path=str(tmpdir), targets=[internal_path])
-                    out = tmpdir / internal_path.replace("\\", "/")
-                    return out.read_bytes() if out.is_file() else None
-                finally:
-                    shutil.rmtree(str(tmpdir), ignore_errors=True)
+                        out = self._safe_output_path(tmpdir, internal_path)
+                        return out.read_bytes() if out.is_file() else None
+                    finally:
+                        shutil.rmtree(str(tmpdir), ignore_errors=True)
             elif suffix == ".rar":
                 if not RAR_AVAILABLE:
                     return None
-                rf, _kind = self._rar_open(archive)
+                rf, kind = self._rar_open(archive)
                 if rf is None:
                     return None
-                return rf.read(internal_path)
+                return self._rar_read_member(rf, kind, internal_path)
             else:
                 return None
         except Exception as e:
@@ -1139,39 +1282,53 @@ class ArchiveService:
         """
         archive = Path(archive_path)
         dest = Path(dest_dir)
-        fs.ensure_dir(dest)
         suffix = archive.suffix.lower()
         extracted: list[Path] = []
 
         try:
+            for name in internal_paths:
+                self._safe_output_path(dest, name)
             if suffix == ".zip":
                 with zipfile.ZipFile(fs.native_path(archive), "r") as zf:
+                    self._validate_zip_members(zf.infolist(), dest)
+                    fs.ensure_dir(dest)
                     for name in internal_paths:
                         try:
-                            zf.extract(name, fs.native_path(dest))
-                            extracted.append(dest / name)
+                            info = zf.getinfo(name)
                         except KeyError:
-                            pass
+                            continue
+                        output = self._safe_output_path(dest, name)
+                        if info.is_dir():
+                            fs.ensure_dir(output)
+                        else:
+                            fs.ensure_dir(output.parent)
+                            with zf.open(info) as source, open(fs.native_path(output), "wb") as target:
+                                shutil.copyfileobj(source, target)
+                        extracted.append(output)
             elif suffix == ".7z":
                 if not PY7ZR_AVAILABLE:
                     return []
                 with open_7z(archive) as sz:
+                    self._validate_7z_members(sz, dest)
+                    fs.ensure_dir(dest)
                     sz.extract(path=fs.native_path(dest), targets=internal_paths)
                     for name in internal_paths:
-                        p = dest / name
+                        p = self._safe_output_path(dest, name)
                         if fs.exists(p):
                             extracted.append(p)
             elif suffix == ".rar":
                 if not RAR_AVAILABLE:
                     return []
-                rf, _kind = self._rar_open(archive)
+                rf, kind = self._rar_open(archive)
                 if rf is None:
                     return []
+                self._validate_rar_members(rf, kind, dest)
+                fs.ensure_dir(dest)
                 # 两后端都提供 read，用 read+写入磁盘统一实现（unrar.cffi 无 extract）
                 for name in internal_paths:
                     try:
-                        data = rf.read(name)
-                        outp = dest / name.replace("\\", "/")
+                        data = self._rar_read_member(rf, kind, name)
+                        outp = self._safe_output_path(dest, name)
                         fs.ensure_dir(outp.parent)
                         with open(fs.native_path(outp), "wb") as f:
                             f.write(data)

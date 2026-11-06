@@ -2093,6 +2093,8 @@
     "按年龄分级降序": "Rating: descending",
     "按Mod启用状态降序": "Enabled Mods first",
     "排序方式": "Sort order",
+    "不安全的归档路径：{path}": "Unsafe archive path: {path}",
+    "不支持归档链接：{path}": "Unsupported archive link: {path}",
     "清除标签": "Clear tags",
     "清除全部条件": "Clear all filters",
     "选择项目查看详情": "Select an item to view details",

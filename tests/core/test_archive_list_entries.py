@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -80,28 +81,38 @@ def test_list_entries_uses_forward_slashes(tmp_path):
     assert all("\\" not in rel for rel, _s, _c in entries)
 
 
-def test_list_entries_returns_none_when_crc_unavailable(tmp_path):
-    """CRC 不可用（如 RAR5 用 BLAKE2sp）→ 整包返回 None，交给昂贵途径。
-
-    构造法：把真 zip 里的 CRC 字段字节抹零（本地头 + 中心目录各一份），
-    ``zipfile`` 读 infolist 时便报告 ``CRC == 0`` 而 ``file_size > 0``。
-    """
-    import struct
-
-    archive = tmp_path / "nocrc.zip"
-    payload = b"\x01\x02\x03\x04\x05"
+def test_list_entries_accepts_zero_crc_for_nonempty_member(tmp_path):
+    """非空成员的有效 CRC 可以为零，不能据此触发内容解码。"""
+    archive = tmp_path / "zero_crc.zip"
+    payload = bytes.fromhex("9d0ad96d")
+    assert zipfile.crc32(payload) == 0
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("M/tex.dds", payload)
 
-    raw = archive.read_bytes()
-    crc_bytes = struct.pack("<I", zipfile.crc32(payload) & 0xFFFFFFFF)
-    assert raw.count(crc_bytes) == 2, "预期本地头与中心目录各含一份 CRC"
-    archive.write_bytes(raw.replace(crc_bytes, b"\x00\x00\x00\x00"))
+    assert ArchiveService().list_entries(archive) == [("M/tex.dds", len(payload), 0)]
 
-    infos = zipfile.ZipFile(archive).infolist()
-    assert infos[0].CRC == 0 and infos[0].file_size == len(payload), "构造未生效"
 
-    assert ArchiveService().list_entries(archive) is None
+@pytest.mark.parametrize("hash_type, expected", [(0, None), (1, [("M/tex.dds", 4, 0)]), (2, None)])
+def test_rar_crc_availability_uses_header_hash_type(tmp_path, monkeypatch, hash_type, expected):
+    """随包 RAR 引擎须按校验类型区分有效零 CRC 与未记录 CRC。"""
+    import src.services.archive as archive_module
+
+    class Member:
+        """提供随包 RAR 引擎的成员元数据协议。"""
+
+        filename = "M\\tex.dds"
+        file_size = 4
+        CRC = 0
+        _header = SimpleNamespace(headerDataEx=SimpleNamespace(HashType=hash_type))
+
+        def is_dir(self):
+            """当前样本为普通文件。"""
+            return False
+
+    reader = SimpleNamespace(infolist=lambda: [Member()])
+    monkeypatch.setattr(archive_module, "RAR_AVAILABLE", True)
+    monkeypatch.setattr(ArchiveService, "_rar_open", staticmethod(lambda path: (reader, "cffi")))
+    assert ArchiveService().list_entries(tmp_path / "sample.rar") == expected
 
 
 def test_list_entries_returns_none_when_7z_reports_no_crc(tmp_path, monkeypatch):

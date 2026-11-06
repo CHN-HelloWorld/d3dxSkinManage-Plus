@@ -98,25 +98,27 @@ def test_falls_back_when_backend_reports_no_crc(tmp_path, monkeypatch):
     assert Mod.compute_sha1(str(archive)) == baseline, "缺 CRC 回退后摘要变了 → 回退路径用了另一个公式"
 
 
-def test_zero_crc_on_nonempty_member_is_treated_as_unavailable(tmp_path):
-    import struct
-
-    payload = b"\x01\x02\x03\x04\x05"
-    archive = tmp_path / "nocrc.zip"
+def test_zero_crc_on_nonempty_member_keeps_metadata_fast_path(tmp_path, monkeypatch):
+    """有效零 CRC 的归档和目录保持相同身份，且不进入逐字节回退。"""
+    payload = bytes.fromhex("9d0ad96d")
+    archive = tmp_path / "zero_crc.zip"
     with zipfile.ZipFile(archive, "w") as zf:
         zf.writestr("M/tex.dds", payload)
         zf.writestr("M/empty.txt", b"")
-    raw = archive.read_bytes()
-    archive.write_bytes(raw.replace(struct.pack("<I", zipfile.crc32(payload) & 0xFFFFFFFF), b"\x00\x00\x00\x00"))
 
-    assert ArchiveService().list_entries(archive) is None
+    folder = tmp_path / "M"
+    folder.mkdir()
+    (folder / "tex.dds").write_bytes(payload)
+    (folder / "empty.txt").write_bytes(b"")
+    expected = Mod.compute_sha1(folder)
 
-    # 空文件单独成包时 CRC 0 合法 → 廉价途径照常可用
-    only_empty = tmp_path / "onlyempty.zip"
-    with zipfile.ZipFile(only_empty, "w") as zf:
-        zf.writestr("M/empty.txt", b"")
-    entries = ArchiveService().list_entries(only_empty)
-    assert entries == [("M/empty.txt", 0, 0)]
+    def reject_fallback(*args, **kwargs):
+        """禁止有效零 CRC 的成员重新读取实际内容。"""
+        raise AssertionError("unexpected byte fallback")
+
+    monkeypatch.setattr(Mod, "_archive_entries_by_bytes", staticmethod(reject_fallback))
+    assert ArchiveService().list_entries(archive) == [("M/tex.dds", len(payload), 0), ("M/empty.txt", 0, 0)]
+    assert Mod.compute_sha1(archive) == expected
 
 
 # ③ 内容变了摘要必须变
