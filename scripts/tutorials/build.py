@@ -108,7 +108,7 @@ def assemble_manual(language: str = "zh-CN") -> str:
             raise FileNotFoundError(f"缺少章节：{path}")
         parts.append(rebase_markdown_links(path.read_text(encoding="utf-8"), path, destination.parent).strip())
     text = "\n\n---\n\n".join(parts) + "\n"
-    destination.write_text(text, encoding="utf-8")
+    destination.write_text(text, encoding="utf-8", newline="\n")
     print(f"  [拼装] {destination.name}  {len(text)} 字符")
     return text
 
@@ -1033,7 +1033,7 @@ def main() -> int:
         )
         for path, document in outputs:
             path = output_dir / path.name
-            path.write_text(document, encoding="utf-8")
+            path.write_text(document, encoding="utf-8", newline="\n")
             images = len(re.findall(r'src="data:image', document))
             print(f"  [构建] {path.name}  {path.stat().st_size / 1024 / 1024:.2f} MiB，内嵌 {images} 张无损图")
     return 0

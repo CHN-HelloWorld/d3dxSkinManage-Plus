@@ -49,7 +49,7 @@ plugins/com.example.mod-summary/
 └── README.md
 ```
 
-On the application's **Plugins** page, click **Open plugins folder** and confirm that this folder is present. Click **Rescan**, enable the plugin, and read the initial trust and permission prompt. Run **Show mod summary** from Tools or **Plugin commands** in the navigation area. It shows the total and enabled Mod counts for the current game. If no game is selected, it asks you to select one first.
+On the application's **Plugins** page, click **Open plugins folder** and confirm that this folder is present. Click **Rescan**, enable the plugin, and read the initial trust and permission prompt. Run **Show mod summary** from the plugin details' **Action** section or **Plugin commands** in the navigation area. It shows the total and enabled Mod counts for the current game. If no game is selected, it asks you to select one first.
 
 The default shortcut is `Ctrl+Alt+M`, which you can change in **Settings → Shortcuts**. A conflict does not overwrite an existing binding. The command's returned Python dictionary is available to its caller; the plugin displays visible feedback itself by calling `notify()`.
 
@@ -72,13 +72,10 @@ The scaffolding tool separates lifecycle code and command logic into `entry.py` 
   "description": "Mod summary plugin",
   "entry": "entry.py",
   "files": ["entry.py"],
-  "permissions": ["mods:read", "ui:tools-page", "ui:shortcuts"],
+  "permissions": ["mods:read", "ui:shortcuts"],
   "contributes": {
     "commands": [
       {"id": "com.example.mod-summary.summary", "title": "Show mod summary"}
-    ],
-    "toolsPage": [
-      {"command": "com.example.mod-summary.summary", "group": "Plugins"}
     ],
     "shortcuts": [
       {"command": "com.example.mod-summary.summary", "default": "Ctrl+Alt+M", "context": "window"}
@@ -263,14 +260,16 @@ def observe_game(ctx, callback):
 
 | Contribution | Location | Description |
 |--------|----------|------|
-| `commands` | — | Executable unit for contributions; implement with `ctx.commands.register(id, handler)` |
-| `toolsPage` | Buttons in the Tools page's **Plugins** group | Clicking executes `command` |
+| `commands` | **Action** section in the plugin details | Implement with `ctx.commands.register(id, handler)`; no additional UI permission required |
+| `toolsPage` | Buttons in the Tools page's **Plugin tools** group | Optional general-purpose entry point; clicking executes `command`; requires `ui:tools-page` |
 | `menus."mod-context"` | Mod card context menu | Receives the `mod_id` keyword argument; `when` supports `modSelected` / `always` |
 | `menus."character-context"` | Character card context menu | Receives the `node_id` keyword argument; `when` supports `characterSelected` / `always` |
 | Global commands | **Plugin commands** button in navigation | All plugin `commands` appear in this panel automatically, with no additional declaration; clicking executes them directly |
 | `settings` | Plugin details | Types `bool` / `int` / `float` / `str`, with range, length, and enum constraints; use `ctx.configuration` |
 | `views` | Inside the plugin's card on the Plugins page | Supply a QWidget factory with `ctx.ui.register_view(view_id, factory)` |
 | `shortcuts` | Plugin group in **Settings → Shortcuts** | Declare default keys and focus context for commands; requires `ui:shortcuts` |
+
+Commands appear in their owning plugin's details by default and can be clicked while **Ready** to activate the plugin on demand. Keep specialized maintenance, migration, or configuration actions in plugin details or dedicated views without declaring `toolsPage`. Add a Tools entry only for general-purpose actions that benefit from being available alongside other tools.
 
 Command IDs must start with the complete plugin ID followed by `.`, such as `com.example.mod-summary.summary`. A plugin can update its own handlers but cannot overwrite another plugin's commands. Menus, Tools buttons, and shortcuts must reference commands declared by the same plugin. Every declared command must be registered before `activate()` returns; a missing handler causes activation to fail and all contributions to be rolled back.
 
@@ -654,7 +653,7 @@ Open [entry.py](../../../plugins/example.preset-cycle/entry.py) and [plugin.json
 
 The example cycles through presets in the host's list order, skipping the default preset unless `settings.include_default` is enabled in plugin details. If the current preset is not among the candidates, moving forward selects the first candidate and moving backward selects the last. If there is no other candidate, it displays a message instead of reapplying the current, sole candidate.
 
-The `.previous` and `.next` commands serve the Tools buttons, command panel, and shortcuts. Their defaults are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the application. The plugin requests `mods:write` and submits switching through `ctx.presets.apply()`. Repeated clicks return the running task instead of queuing multiple switches.
+The `.previous` and `.next` commands serve the plugin details' action buttons, command panel, and shortcuts. Their defaults are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the application. The plugin requests `mods:write` and submits switching through `ctx.presets.apply()`. Repeated clicks return the running task instead of queuing multiple switches.
 
 Practice: prepare two different combinations, switch forward and backward, and watch the host task panel. Then verify failure feedback using a test game without a deployment folder. Disable the plugin while a task is unfinished and confirm that the host handles cancellation and old callbacks no longer show notifications. Notice that `_switch()` stores the task before registering its completion callback, because an already completed task invokes the callback immediately.
 
@@ -727,7 +726,7 @@ Options closely tied to page operations can be placed directly on the page and s
 
 1. Edit plugin code, the manifest, or a language pack, save, and click **Reload** on the plugin card. Use **Rescan** when adding a plugin or changing its folder layout.
 2. Check that the plugin remains enabled. New permissions require confirmation. If parsing, scanning, or activation fails, inspect the error before reloading.
-3. Run commands from their actual entry points: check the Tools button, global command panel, Mod context menu, and shortcut separately. Context-menu commands also appear in the global panel, so handle missing `mod_id` / `node_id` arguments.
+3. Run commands from their actual entry points: check the plugin details' action button, global command panel, Mod context menu, and shortcut separately. Check Tools buttons only when `toolsPage` is declared. Context-menu commands also appear in plugin details and the global panel, so handle missing `mod_id` / `node_id` arguments.
 4. Open **Tools → View Logs** and locate records by plugin ID and error time. Use `ctx.logger.info()` for entry and completion information, and `warning()` for recoverable problems. Do not log personal file contents or access credentials.
 5. Disable and enable the plugin again. Check for duplicate menus, events, pages, and leftover windows. Change a setting and reload to confirm that its value can still be read.
 

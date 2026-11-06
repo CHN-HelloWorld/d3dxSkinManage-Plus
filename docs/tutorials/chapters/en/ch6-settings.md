@@ -16,6 +16,8 @@ The page states **Changes apply immediately and are saved automatically**. Switc
 
 This chapter lists the default settings. Screenshots use example settings; check the values and switch positions shown on your device.
 
+**General → Window behavior** provides a close-action dropdown, defaulting to **Exit application**. With **Hide to system tray**, closing the main window leaves the app and background tasks running. Click the tray icon or choose **Show main window** from its context menu to restore it. **Exit application** in that menu still runs the normal unsaved-change and background-task confirmations. If the tray is unavailable, the app closes normally rather than hiding without a recovery entry.
+
 ### 6.2 General → Mod management
 
 | Setting | Default | Description |
@@ -56,6 +58,10 @@ Keep downloads that have not yet been installed until you install them or decide
 ### 6.5 General → Images and cache
 
 This page separates the image memory cache from the disk cache, each with its own limit and cleanup controls.
+
+New temporary directories and preview caches inherit normal parent-directory permissions. App startup does not scan or repair historical directory permissions.
+
+Existing Plus users who cannot access older preview caches or temporary directories can install and enable the separately distributed **Directory Permission Repair** ZIP from the Plugins page. Open its window in the toolbox and click **Start repair**; no tool script is required. The plugin checks application data directories in the background and shows repair counts and failed paths. Files and custom restrictions are kept; the whole disk and other applications' temporary directories are not scanned. Repair runs only when clicked, with manual retries for failures. Disable or uninstall the plugin after success; subsequent app launches and software updates never automatically repeat the repair.
 
 ![Image memory and disk caches](../../images/guide-en/27-图片与缓存.webp)
 
@@ -130,6 +136,8 @@ If playback fails, check that the file still exists, its encoding is supported, 
 ![Shortcut settings](../../images/guide-en/13-快捷键.webp)
 
 Commands are grouped by where they are used. Click the corresponding key binding to record a shortcut, then save it. Combinations of Ctrl / Alt / Shift with one primary key are supported.
+
+Mouse side button 1 (BackButton / XButton1) and side button 2 (ForwardButton / XButton2) can also be recorded, either alone or with Ctrl / Alt / Shift. They use the same conflict checks and focus rules as keyboard shortcuts and only operate within the manager.
 
 When a conflict is found, the app identifies the conflicting command. Confirming replacement may leave the previously assigned command unbound; canceling keeps the original binding. System-reserved combinations cannot be assigned to ordinary commands.
 

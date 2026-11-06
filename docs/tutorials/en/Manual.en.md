@@ -685,6 +685,10 @@ The online page lets you browse by category, search for mods, change the sort or
 
 The category dropdown's filter supports input methods such as Chinese and matches both original category names and their translations in the current language. Text entered while categories are loading remains active when they arrive. Reopening the dropdown starts with an empty filter.
 
+The first dropdown item, **All**, displays the current parent category without requiring a subcategory selection. At the **Mods** level, **All** displays all mods for the current game.
+
+The bottom-right corner of each mod preview shows a date without a caption or icon. It uses the latest update date, falling back to the publication date when no update is recorded. Dates use your local timezone and the `YYYY-MM-DD` format; hover to see the hour and minute. Card height and the bottom-left installation badge remain unchanged.
+
 ![Online browsing with placeholder content](../images/guide-en/24-在线Mod.webp)
 
 *The names, covers, authors, and statistics are tutorial placeholders used to show the browsing controls in the real interface.*
@@ -825,6 +829,8 @@ The page states **Changes apply immediately and are saved automatically**. Switc
 
 This chapter lists the default settings. Screenshots use example settings; check the values and switch positions shown on your device.
 
+**General → Window behavior** provides a close-action dropdown, defaulting to **Exit application**. With **Hide to system tray**, closing the main window leaves the app and background tasks running. Click the tray icon or choose **Show main window** from its context menu to restore it. **Exit application** in that menu still runs the normal unsaved-change and background-task confirmations. If the tray is unavailable, the app closes normally rather than hiding without a recovery entry.
+
 ### 6.2 General → Mod management
 
 | Setting | Default | Description |
@@ -865,6 +871,10 @@ Keep downloads that have not yet been installed until you install them or decide
 ### 6.5 General → Images and cache
 
 This page separates the image memory cache from the disk cache, each with its own limit and cleanup controls.
+
+New temporary directories and preview caches inherit normal parent-directory permissions. App startup does not scan or repair historical directory permissions.
+
+Existing Plus users who cannot access older preview caches or temporary directories can install and enable the separately distributed **Directory Permission Repair** ZIP from the Plugins page. Open its window in the toolbox and click **Start repair**; no tool script is required. The plugin checks application data directories in the background and shows repair counts and failed paths. Files and custom restrictions are kept; the whole disk and other applications' temporary directories are not scanned. Repair runs only when clicked, with manual retries for failures. Disable or uninstall the plugin after success; subsequent app launches and software updates never automatically repeat the repair.
 
 ![Image memory and disk caches](../images/guide-en/27-图片与缓存.webp)
 
@@ -940,6 +950,8 @@ If playback fails, check that the file still exists, its encoding is supported, 
 
 Commands are grouped by where they are used. Click the corresponding key binding to record a shortcut, then save it. Combinations of Ctrl / Alt / Shift with one primary key are supported.
 
+Mouse side button 1 (BackButton / XButton1) and side button 2 (ForwardButton / XButton2) can also be recorded, either alone or with Ctrl / Alt / Shift. They use the same conflict checks and focus rules as keyboard shortcuts and only operate within the manager.
+
 When a conflict is found, the app identifies the conflicting command. Confirming replacement may leave the previously assigned command unbound; canceling keeps the original binding. System-reserved combinations cannot be assigned to ordinary commands.
 
 Shortcuts depend on focus: editing in a text box, working with items in Category Overview, and copying in the presets list each have their own context. The manager does not provide global hotkeys that work in other applications.
@@ -1013,7 +1025,7 @@ If the reset fails, the app keeps the original settings and displays a message. 
 
 ![Category and maintenance tools](../images/guide-en/17-工具箱.webp)
 
-Tools is divided into category organization, maintenance and troubleshooting, and tools contributed by enabled plugins.
+Tools primarily provides category organization, maintenance and troubleshooting. Plugins can explicitly contribute general-purpose tools when needed.
 
 | Entry | Purpose |
 | --- | --- |
@@ -1021,9 +1033,10 @@ Tools is divided into category organization, maintenance and troubleshooting, an
 | Export category preset | Shares the current game's complete category tree, optionally with images |
 | Rebuild Index | Rescans the file library to restore the index |
 | View Logs | Shows runtime records by startup session |
-| Plugin tools | Runs features provided by enabled plugins |
+| Plugin tools (when available) | Runs general-purpose tools explicitly contributed by enabled plugins |
 
 Cache cleanup is under **Settings → General → Images and cache**. Downloaded source package cleanup is under **General → Download data**. To export mods, select the items in Category Overview.
+For Data Migration, Directory Permission Repair, Mod Inventory Export, or Preset Cycling, select the corresponding plugin on the **Plugins** page and use its **Action** section.
 
 ### 7.2 Importing a category preset
 
@@ -1107,7 +1120,7 @@ Plugins are discovered in `plugins/` under the application root by default. If t
 
 After installation, check the plugin's status in the list. Select it to review its author, description, permissions, and source, then enable it as needed. The first trust prompt explains that the plugin runs code inside the app and lists its requested capabilities. Confirm only for sources you trust. New permissions discovered after an update or rescan require confirmation again.
 
-**Ready** means the plugin is already available: its tool buttons, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
+**Ready** means the plugin is already available: its detail-page actions, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
 
 If the status is **Dependency blocked**, expand the details and follow the instructions to install and enable dependency plugins with compatible versions. Confirm trust separately for each dependency. Dependencies are not installed or authorized automatically. After resolving the requirements, reload or enable the original plugin again.
 

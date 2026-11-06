@@ -25,6 +25,10 @@ The online page lets you browse by category, search for mods, change the sort or
 
 The category dropdown's filter supports input methods such as Chinese and matches both original category names and their translations in the current language. Text entered while categories are loading remains active when they arrive. Reopening the dropdown starts with an empty filter.
 
+The first dropdown item, **All**, displays the current parent category without requiring a subcategory selection. At the **Mods** level, **All** displays all mods for the current game.
+
+The bottom-right corner of each mod preview shows a date without a caption or icon. It uses the latest update date, falling back to the publication date when no update is recorded. Dates use your local timezone and the `YYYY-MM-DD` format; hover to see the hour and minute. Card height and the bottom-left installation badge remain unchanged.
+
 ![Online browsing with placeholder content](../../images/guide-en/24-在线Mod.webp)
 
 *The names, covers, authors, and statistics are tutorial placeholders used to show the browsing controls in the real interface.*

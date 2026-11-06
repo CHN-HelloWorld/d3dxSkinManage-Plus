@@ -4,7 +4,7 @@
 
 ![Category and maintenance tools](../../images/guide-en/17-工具箱.webp)
 
-Tools is divided into category organization, maintenance and troubleshooting, and tools contributed by enabled plugins.
+Tools primarily provides category organization, maintenance and troubleshooting. Plugins can explicitly contribute general-purpose tools when needed.
 
 | Entry | Purpose |
 | --- | --- |
@@ -12,9 +12,10 @@ Tools is divided into category organization, maintenance and troubleshooting, an
 | Export category preset | Shares the current game's complete category tree, optionally with images |
 | Rebuild Index | Rescans the file library to restore the index |
 | View Logs | Shows runtime records by startup session |
-| Plugin tools | Runs features provided by enabled plugins |
+| Plugin tools (when available) | Runs general-purpose tools explicitly contributed by enabled plugins |
 
 Cache cleanup is under **Settings → General → Images and cache**. Downloaded source package cleanup is under **General → Download data**. To export mods, select the items in Category Overview.
+For Data Migration, Directory Permission Repair, Mod Inventory Export, or Preset Cycling, select the corresponding plugin on the **Plugins** page and use its **Action** section.
 
 ### 7.2 Importing a category preset
 
@@ -98,7 +99,7 @@ Plugins are discovered in `plugins/` under the application root by default. If t
 
 After installation, check the plugin's status in the list. Select it to review its author, description, permissions, and source, then enable it as needed. The first trust prompt explains that the plugin runs code inside the app and lists its requested capabilities. Confirm only for sources you trust. New permissions discovered after an update or rescan require confirmation again.
 
-**Ready** means the plugin is already available: its tool buttons, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
+**Ready** means the plugin is already available: its detail-page actions, menus, and shortcuts are registered, and it starts automatically when you first run a command or open the corresponding view. Declared settings in its details can also be edited and reset to defaults immediately.
 
 If the status is **Dependency blocked**, expand the details and follow the instructions to install and enable dependency plugins with compatible versions. Confirm trust separately for each dependency. Dependencies are not installed or authorized automatically. After resolving the requirements, reload or enable the original plugin again.
 
