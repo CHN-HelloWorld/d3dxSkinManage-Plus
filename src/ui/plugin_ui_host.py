@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from src.plugin_sdk.disposable import Disposable
 from src.ui import icons, theme
+from src.ui.dialog_chrome import center_dialog, decorate_dialog
 from src.ui.plugin_style import PluginStyleBindings
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
@@ -32,6 +33,16 @@ if TYPE_CHECKING:
     from src.ui.main_window import MainWindow
 
 _DEFAULT_PAGE_ICON = "navigation/plugins"
+
+
+class _PluginDialog(QDialog):
+    """在每次显示前相对所属应用窗口居中，保留插件与用户设定的尺寸。"""
+
+    def setVisible(self, visible: bool) -> None:
+        """在显示与入场动画之前确定目标位置，重复显示时使用主窗口的最新几何。"""
+        if visible and not self.isVisible():
+            center_dialog(self)
+        super().setVisible(visible)
 
 
 class PluginUIHost:
@@ -118,13 +129,13 @@ class PluginUIHost:
         return path
 
     def show_dialog(self, plugin_id: str, widget: QWidget, title: str, modal: bool) -> QDialog | None:
-        """验证插件控件并嵌入宿主对话框，按模态配置显示并保活窗口；无效内容返回 None。"""
+        """验证插件控件并嵌入居中显示的宿主对话框，按模态配置保活窗口；无效内容返回 None。"""
         if widget is None:
             return None
         if not isinstance(widget, QWidget) or not shiboken6.isValid(widget):
             logger.error("插件 '%s' 对话框内容必须是有效的 PySide6 QWidget", plugin_id)
             return None
-        dlg = QDialog(self._w)
+        dlg = _PluginDialog(self._w)
         dlg.setObjectName("pluginDialogSurface")
         self._retheme_dialog(dlg)
         dlg.setWindowTitle(tr(title) if title else tr("插件"))
@@ -132,6 +143,10 @@ class PluginUIHost:
         lay = QVBoxLayout(dlg)
         lay.setContentsMargins(16, 16, 16, 16)
         lay.addWidget(widget)
+        dlg.ensurePolished()
+        if dlg.windowFlags() & Qt.WindowType.FramelessWindowHint and not dlg.property("customDialogFrame"):
+            decorate_dialog(dlg)
+        dlg.adjustSize()
         # 圆角（与全局弹层一致；背景图开关无关）
         try:
             from src.ui import win_effects

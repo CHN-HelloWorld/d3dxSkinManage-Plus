@@ -81,12 +81,16 @@ class MigrationWizard(QWidget):
         return self._preferred_window_size(self.window()) - QSize(32, 32)
 
     def configure_window(self, window) -> None:
-        """设置实际宿主窗口而非内部控件的默认大小，并居中显示。"""
+        """设置实际宿主窗口大小，相对所属应用窗口居中并保持边框位于屏幕内。"""
         self._window_size_key = self._step, self._details_open
         available = self._available_geometry(window)
         window.resize(self._preferred_window_size(window))
+        parent = window.parentWidget()
+        owner = parent.window() if parent is not None else None
         frame = window.frameGeometry()
-        frame.moveCenter(available.center())
+        frame.moveCenter(owner.frameGeometry().center() if owner is not None else available.center())
+        frame.moveLeft(max(available.left(), min(frame.left(), available.right() - frame.width() + 1)))
+        frame.moveTop(max(available.top(), min(frame.top(), available.bottom() - frame.height() + 1)))
         window.move(frame.topLeft())
 
     def _style(self, widget, role: str):

@@ -101,13 +101,15 @@ def test_default_window_matches_category_preset_reference_size(
     monkeypatch.setattr(
         wizard_module.MigrationWizard, "_available_geometry", lambda self, window: available, raising=False
     )
+    migration_host._w.setGeometry(160, 100, 1000, 700)
+    migration_host._w.show()
     plugin = load_migration("entry").Plugin()
     plugin.activate(migration_context)
     dialog = plugin._open()
     try:
         assert dialog.size().toTuple() == (720, 480)
         assert available.contains(dialog.frameGeometry())
-        assert abs(dialog.frameGeometry().center().x() - available.center().x()) <= 2
+        assert (dialog.frameGeometry().center() - migration_host._w.frameGeometry().center()).manhattanLength() <= 2
     finally:
         plugin.deactivate()
 
