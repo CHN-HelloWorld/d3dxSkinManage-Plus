@@ -1,0 +1,17 @@
+{
+  "id": "official.directory-permissions",
+  "name": "目录权限修复",
+  "version": "1.0.2",
+  "apiVersion": "2.1",
+  "minAppVersion": "1.0.0",
+  "author": "d3dxSkinManage-Plus",
+  "description": "按需修复旧版本临时目录和预览缓存的私有权限，恢复正常用户访问。",
+  "entry": "entry.py",
+  "files": ["entry.py", "panel.py", "permissions.py", "README.md", "languages"],
+  "permissions": ["fs:read", "fs:write", "native", "background", "ui:views"],
+  "contributes": {
+    "commands": [
+      {"id": "official.directory-permissions.open", "title": "目录权限修复"}
+    ]
+  }
+}

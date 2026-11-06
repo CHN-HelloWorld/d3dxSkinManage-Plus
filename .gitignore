@@ -41,12 +41,13 @@ htmlcov/
 !/config/languages/zh-CN/strings.json
 !/config/languages/en-US/strings.json
 
-# 用户安装的插件；随包示例参与版本管理
+# 用户安装的插件；项目维护的示例与官方插件参与版本管理
 /plugins/*
 !/plugins/example.mod-inventory/
 !/plugins/example.preset-audit/
 !/plugins/example.preset-cycle/
 !/plugins/official.legacy-migration/
+!/plugins/official.directory-permissions/
 
 # 编辑器与本地辅助工具配置
 /.claude/

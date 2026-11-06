@@ -1,0 +1,24 @@
+{
+  "_meta": {
+    "format": 1,
+    "name": "English",
+    "fallback": "zh-CN"
+  },
+  "messages": {
+    "目录权限修复": "Directory Permission Repair",
+    "按需修复旧版本临时目录和预览缓存的私有权限，恢复正常用户访问。": "Repair private permissions on older temporary directories and preview caches on demand to restore normal user access.",
+    "插件": "Plugins",
+    "仅修复旧版本留下的私有目录权限，不删除文件、不更改自定义访问限制。修复后可停用或卸载此插件。": "Only repair private directory permissions left by older versions. Files and custom access restrictions are kept. You can disable or uninstall this plugin afterwards.",
+    "应用数据目录：{path}": "Application data directory: {path}",
+    "点击开始修复后才会检查目录。": "Directories are checked only after you click Start repair.",
+    "修复结果和失败路径会显示在这里。": "Repair results and failed paths appear here.",
+    "关闭": "Close",
+    "开始修复": "Start repair",
+    "此修复仅适用于 Windows。": "This repair is only available on Windows.",
+    "正在检查目录权限…": "Checking directory permissions…",
+    "已检查 {count} 个目录…": "Checked {count} directories…",
+    "修复已取消，已完成的权限修复会保留，可重新运行。": "Repair cancelled. Completed permission repairs are kept. You can run it again.",
+    "修复失败：{error}": "Repair failed: {error}",
+    "已检查 {scanned} 个目录，修复 {repaired} 个，失败 {errors} 个。": "Checked {scanned} directories, repaired {repaired}, with {errors} failures."
+  }
+}
