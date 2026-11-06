@@ -162,6 +162,20 @@ Search text, type, age rating, and tags can all affect results at the same time.
 
 Sorting supports name, import time, author, age rating, enabled state, and other criteria. Chinese names are sorted by pinyin.
 
+Select **Custom order**, then press and hold or drag a category or Mod card as you would a game card. The order saves when you drop it.
+Only the display order at the current level changes; physical folders are not moved. Categories remain before Mods,
+and each group is reordered independently rather than interleaved. Deleted items are removed from the order,
+new items are appended to their group, and renaming preserves their position. Switching to name sorting does not erase the custom order,
+and the selected mode and order are restored after restart. Dragging is disabled during search or filtering.
+The six-dot handle is at the card's top-right corner. In list view, drag category or Mod rows to reorder them;
+an insertion line shows the destination, and hovering at the top or bottom edge scrolls the list.
+Both views share the same saved order; Mods have their own order within each parent category. Orders are stored per game and parent category in the separate
+`config/category_orders.json` file. Include it in backups; restoring default settings does not clear the order.
+Cutting a category into another category preserves its internal category and Mod orders and appends the category to its new parent.
+Changing a game's English name does not change its saved order. After an external category-folder deletion,
+the next load filters confirmed missing cards and closes the gap, while retaining index records for recovery.
+Inaccessible folders and permission errors are not treated as deletion. Legacy order preferences migrate automatically.
+
 The NSFW dropdown controls whether local X-rated preview images are shown normally, hidden, or blurred. It does not automatically delete or disable Mods. The local overview and gallery share this display preference; the online page has its own NSFW policy.
 
 ### 3.10 Adding and removing preview images
