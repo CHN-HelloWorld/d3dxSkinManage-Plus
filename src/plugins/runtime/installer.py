@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import json
 import shutil
-import tempfile
 import uuid
 import zipfile
 from collections.abc import Callable
@@ -23,6 +22,7 @@ from src.utils.constants import ARCHIVE_EXTENSIONS
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 from src.utils.paths import get_plugins_dir
+from src.utils.temp_dirs import temporary_directory
 
 
 class InstallError(Exception):
@@ -135,7 +135,7 @@ def install_from_archive(
     base = (plugins_dir or get_plugins_dir()).resolve()
     base.mkdir(parents=True, exist_ok=True)
     # 在同级暂存目录完成校验后再替换已安装插件。
-    with tempfile.TemporaryDirectory(prefix=".install-", dir=base) as scratch:
+    with temporary_directory(prefix=".install-", dir=base) as scratch:
         unpacked = Path(scratch) / "unpacked"
         staging = Path(scratch) / "new"
         unpacked.mkdir()

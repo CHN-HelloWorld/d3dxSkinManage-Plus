@@ -347,7 +347,7 @@ class Mod:
 
         结果交给共用摘要函数，保持与目录成员读取方式一致。
         """
-        import tempfile
+        from src.utils.temp_dirs import temporary_directory
 
         try:
             from py7zr.io import Py7zIO, WriterFactory
@@ -424,7 +424,7 @@ class Mod:
                 for writer in self.writers:
                     writer.close()
 
-        temp_dir = tempfile.TemporaryDirectory(prefix="d3dx_hash_7z_")
+        temp_dir = temporary_directory(prefix="d3dx_hash_7z_")
         factory = _TemporaryMemberFactory(Path(temp_dir.name))
         try:
             check_continue()

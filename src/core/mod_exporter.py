@@ -190,9 +190,9 @@ class ModExporter:
                     _stage(0.90, tr("复制: {name}", name=item.name))
                 elif is_archive_src:
                     # 格式不同时先解压再按目标格式压缩。RAR 解压使用 unrar，RAR 压缩需要 WinRAR。
-                    import tempfile
+                    from src.utils.temp_dirs import mkdtemp
 
-                    tmp_extract = Path(tempfile.mkdtemp(prefix="d3dx_export_"))
+                    tmp_extract = Path(mkdtemp(prefix="d3dx_export_"))
                     # 解压和重压分别占用进度区间 0.05～0.45、0.45～0.90。
                     extracted = self._archive.extract(
                         str(src),
@@ -230,9 +230,9 @@ class ModExporter:
                 # 输出为文件夹
                 if is_archive_src:
                     # 先解压归档，再规范化顶层目录名称并移至目标位置。
-                    import tempfile
+                    from src.utils.temp_dirs import mkdtemp
 
-                    tmp_extract = Path(tempfile.mkdtemp(prefix="d3dx_export_"))
+                    tmp_extract = Path(mkdtemp(prefix="d3dx_export_"))
                     extracted = self._archive.extract(
                         str(src),
                         str(tmp_extract),
@@ -360,9 +360,9 @@ class ModExporter:
         避免压缩服务使用固定名称时覆盖已有导出。RAR 不可用时可能返回 ZIP，
         实际扩展名以返回路径为准；返回 None 表示失败。
         """
-        import tempfile
+        from src.utils.temp_dirs import mkdtemp
 
-        stage = Path(tempfile.mkdtemp(prefix="d3dx_comp_"))
+        stage = Path(mkdtemp(prefix="d3dx_comp_"))
         try:
             produced = self._archive.compress(str(source_dir), str(stage / base), fmt, progress_cb=progress_cb)
             if produced is None:

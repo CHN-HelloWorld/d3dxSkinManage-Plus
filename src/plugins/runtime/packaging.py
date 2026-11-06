@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-import tempfile
 import zipfile
 from pathlib import Path, PureWindowsPath
 
 from src.plugins.runtime.manifest import Manifest, ManifestError
 from src.plugins.runtime.validation import validate_package
 from src.utils.i18n import t as tr
+from src.utils.temp_dirs import temporary_directory
 
 _EXCLUDED_DIRECTORIES = {"__pycache__", ".git", ".venv", ".pytest_cache", ".ruff_cache"}
 
@@ -53,7 +53,7 @@ def pack_plugin(directory: Path, output: Path) -> Path:
     manifest = validate_package(directory)
     files = package_files(manifest)
     output.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix=".plugin-package-", dir=output.parent) as scratch:
+    with temporary_directory(prefix=".plugin-package-", dir=output.parent) as scratch:
         staging = Path(scratch) / "source"
         staging.mkdir()
         contents = {}

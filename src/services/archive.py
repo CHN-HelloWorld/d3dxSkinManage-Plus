@@ -796,9 +796,9 @@ class ArchiveService:
         """慢路径：解全包→写/覆盖成员→整包重压。仅用于覆盖已存在成员（追加会重复）。"""
         if not PY7ZR_AVAILABLE:
             return False
-        import tempfile
+        from src.utils.temp_dirs import mkdtemp
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="7z_inject_"))
+        tmpdir = Path(mkdtemp(prefix="7z_inject_"))
         try:
             with open_7z(archive) as sz:
                 sz.extractall(path=str(tmpdir))
@@ -829,9 +829,9 @@ class ArchiveService:
         if not PY7ZR_AVAILABLE:
             return False
         archive = Path(archive_path)
-        import tempfile
+        from src.utils.temp_dirs import mkdtemp
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="7z_strip_"))
+        tmpdir = Path(mkdtemp(prefix="7z_strip_"))
         try:
             with open_7z(archive) as sz:
                 names = [n for n in sz.getnames()]
@@ -875,9 +875,10 @@ class ArchiveService:
         else:
             prefix, fname = "", arcname
         import subprocess
-        import tempfile
 
-        tmpdir = Path(tempfile.mkdtemp(prefix="rar_inject_"))
+        from src.utils.temp_dirs import mkdtemp
+
+        tmpdir = Path(mkdtemp(prefix="rar_inject_"))
         try:
             # 先剔除旧的同路径成员（覆盖语义），再加新的
             self.remove_members_rar(archive, lambda n: n.replace("\\", "/") == arcname)
@@ -1050,13 +1051,13 @@ class ArchiveService:
                     return {}
                 # py7zr 通过单次打开和定向提取接口读取归档成员。
                 # 仅提取 INI 成员到临时目录后读取，避免解压无关的大型纹理文件。
-                import tempfile
+                from src.utils.temp_dirs import mkdtemp
 
                 with open_7z(archive) as sz:
                     names = [n for n in sz.getnames() if _is_ini(n)]
                     if not names:
                         return {}
-                    tmpdir = Path(tempfile.mkdtemp(prefix="7z_inis_"))
+                    tmpdir = Path(mkdtemp(prefix="7z_inis_"))
                     try:
                         sz.extract(path=str(tmpdir), targets=names)
                         for n in names:
@@ -1102,9 +1103,9 @@ class ArchiveService:
                 if not PY7ZR_AVAILABLE:
                     return None
                 # 使用 py7zr 的 extract 接口提取单个成员到临时目录，再读取其内容。
-                import tempfile
+                from src.utils.temp_dirs import mkdtemp
 
-                tmpdir = Path(tempfile.mkdtemp(prefix="7z_read_"))
+                tmpdir = Path(mkdtemp(prefix="7z_read_"))
                 try:
                     with open_7z(archive) as sz:
                         sz.extract(path=str(tmpdir), targets=[internal_path])

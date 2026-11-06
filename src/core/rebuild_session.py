@@ -8,7 +8,6 @@ from __future__ import annotations
 import copy
 import os
 import sqlite3
-import tempfile
 import threading
 import time
 from contextlib import ExitStack
@@ -40,6 +39,7 @@ from src.utils import fs
 from src.utils.i18n import N_
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
+from src.utils.temp_dirs import temporary_directory
 
 
 def publish_rebuild_projection(db, game_id):
@@ -398,7 +398,7 @@ class RebuildSession:
         """采集独立基线，重建不清除持久关系。"""
 
         self.check_cancel()
-        self._temp = tempfile.TemporaryDirectory(prefix="d3dx-rebuild-")
+        self._temp = temporary_directory(prefix="d3dx-rebuild-")
         self.stage_path = Path(self._temp.name) / "stage.db"
         source = sqlite3.connect(self._source_db_path.as_uri() + "?mode=ro", uri=True)
         try:

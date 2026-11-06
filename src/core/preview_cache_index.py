@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import os
 import stat
-import tempfile
 from collections.abc import Mapping, Sequence
 from contextlib import contextmanager
 from pathlib import Path
@@ -13,6 +12,7 @@ from types import MappingProxyType
 
 from src.utils import fs
 from src.utils.logger import logger
+from src.utils.temp_dirs import mkdtemp
 
 PreviewCacheIndex = Mapping[str, tuple[Path, ...]]
 CACHE_FINGERPRINT = ".content-fingerprint.json"
@@ -113,7 +113,7 @@ def preview_cache_staging(cache: Path):
     暂存目录与目标同卷，便于原子改名；目标由在途保护覆盖，普通孤立缓存清理不进入暂存目录。
     """
     fs.ensure_dir(cache.parent)
-    stage = Path(fs.normal_path(tempfile.mkdtemp(prefix=".preview-", dir=fs.native_path(cache.parent.parent))))
+    stage = Path(fs.normal_path(mkdtemp(prefix=".preview-", dir=fs.native_path(cache.parent.parent))))
     try:
         yield stage
     finally:

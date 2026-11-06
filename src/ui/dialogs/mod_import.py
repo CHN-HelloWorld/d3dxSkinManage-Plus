@@ -43,6 +43,7 @@ from src.utils.i18n import t as tr
 from src.utils.logger import logger
 from src.utils.paths import get_data_dir
 from src.utils.qt_timers import call_later
+from src.utils.temp_dirs import temporary_directory
 
 
 class _PreviewSignals(QObject):
@@ -122,7 +123,7 @@ def _detect_keys_from_archive(archive_path: Path) -> list[str]:
                     bindings.extend(parse_ini_text(data.decode("utf-8", errors="ignore"), ini_name))
             return extract_key_names(bindings)
         # 固实归档只解码一遍，临时成员逐个解析后随扫描上下文清理。
-        with tempfile.TemporaryDirectory(prefix="import_keys_") as directory:
+        with temporary_directory(prefix="import_keys_") as directory:
             root = Path(directory)
             extracted = set(svc.extract_files(archive_path, ini_files, root))
             for ini_name in ini_files:
@@ -522,9 +523,7 @@ class ModImportDialog(QDialog):
             if self._scan_cache is None:
                 cache_parent = get_data_dir() / "temp" / "preview_scan"
                 cache_parent.mkdir(parents=True, exist_ok=True)
-                self._scan_cache = tempfile.TemporaryDirectory(
-                    prefix="import_", dir=cache_parent, ignore_cleanup_errors=True
-                )
+                self._scan_cache = temporary_directory(prefix="import_", dir=cache_parent, ignore_cleanup_errors=True)
             entry._preview_scan_root = Path(self._scan_cache.name) / uuid4().hex
         return entry
 
