@@ -12,7 +12,7 @@ Start with the skeleton in section 1 and confirm that its command works. Then re
 | 2 | [Preset audit](../../../plugins/example.preset-audit/README.md) | Find invalid Mod and variant references in combinations | Unresolved references, startup activation, pages, events, batched queries, and cleanup |
 | 3 | [Preset cycling](../../../plugins/example.preset-cycle/README.md) | Switch to the previous or next combination using shortcuts or buttons | Write permissions, asynchronous operations, repeated requests, completion feedback, and cancellation |
 
-The bundled [legacy migration plugin](../../../plugins/official.legacy-migration/README.md) demonstrates SDK 2.1 category creation, copy imports, external previews, and host styling. It reads local d3dxSkinManage data and writes to the current game through public APIs.
+The bundled [d3dxSkinManage Data Migration plugin](../../../plugins/official.legacy-migration/README.md) demonstrates SDK 2.1 category creation, copy imports, external previews, and host styling. It reads local d3dxSkinManage data and writes to the current game through public APIs.
 
 Section 10 provides reading and practice steps for each example. Sections 2–9 cover the interfaces, section 11 covers custom interfaces, and section 12 covers development checks and troubleshooting.
 
@@ -289,7 +289,7 @@ Declare permissions in `plugin.json`. Users confirm trust and requested permissi
 | `mods:manage` | `ctx.mods.delete_mod`, `ctx.presets.delete`, and `ctx.variants.delete` |
 | `storage` | Access private key-value storage, the data folder, and declared configuration; checked at runtime |
 | `ui:tools-page` / `ui:menus` / `ui:settings` | Declare the corresponding contributions; checked in the manifest; settings also require `storage` |
-| `ui:views` | Views, dynamic pages, and dialogs; checked in both manifests and SDK methods |
+| `ui:views` | Views, dynamic pages, dialogs, and host-managed text reports; checked in both manifests and SDK methods |
 | `ui:shortcuts` | Register plugin shortcuts with the host's settings and dispatcher; checked during manifest parsing and activation |
 | `network` | Import `socket/httpx/requests/urllib/...` |
 | `process` | Import `subprocess/multiprocessing` |
@@ -328,6 +328,7 @@ ctx.ui.register_view(view_id, factory)            # Embedded card widget (manife
 ctx.ui.register_page(page_id, title, factory, icon="")  # Add a top-level navigation page
 ctx.ui.show_dialog(widget, title="", modal=True) -> QDialog   # Show a dialog; the returned QDialog supports close()
 ctx.ui.show_popup(widget, title="")               # Nonmodal dialog
+ctx.ui.show_text_report(text, title="") -> str
 ctx.ui.notify(message, level="info")              # Toast notification (info/success/warning/error)
 
 ctx.mods.get_mods(node_id=None) -> list[ModInfo]
@@ -504,6 +505,10 @@ task.on_finished(on_import_finished)
 Both write APIs require `mods:write`; plugins reading external files should also declare `fs:read`. Imports require a valid category in the current game, always copy the source, and leave the Mod disabled. A deployment folder is not required. `author`, `description`, `rating`, `tags`, and `source_url` default to `None`, preserving embedded metadata. Explicit empty strings or an empty tag tuple clear those fields. Ratings accept `G/P/R/X`. Tag and preview sequences are frozen when the request is created.
 
 Folders and ZIP, 7z, and RAR archives follow the host's import settings. Archives without extensions are detected from their headers and staged separately, without renaming the source. Optional `expected_sha1` checks the original file's byte digest: forty hexadecimal characters, not a Plus content fingerprint or `mod_id`. External previews are copied into the new container, and metadata is saved before the index commits.
+
+For a directory source, `ModImportRequest.expected_directory_hash` freezes the content observed during scanning. It defaults to an empty string; a nonempty value must be a sixty-four-character hexadecimal SHA-256 string and is normalized to lowercase. It is mutually exclusive with `expected_sha1`; do not substitute an archive SHA-1, Plus content fingerprint, or `mod_id`. Invalid field types, digest lengths, or mutually exclusive values raise `TypeError` or `ValueError` when constructing the request.
+
+Compute it with `src.plugin_sdk.imports.directory_fingerprint(source_path, should_cancel=None) -> str`, available via `from src.plugin_sdk.imports import directory_fingerprint`. This read-only helper hashes directory-relative paths and file-content SHA-256 digests in a stable order, including empty subdirectories. It rejects symbolic links, junctions/reparse points in the source or its ancestors, and unsupported special files inside the directory. A non-directory, linked source, or file changed while being read raises `ValueError`; file access errors raise `OSError`. An optional no-argument `should_cancel` callback returning true raises `InterruptedError` at read boundaries. The helper is not bound to a plugin context or host thread and does not manage task lifetime: declare `fs:read`; for large folders also declare `background` and compute with `ctx.tasks.run()`, supplying a cancellation check such as `lambda: task.cancelled`. Construct the request and call `ctx.mods.import_mod()` from its host-thread completion callback. The host recomputes and checks the directory fingerprint before and after preparation; missing, changed, or unsafe sources are reported as failed operations, not successful imports.
 
 File preparation runs in the background; index commits and completion callbacks run on the host thread. Changed sources, missing previews, or missing targets fail the operation. Cancellation removes uncommitted output while retaining completed items. Duplicate content returns existing Mod identities in `result.skipped_ids` and preserves their metadata and category. A failed import may have no target ID, so always check `error` and `ok` even when ID tuples are empty. Use completion callbacks to schedule batches and check the current game before each step.
 
@@ -689,6 +694,16 @@ def show_report(ctx: PluginContext, text: str) -> None:
 ```
 
 Add **Audit report** to the plugin's language pack. `show_dialog()` returns a host-created QDialog, or `None` when no graphical host is available. The caller still needs a QApplication to construct the Qt widgets above. A dialog's `close()` normally only hides it; the host forces it closed and disposes of it when the plugin is disabled. Keep and reuse a window that will be shown repeatedly, avoiding an accumulation of newly created, hidden windows.
+
+To read a report in the system's default application or save a copy, use the SDK 2.1 host text-report API without constructing Qt widgets:
+
+```python
+report_path = ctx.ui.show_text_report(text, title=ctx.i18n.t("Audit report"))
+```
+
+`ctx.ui.show_text_report(text, title="") -> str` creates a unique `.txt` file in the system temporary folder, preserves the supplied text in UTF-8 with BOM, closes the file before opening it with the default application, and returns its absolute path. Neither the plugin ID nor `title` determines the file path. The title labels an opening-failure notification; an empty title uses the host's translated **Text report** label. If the default application cannot open the report, the host retains the file, notifies the user of its saved path, and still returns that path. Creation or write exceptions, such as `OSError`, propagate to the caller. Batch operations should catch report exceptions separately, show existing results, and never roll back successful work because reporting failed.
+
+This API uses the existing `ui:views` permission; no `fs:write`, external-process permission, new dependency, or API version change is required. Call it on the host thread with a live plugin context: missing permission raises `PermissionDenied`; calls after deactivation or from a worker thread raise `PluginError`. Both `text` and `title` must be strings or `TypeError` is raised. Without a graphical host, permission, context, and argument checks still apply, but the method returns an empty string without writing a file or opening an application. A report is not a `Disposable`: closing a window, disabling a plugin, or host cleanup of plugin resources does not delete generated files. The system may clean its temporary folder; save a separate copy for long-term retention. Reports can contain local paths; avoid including passwords or tokens.
 
 ### 11.3 Two ways to manage settings
 
