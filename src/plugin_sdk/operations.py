@@ -20,6 +20,10 @@ class OperationResult:
     error: str = ""
     preset_id: str = ""
     variant_id: str | None = None
+    node_id: str = ""
+    skipped_ids: tuple[str, ...] = ()
+    warnings: tuple[str, ...] = ()
+    cancel_requested: bool = False
 
     @property
     def ok(self) -> bool:

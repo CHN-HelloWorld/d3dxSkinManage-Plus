@@ -1,16 +1,20 @@
 """将插件界面接口连接至主窗口。
 
 管理动态页面、对话框和通知的主题、父子关系及生命周期，插件停用时统一释放。
+临时文本报告由宿主保存并交给桌面应用打开，不随插件或窗口清理而删除。
 """
 
 from __future__ import annotations
 
+import os
+import tempfile
 from collections.abc import Callable
 from typing import TYPE_CHECKING
 from weakref import ref
 
 import shiboken6
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QDialog,
     QListWidgetItem,
@@ -20,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from src.plugin_sdk.disposable import Disposable
 from src.ui import icons, theme
+from src.ui.plugin_style import PluginStyleBindings
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
 
@@ -42,6 +47,7 @@ class PluginUIHost:
         # 窗口显示前先将通知排队，待布局完成后再显示 Toast，确保定位依据有效。
         self._notify_ready = False
         self._notify_queue: list[tuple[str, str, str]] = []
+        self._styles = PluginStyleBindings()
 
     # 页面
 
@@ -89,6 +95,27 @@ class PluginUIHost:
         return Disposable(lambda: self._remove_pages(plugin_id, [(item, page)]))
 
     # 对话框
+
+    def show_text_report(self, plugin_id: str, text: str, title: str) -> str:
+        """保存唯一的 UTF-8 BOM 文本文件，关闭后交给桌面打开；打开失败时通知保留路径。"""
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8-sig",
+            newline="",
+            prefix="d3dx-report-",
+            suffix=".txt",
+            dir=tempfile.gettempdir(),
+            delete=False,
+        ) as report:
+            report.write(text)
+            path = os.path.abspath(report.name)
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(path)):
+            self.notify(
+                plugin_id,
+                tr("无法打开 {title}，报告已保存：{path}").format(title=title or tr("文本报告"), path=path),
+                "warning",
+            )
+        return path
 
     def show_dialog(self, plugin_id: str, widget: QWidget, title: str, modal: bool) -> QDialog | None:
         """验证插件控件并嵌入宿主对话框，按模态配置显示并保活窗口；无效内容返回 None。"""
@@ -138,6 +165,7 @@ class PluginUIHost:
 
     def retheme(self) -> None:
         """原位刷新宿主管理的表面和导航图标，保留插件输入状态。"""
+        self._styles.retheme()
         for pages in self._pages.values():
             for item, page in pages:
                 self._retheme_page(page)
@@ -157,6 +185,10 @@ class PluginUIHost:
             lst.remove(dlg)
             if not lst:
                 self._dialogs.pop(plugin_id, None)
+
+    def apply_style(self, plugin_id: str, widget: QWidget, role: str) -> Disposable:
+        """为插件控件绑定与宿主一致的样式，禁止插件依赖内部主题模块。"""
+        return self._styles.bind(plugin_id, widget, role)
 
     # 通知
 
@@ -190,6 +222,7 @@ class PluginUIHost:
 
     def cleanup_plugin(self, plugin_id: str) -> None:
         """插件停用：移除其页面与导航项、关闭其对话框。"""
+        self._styles.cleanup_plugin(plugin_id)
         self._notify_queue = [item for item in self._notify_queue if item[0] != plugin_id]
         # 停用是强制回收。结束模态循环并立即隐藏，不受 closeEvent 拒绝影响；
         # 插件已停用，不再派发 finished/rejected 回调。

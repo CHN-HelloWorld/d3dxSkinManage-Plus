@@ -46,7 +46,12 @@ def test_release_zip_plugins_load_translate_and_uninstall(temp_data_dir, monkeyp
         path.write_text("private", encoding="utf-8")
     entries = [(executable, ""), (plugins, "plugins")] if onefile else [(product, "")]
     archive = build.make_zip(entries)
-    expected_ids = {"example.mod-inventory", "example.preset-cycle", "example.preset-audit"}
+    expected_ids = {
+        "example.mod-inventory",
+        "example.preset-cycle",
+        "example.preset-audit",
+        "official.legacy-migration",
+    }
     released = temp_data_dir / "released"
     with ZipFile(archive) as package:
         names = {name.split("/", 1)[1] for name in package.namelist()}
@@ -54,7 +59,18 @@ def test_release_zip_plugins_load_translate_and_uninstall(temp_data_dir, monkeyp
             f"plugins/{pid}/{relative}"
             for pid in expected_ids
             for relative in ("plugin.json", "entry.py", "languages/en-US/strings.json", "README.md")
-        } | {"plugins/example.mod-inventory/inventory.py"}
+        } | {"plugins/example.mod-inventory/inventory.py"} | {
+            f"plugins/official.legacy-migration/{relative}"
+            for relative in (
+                "legacy.py",
+                "controller.py",
+                "wizard.py",
+                "preview.py",
+                "sources.py",
+                "report.py",
+                "languages/zh-CN/strings.json",
+            )
+        }
         package.extractall(released)
     application = next(released.iterdir())
     plugin_root = application / "plugins"
@@ -83,13 +99,23 @@ def test_staging_copies_only_declared_example_assets(tmp_path, monkeypatch):
     from scripts.release import build
 
     source = tmp_path / "source"
-    for plugin_id in ("example.mod-inventory", "example.preset-cycle", "example.preset-audit"):
+    for plugin_id in (
+        "example.mod-inventory",
+        "example.preset-cycle",
+        "example.preset-audit",
+        "official.legacy-migration",
+    ):
         directory = source / plugin_id
         (directory / "languages/en-US").mkdir(parents=True)
         (directory / "plugin.json").write_text(json.dumps({"id": plugin_id}), encoding="utf-8")
         (directory / "entry.py").write_text("# sample", encoding="utf-8")
         if plugin_id == "example.mod-inventory":
             (directory / "inventory.py").write_text("# 导出计算模块", encoding="utf-8")
+        if plugin_id == "official.legacy-migration":
+            for filename in ("legacy.py", "controller.py", "wizard.py", "preview.py", "sources.py", "report.py"):
+                (directory / filename).write_text("# 迁移模块", encoding="utf-8")
+            (directory / "languages/zh-CN").mkdir()
+            (directory / "languages/zh-CN/strings.json").write_text("{}", encoding="utf-8")
         (directory / "languages/en-US/strings.json").write_text("{}", encoding="utf-8")
         (directory / "README.md").write_text("# Example", encoding="utf-8")
         (directory / "local-settings.json").write_text("private", encoding="utf-8")
@@ -106,4 +132,4 @@ def test_staging_copies_only_declared_example_assets(tmp_path, monkeypatch):
     target = build.stage_plugins(product)
     assert not (target / "third.party").exists()
     assert list(target.rglob("local-settings.json")) == []
-    assert len(list(target.glob("*/entry.py"))) == 3
+    assert len(list(target.glob("*/entry.py"))) == 4

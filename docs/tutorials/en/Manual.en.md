@@ -1127,13 +1127,36 @@ Use **Reload** after editing plugin code. The app removes old commands and inter
 
 If the status is **Error**, read the error description and logs. Parsing failures, permission mismatches, code checks, and runtime errors can all prevent activation. Permission declarations and checks do not determine whether a plugin's source is trustworthy for you.
 
-Three optional plugins are bundled; enable each one before first use. Their contributions add the corresponding controls to Tools, Category Overview context menus, navigation pages, and shortcut settings:
+Four optional plugins are bundled; enable each one before first use. Their contributions add the corresponding controls to Tools, Category Overview context menus, navigation pages, and shortcut settings:
 
 - **Mod inventory export** exports a CSV inventory of the current game from Tools. From a category's context menu, it includes that category and its subcategories. Select **Export enabled mods only** in plugin details to limit the output. The inventory is generated in the background, with a notification on completion. It contains text metadata only, without mod files, and is not a restorable preset file.
 - **Preset check** adds a navigation page with the same name for checking missing mod and appearance variant references. Return to the main interface to edit affected presets. Choose whether to include the default preset and click **Check again** to refresh. Results reflect references that can currently be resolved; a missing reference does not prove a resource is permanently lost.
 - **Preset cycle** switches to the previous or next combination from Tools or **Plugin Commands**. The default shortcuts are `Ctrl+Alt+PgUp` and `Ctrl+Alt+PgDown`, effective only inside the app and adjustable in **Settings → Shortcuts**. The default preset is skipped unless you change the option in plugin details. The host task interface shows progress and failure reasons. Repeated clicks during an unfinished switch do not queue multiple switches.
 
 These plugins' source code and usage instructions are in `plugins/`. To write your own plugin, read this tutorial's [Plugin development guide](PluginGuide.en.md). Start with the first working example, learn the current SDK's commands, settings, pages, background tasks, and dependencies, then complete testing and packaging.
+
+### 7.7.1 Migrating from d3dxSkinManage
+
+Enable the bundled **d3dxSkinManage Data Migration** plugin on the Plugins page, then open the same entry in Tools. First add and activate the destination game on the Games page; the wizard displays the selected target.
+
+1. **Choose folder**: select the legacy app folder containing `home/` and `resources`. Choose the detected legacy game data and select **Review contents**. You can also paste a path and select that button directly.
+2. **Review contents**: view the category tree with Mods, types, statuses, counts and sizes alongside item details. Excluded items and warnings also appear in the tree; select them to read the recorded diagnostics in item details. Wide windows use side-by-side panels; narrow windows stack them. Searching and selecting only affect viewing, not what gets migrated. Selecting a Mod shows **Original files (recommended)** and **Edited files** only when edits or recovery may be relevant.
+3. Select **Start migration**. The wizard preserves names, authors, descriptions, ratings, tags and recognized previews. **Stop migration** stops subsequent work while keeping completed items.
+4. **Results**: review imported, already present and unfinished counts. Use **Show migration details** or **Retry unfinished** as needed. After repairing source data, select **Start again**, then **Review contents** for a fresh scan. A TXT report still opens after each batch; **Open report** opens it again.
+
+Scanning includes active indexes and disabled indexes with local original archives. Active metadata takes precedence over disabled metadata for the same SHA, with a warning; conflicting metadata within the same enabled/disabled state and ambiguous category assignments are still refused. Extensionless SHA archives are detected by their actual format and their original file SHA-1 is checked before import.
+
+The wizard checks `work/Mods/<SHA>` and `work/Mods/disabled-<SHA>` caches in the selected legacy environment. Differences from the archive or an unreliable comparison produce a warning; recovering modifications is a user choice. Multiple possible caches are not chosen automatically. An active index with a valid cache but no archive can be recovered with an explicit incompleteness warning; disabled cache-only or remote-only entries remain excluded. A separate directory SHA-256 fingerprint is checked before and after preparation and keeps cache history distinct from archive history; changed sources require a new scan. Index-only and remote-only entries are not imported, and nothing is downloaded.
+
+Previews come from SHA-named images and dedicated SHA directories in shared `resources/preview` and `resources/preview_screen`, plus recursively discovered `preview`-named images in active/disabled caches and images inside explicit `preview`/`preview_screen` subfolders. PNG, JPG, JPEG, BMP, GIF, and WebP are supported and deduplicated by image bytes; arbitrary texture images are not scanned. Category thumbnails use exact matches first, then the configured legacy `key-in only`, `similarity only`, `similarity threshold`, or `similarity/key-in` approximate mode. Approximate results carry a review warning; unknown modes fall back to exact matching with a warning.
+
+Migration copies local resources and preserves legacy files. Imported Mods stay disabled; deployment folders, loader hotkeys, and legacy app settings are excluded. No standalone shortcut or loader configuration migration is provided, but selected cache files, including modified Mod INIs, are preserved naturally. Duplicate content keeps existing Plus metadata and previews, and reused categories retain their thumbnails. Stopping or closing the window cancels subsequent work while retaining completed imports.
+
+The host creates a unique UTF-8 BOM `.txt` report in the system temporary folder, including duplicate-skip reasons, all outcomes, target identity, selected sources, and scan/copy diagnostics. **Open report** generates and opens another report after completion. If the default application cannot open it, the file remains and a notification shows its full path. Report creation failures do not undo successful imports. Generated reports survive window closure and plugin deactivation; the system may clean temporary files, so save a separate copy for long-term retention.
+
+For ambiguous categories, conflicting index metadata, and unsupported path configurations, select the related tree row to read the diagnostic, check the legacy data, and scan again. See the [plugin README](../../../plugins/official.legacy-migration/README.md) for compatibility details.
+
+If another application locks an output file during cancellation, the host retries cleanup. Files that remain locked are preserved with a recovery receipt and a specific path diagnostic. Restarting or rebuilding the index will not treat them as ordinary Mods; the next import retries cleanup. If the commit outcome or file identity cannot be confirmed, keep the files and the receipts in `data/recovery/import-cleanup/` for inspection.
 
 ### 7.8 About and the project film
 

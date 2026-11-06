@@ -50,8 +50,11 @@ def test_disposed_context_cannot_restore_its_registrations(env, resource):
 
 
 def test_newer_minor_api_is_rejected_before_import(env):
+    from src.plugin_sdk import API_VERSION
+
     manager, directory, _ = env
-    write_plugin(directory, apiVersion="2.1")
+    major, minor = map(int, API_VERSION.split("."))
+    write_plugin(directory, apiVersion=f"{major}.{minor + 1}")
     manager.discover()
     manager.trust("test.sample")
     assert not manager.enable("test.sample")

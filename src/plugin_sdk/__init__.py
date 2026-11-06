@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 # 公开接口版本，由宿主在加载插件前校验。
-API_VERSION = "2.0"
+API_VERSION = "2.1"
 
 from src.plugin_sdk.base import PluginBase, PluginMeta  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.configuration import ConfigurationChange  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.context import PluginContext  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.disposable import Disposable, DisposableStore  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.errors import PermissionDenied, PluginError  # noqa: E402 — 先定义版本，避免循环导入。
+from src.plugin_sdk.imports import ModImportRequest  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.operations import OperationResult, OperationTask  # noqa: E402 — 先定义版本，避免循环导入。
 from src.plugin_sdk.tasks import BackgroundTask, TaskCancelled, TaskContext, TaskProgress, TaskResult  # noqa: E402 — 先定义版本，避免循环导入。
 
@@ -26,6 +27,7 @@ __all__ = [
     "PermissionDenied",
     "OperationResult",
     "OperationTask",
+    "ModImportRequest",
     "Disposable",
     "DisposableStore",
     "ConfigurationChange",
