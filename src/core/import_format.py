@@ -16,6 +16,8 @@ from src.core.mod_package import (
     META_DIR,
     InvalidManagedMetadataError,
     InvalidVariantPackageError,
+    _read_complete_archive_inis,
+    _strict_ini_tree,
     read_container_marker,
     read_envelope,
     read_sidecar,
@@ -23,6 +25,7 @@ from src.core.mod_package import (
     resolve_preview_paths,
     strip_envelope,
     take_envelope,
+    write_ini_seed,
 )
 from src.core.mod_variant_package import (
     read_package_variants,
@@ -280,12 +283,6 @@ def _safe_relative_name(value: str | Path) -> str:
     return "/".join(parts)
 
 
-def _single_archive_top(names: list[str]) -> str:
-    """返回所有归一化压缩成员共同的顶层名称，顶层不唯一时返回空字符串。"""
-    tops = {normalized.split("/", 1)[0] for name in names if (normalized := _safe_relative_name(name))}
-    return next(iter(tops)) if len(tops) == 1 else ""
-
-
 def stage_import_metadata(
     prepared: PreparedImportSource,
     archive_service,
@@ -335,9 +332,10 @@ def stage_import_metadata(
                         should_cancel=should_cancel,
                     )
                     staged_previews.append((rel, staged))
-                if want_ini_stage and suffix == ".ini":
+            if want_ini_stage:
+                for rel, _ in _strict_ini_tree(source, exclude_meta=True):
                     fs.copy_path(
-                        path,
+                        source / rel,
                         ini_root / Path(rel),
                         checkpoint=checkpoint,
                         should_cancel=should_cancel,
@@ -370,26 +368,9 @@ def stage_import_metadata(
                     previews_complete = len(staged_previews) == len(preview_names)
 
             if want_ini_stage:
-                expected = {
-                    normalized
-                    for _original, normalized in normalized_names
-                    if normalized.lower().endswith(".ini") and META_DIR not in normalized.split("/")
-                }
-                raw_inis = archive_service.read_all_inis(source)
-                top = _single_archive_top(names)
-                staged_members: set[str] = set()
-                for member, data in raw_inis.items():
+                for rel, text in _read_complete_archive_inis(source, service=archive_service):
                     _check_continue(checkpoint, should_cancel)
-                    normalized = _safe_relative_name(member)
-                    rel = normalized
-                    if top and normalized.startswith(top + "/"):
-                        rel = normalized[len(top) + 1 :]
-                    rel = _safe_relative_name(rel)
-                    if not rel or META_DIR in rel.split("/"):
-                        continue
-                    fs.write_bytes(ini_root / Path(rel), data)
-                    staged_members.add(normalized)
-                ini_complete = expected.issubset(staged_members)
+                    fs.write_bytes(ini_root / Path(rel), text.encode("utf-8", errors="surrogateescape"))
 
         else:
             logger.error("无法暂存导入元数据，不支持的准备源: %s", source)
@@ -474,12 +455,13 @@ def install_staged_ini_overrides(
         return False
     marker = stage / INI_OVERRIDES_SEEDED_MARKER
     try:
+        if not fs.is_file(marker):
+            return False
+        members = _strict_ini_tree(stage)
         # seeded 最后写入磁盘：取消/失败时不会把半份 override 误标成完整。
-        for source in sorted(fs.iter_files(stage), key=lambda p: str(p).casefold()):
-            if source.name == INI_OVERRIDES_SEEDED_MARKER:
-                continue
+        for rel, _ in members:
+            source = stage / rel
             _check_continue(checkpoint, should_cancel)
-            rel = source.relative_to(stage)
             fs.copy_path(
                 source,
                 target / rel,
@@ -488,14 +470,7 @@ def install_staged_ini_overrides(
             )
         _check_continue(checkpoint, should_cancel)
         fs.ensure_dir(target)
-        if fs.is_file(marker):
-            fs.copy_path(marker, target / marker.name)
-        else:
-            fs.write_text(
-                target / INI_OVERRIDES_SEEDED_MARKER,
-                "1",
-                encoding="utf-8",
-            )
+        write_ini_seed(body_path, (rel for rel, _ in members))
         return True
     except InterruptedError:
         return False
@@ -659,6 +634,16 @@ def prepare_import_source(
                     fs.rmtree(work_root, ignore_errors=True)
                 return None
             clean_path, src_fmt, final_fmt, passthrough = unwrapped
+
+        if fs.is_dir(clean_path):
+            from src.core.nested_mod_archive import expand_container_tree, tree_has_containers
+
+            if tree_has_containers(clean_path):
+                if clean_path == src:
+                    copied = work_root / "expanded"
+                    fs.copy_path(src, copied, checkpoint=checkpoint, should_cancel=should_cancel)
+                    clean_path = copied
+                expand_container_tree(clean_path, should_cancel=should_cancel)
 
         validate_package_variants(clean_path, variants)
         excluded_references = []

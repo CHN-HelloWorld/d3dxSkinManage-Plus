@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from src.core.deployment_preparation import DeploymentPreparation
+from src.core.mod_package import overrides_seeded, seed_ini_overrides
 from src.core.mod_variant_manager import ModVariantManager
 from src.core.operation_preflight import confirm_deployment, confirm_metadata, confirm_source
 from src.core.variant_operation import FileChange, VariantOperation, read_bytes
@@ -67,6 +68,9 @@ class EnablePreparation:
         self.source_receipt.recheck()
         confirm_metadata(self.source_receipt)
         confirm_deployment(mod.mod_id, self.deploy_path)
+        if not overrides_seeded(mod.path) and not seed_ini_overrides(mod.path):
+            raise OSError(tr("无法读取完整的 Mod 配置，请检查压缩包和文件访问权限后重试。"))
+        storage.prepare_nested_deployment(self.deploy_path, mod.mod_id)
         if self.stage_only:
             name = storage.active_name_from_parked(self.deploy_path, mod.mod_id)
             restored = storage.restore_parked_deployment(self.deploy_path, name)

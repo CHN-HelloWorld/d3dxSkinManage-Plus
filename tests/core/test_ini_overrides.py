@@ -5,8 +5,11 @@ from __future__ import annotations
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from src.core.mod_package import (
     body_ini_rels,
+    inspect_effective_inis,
     iter_effective_inis,
     list_overrides,
     override_path_for,
@@ -14,12 +17,43 @@ from src.core.mod_package import (
     read_override,
     resolve_effective_ini_text,
     resolve_ini_overrides_dir,
+    seed_ini_overrides,
     write_container_marker,
     write_override,
 )
 
 _INI = "[KeySwap]\nkey = VK_A\nback = VK_B\n"
 _INI_EDITED = "[KeySwap]\nkey = VK_X\nback = VK_B\n"
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_legacy_seed_marker_does_not_hide_missing_original_inis(tmp_path, partial):
+    body = _archive_container(tmp_path, "Legacy")
+    base = resolve_ini_overrides_dir(body)
+    base.mkdir(parents=True)
+    (base / ".seeded").write_text("1", encoding="utf-8")
+    if partial:
+        assert write_override(body, "merged.ini", _INI_EDITED)
+    expected = {"merged.ini": _INI_EDITED if partial else _INI, "sub/extra.ini": _INI}
+    assert dict(inspect_effective_inis(body).read()) == expected
+    assert dict(iter_effective_inis(body)) == expected
+
+
+def test_failed_archive_read_does_not_mark_overrides_complete(tmp_path, monkeypatch):
+    from src.services.archive import ArchiveService
+
+    body = _archive_container(tmp_path, "Incomplete")
+    monkeypatch.setattr(ArchiveService, "read_all_inis", lambda *_: {})
+    assert not seed_ini_overrides(body)
+    assert not (resolve_ini_overrides_dir(body) / ".seeded").exists()
+
+
+def test_missing_seeded_override_still_reads_original_ini(tmp_path):
+    body = _archive_container(tmp_path, "Missing")
+    assert seed_ini_overrides(body)
+    assert write_override(body, "merged.ini", _INI_EDITED)
+    override_path_for(body, "sub/extra.ini").unlink()
+    assert dict(inspect_effective_inis(body).read()) == {"merged.ini": _INI_EDITED, "sub/extra.ini": _INI}
 
 
 def _folder_container(root: Path, name: str) -> Path:

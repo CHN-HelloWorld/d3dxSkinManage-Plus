@@ -20,6 +20,7 @@ from pathlib import Path
 from src.core.mod_runtime_prefs import PREFS_LOCK
 from src.utils import fs
 from src.utils.i18n import t as tr
+from src.utils.logger import logger
 
 
 def read_bytes(path: Path) -> bytes | None:
@@ -120,10 +121,17 @@ class IniInventoryGuard:
         if self.scope == "source":
             current = _source_inventory_image(inspect_effective_inis(self.path))
         elif self.scope == "deployed":
-            current = json.dumps(sorted(rel for rel, _token in _strict_ini_tree(self.path)))
+            current = json.dumps(sorted(rel for rel, _token in _strict_ini_tree(self.path, exclude_meta=True)))
         else:
             raise ValueError(tr("无效的 INI 清单前提类型"))
         if current != self.expected:
+            logger.warning(
+                "INI 清单校验不一致: scope=%s, path=%s, expected=%s, actual=%s",
+                self.scope,
+                self.path,
+                self.expected,
+                current,
+            )
             raise VariantRecoveryError(tr("INI 清单已被外部修改，无法应用陈旧声明：{path}", path=self.path))
 
     def to_dict(self) -> dict:

@@ -134,6 +134,34 @@ def test_async_enable_uses_private_selection_or_original_default(env, named_sele
     assert _user_keys(env["user_ini"]).get(_KEY) == expected
 
 
+@pytest.mark.parametrize("cached", [False, True])
+def test_enable_repairs_legacy_empty_ini_seed_without_reimport(env, cached):
+    """新解压与已有停放副本均补齐旧配置目录，不误判为外部修改。"""
+    from src.core.deployment_enable import EnablePreparation
+    from src.core.mod_package import override_path_for
+
+    mm, mod = env["mm"], env["mod"]
+    parked = None
+    if cached:
+        parked = mm._storage.materialize_deployment(mod.path, mod.mod_id, mod.folder_name, active=False)
+    override = override_path_for(mod.path, "merged.ini")
+    override.unlink()
+    (override.parent / ".seeded").write_text("1", encoding="utf-8")
+    if parked is None:
+        parked = mm._storage.materialize_deployment(mod.path, mod.mod_id, mod.folder_name, active=False)
+    preparation = EnablePreparation(mm, mod.mod_id, parked, stage_only=True).run()
+    enabled = mm.finalize_enable(
+        mod.mod_id,
+        True,
+        deploy_path=preparation.deploy_path,
+        source_receipt=preparation.source_receipt,
+        preparation=preparation,
+    )
+    assert enabled is not None and enabled.is_enabled
+    assert override.read_bytes() == _MOD_INI.encode()
+    assert (Path(preparation.deploy_path) / "merged.ini").read_bytes() == _MOD_INI.encode()
+
+
 def test_two_presets_switch_variant_without_redeploying(env):
     mm, mod, char, user_ini = env["mm"], env["mod"], env["char"], env["user_ini"]
     pm = mm.preset_manager

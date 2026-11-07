@@ -20,6 +20,7 @@ import zlib
 from copy import deepcopy
 from dataclasses import dataclass
 from datetime import datetime
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -1022,7 +1023,29 @@ def overrides_seeded(mod_path: str | Path) -> bool:
     base = resolve_ini_overrides_dir(mod_path)
     if base is None:
         return False
-    return fs.is_file(base / INI_OVERRIDES_SEEDED_MARKER)
+    return inspect_effective_inis(mod_path).seed_version is not None
+
+
+def write_ini_seed(mod_path: str | Path, relative_paths) -> None:
+    """记录当前归档版本及已完整提取的原始 INI 成员，旧标记仍可通过归档目录验证。"""
+    path = Path(fs.normal_path(mod_path))
+    base = resolve_ini_overrides_dir(path)
+    if base is None:
+        raise ValueError(tr("无法保存 Mod 配置，请重新导入此 Mod 后重试。"))
+    members = sorted({_validate_relative_member(rel, "INI") for rel in relative_paths})
+    fs.ensure_dir(base)
+    fs.write_text(
+        base / INI_OVERRIDES_SEEDED_MARKER,
+        json.dumps(
+            {
+                "schema": 1,
+                "ini_layout": 2,
+                "body_version": _ini_stat_token(os.stat(fs.native_path(path))),
+                "inis": members,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 def seed_ini_overrides(mod_path: str | Path) -> bool:
@@ -1031,6 +1054,7 @@ def seed_ini_overrides(mod_path: str | Path) -> bool:
     仅处理容器中的归档本体；非归档或非容器路径返回 False。
     已有覆盖文件包含用户编辑结果，不能被本体内容覆盖。
     归档只打开一次以批量读取全部 INI；任一步失败时返回 False，由调用方读取本体。
+    完成标记保存归档版本和原始成员路径；旧的纯文本标记通过归档目录验证，不作为完整性证明。
     """
     p = Path(fs.normal_path(mod_path))
     if not (fs.is_file(p) and is_resident_archive(p)):
@@ -1039,34 +1063,15 @@ def seed_ini_overrides(mod_path: str | Path) -> bool:
     if base is None:
         return False
     try:
-        existing = set(list_overrides(mod_path))  # 已编辑的 override，不覆盖
-        pairs: list[tuple[str, str]] = []  # (rel, text)
-
-        try:
-            from src.services.archive import ArchiveService
-
-            raw = ArchiveService().read_all_inis(p)
-        except Exception:
-            raw = {}
-        top = _archive_top_prefix(p)
-        for member, data in raw.items():
-            nn = member.replace("\\", "/")
-            rel = nn
-            if top and (nn == top or nn.startswith(top + "/")):
-                rel = nn[len(top) + 1 :] if nn.startswith(top + "/") else ""
-            rel = _norm_rel(rel)
-            if not rel or rel in existing:
-                continue
-            try:
-                pairs.append((rel, data.decode("utf-8", errors="surrogateescape")))
-            except Exception:
-                pass
-
+        version = _ini_stat_token(os.stat(fs.native_path(p)))
+        existing = {rel for rel, _ in _strict_ini_tree(base)} if fs.is_dir(base) else set()
+        pairs = _read_complete_archive_inis(p)
         for rel, text in pairs:
-            write_override(mod_path, rel, text)
-        # 即使本体不含 INI 也写入完成标记，避免反复打开归档确认。
-        fs.ensure_dir(base)
-        fs.write_text(base / INI_OVERRIDES_SEEDED_MARKER, "1", encoding="utf-8")
+            if rel not in existing and not write_override(mod_path, rel, text):
+                raise OSError(tr("无法保存 Mod 配置，请检查文件是否被占用后重试。"))
+        if _ini_stat_token(os.stat(fs.native_path(p))) != version:
+            raise OSError(tr("Mod 文件在读取时发生变化，请等待文件复制或修改完成后重试。"))
+        write_ini_seed(p, (rel for rel, _ in pairs))
         return True
     except Exception as e:
         logger.warning("播种 ini override 失败: %s", e)
@@ -1089,24 +1094,9 @@ def body_ini_rels(mod_path: str | Path) -> list[str]:
     rels: list[str] = []
     if fs.is_file(p) and is_resident_archive(p):
         try:
-            from src.services.archive import ArchiveService
-
-            names = ArchiveService().list_contents(p)
+            return list(_archive_ini_paths(p, _ini_stat_token(os.stat(fs.native_path(p)))))
         except Exception:
             return []
-        top = _archive_top_prefix(p)
-        for n in names:
-            nn = n.replace("\\", "/")
-            if nn.endswith("/") or not nn.lower().endswith(".ini"):
-                continue
-            if META_DIR in nn.split("/"):
-                continue
-            rel = nn
-            if top and (nn == top or nn.startswith(top + "/")):
-                rel = nn[len(top) + 1 :] if nn.startswith(top + "/") else ""
-            rel = _norm_rel(rel)
-            if rel:
-                rels.append(rel)
     elif fs.is_dir(p):
         try:
             for f in sorted(fs.iter_files(p), key=lambda item: str(item).casefold()):
@@ -1130,9 +1120,13 @@ def read_body_ini_text(mod_path: str | Path, rel: str | Path) -> str | None:
         return None
     if fs.is_file(p) and is_resident_archive(p):
         try:
+            from src.core.nested_mod_archive import archive_has_containers, read_nested_archive_inis
             from src.services.archive import ArchiveService
 
             svc = ArchiveService()
+            entries = svc.list_entries(p)
+            if entries is not None and archive_has_containers(entries):
+                return dict(read_nested_archive_inis(p, _ini_stat_token(os.stat(fs.native_path(p))))).get(norm)
             top = _archive_top_prefix(p)
             member = f"{top}/{norm}" if top else norm
             raw = svc.read_file(p, member)
@@ -1162,71 +1156,22 @@ def resolve_effective_ini_text(mod_path: str | Path, rel: str | Path) -> str | N
 
 
 def iter_effective_inis(mod_path: str | Path) -> list[tuple[str, str]]:
-    """列出本体与覆盖目录中的全部有效 INI，以相对路径和完整文本返回。
-
-    覆盖文件优先于同名本体文件，按键解析和部署共用此结果。
-    归档批量读取全部 INI，避免逐个成员打开归档所需的重复初始化开销。
-    """
-    p = Path(fs.normal_path(mod_path))
-    seen: set[str] = set()
-    out: list[tuple[str, str]] = []
-
-    # 先读取覆盖文件，保留用户编辑后的内容。
-    ov_texts: dict[str, str] = {}
+    """完整读取归档配置或合并目录配置，已有覆盖文件优先于原始 INI。"""
+    path = Path(fs.normal_path(mod_path))
+    if fs.is_file(path) and is_resident_archive(path):
+        return list(inspect_effective_inis(path).read())
+    overrides = {}
     for rel in list_overrides(mod_path):
-        if rel.lower().endswith(".ini"):
-            t = read_override(mod_path, rel)
-            if t is not None:
-                ov_texts[rel] = t
-
-    # 完整初始化的覆盖目录已包含全部 INI，可直接返回而无需打开归档。
-    if fs.is_file(p) and is_resident_archive(p) and overrides_seeded(p):
-        return list(ov_texts.items())
-
-    if fs.is_file(p) and is_resident_archive(p):
-        # 一次读取归档内全部 INI，同名覆盖文件保持优先。
-        try:
-            from src.services.archive import ArchiveService
-
-            raw = ArchiveService().read_all_inis(p)
-        except Exception:
-            raw = {}
-        top = _archive_top_prefix(p)
-        for member, data in raw.items():
-            nn = member.replace("\\", "/")
-            rel = nn
-            if top and (nn == top or nn.startswith(top + "/")):
-                rel = nn[len(top) + 1 :] if nn.startswith(top + "/") else ""
-            rel = _norm_rel(rel)
-            if not rel or rel in seen:
-                continue
-            seen.add(rel)
-            if rel in ov_texts:
-                out.append((rel, ov_texts[rel]))
-            else:
-                try:
-                    out.append((rel, data.decode("utf-8", errors="surrogateescape")))
-                except Exception:
-                    pass
-    else:
-        # 直接读取文件夹本体，同名覆盖文件保持优先。
-        for rel in body_ini_rels(mod_path):
-            if rel in seen:
-                continue
-            seen.add(rel)
-            if rel in ov_texts:
-                out.append((rel, ov_texts[rel]))
-            else:
-                t = read_body_ini_text(mod_path, rel)
-                if t is not None:
-                    out.append((rel, t))
-
-    # 补入仅存在于覆盖目录的 INI。
-    for rel, t in ov_texts.items():
-        if rel not in seen:
-            seen.add(rel)
-            out.append((rel, t))
-    return out
+        text = read_override(mod_path, rel)
+        if text is not None:
+            overrides[rel] = text
+    texts = {}
+    for rel in body_ini_rels(mod_path):
+        text = overrides.get(rel) if rel in overrides else read_body_ini_text(mod_path, rel)
+        if text is not None:
+            texts.setdefault(rel, text)
+    texts.update(overrides)
+    return list(texts.items())
 
 
 def _ini_stat_token(info):
@@ -1251,7 +1196,7 @@ def _strict_ini_tree(root, *, exclude_meta=False):
         with os.scandir(fs.native_path(directory)) as entries:
             children = sorted(entries, key=lambda entry: entry.name)
         for entry in children:
-            if exclude_meta and entry.name == META_DIR:
+            if exclude_meta and entry.name.casefold() == META_DIR:
                 continue
             path = directory / entry.name
             info = os.stat(fs.native_path(path))
@@ -1339,17 +1284,67 @@ def inspect_effective_inis(mod_path: str | Path) -> EffectiveIniInventory:
                     raise OSError(tr("INI 播种标记无效：{base}", base=base))
                 seed = _ini_stat_token(seed_stat)
     originals = _strict_ini_tree(path, exclude_meta=True) if folder else ()
+    if not folder:
+        members = None
+        if seed is not None:
+            try:
+                record = json.loads(fs.read_text(base / INI_OVERRIDES_SEEDED_MARKER, encoding="utf-8"))
+                if (
+                    isinstance(record, dict)
+                    and record.get("schema") == 1
+                    and record.get("ini_layout") == 2
+                    and record.get("body_version") == list(_ini_stat_token(body))
+                    and isinstance(record.get("inis"), list)
+                ):
+                    members = tuple(_validate_relative_member(rel, "INI") for rel in record["inis"])
+            except (ValueError, UnicodeError):
+                pass
+        if members is None:
+            members = _archive_ini_paths(path, _ini_stat_token(body))
+        originals = tuple((rel, ()) for rel in members)
+        if not set(members).issubset(rel for rel, _ in overrides):
+            seed = None
     return EffectiveIniInventory(path, _ini_stat_token(body), base, seed, overrides, originals)
 
 
-def _read_complete_archive_inis(path):
+@lru_cache(maxsize=128)
+def _archive_ini_paths(path: Path, version: tuple) -> tuple[str, ...]:
+    """按归档文件版本缓存完整成员目录，兼容没有成员记录的旧初始化标记。"""
+    from src.services.archive import ArchiveService
+
+    entries = ArchiveService().list_entries(path)
+    if entries is None:
+        raise OSError(tr("无法读取 Mod 压缩包，请检查文件是否损坏或被占用后重试：{path}", path=path))
+    from src.core.nested_mod_archive import archive_has_containers, read_nested_archive_inis
+
+    if archive_has_containers(entries):
+        return tuple(relative for relative, _text in read_nested_archive_inis(path, version))
+    names = set()
+    for name, _, _ in entries:
+        name = _validate_relative_member(name.replace("\\", "/"), "INI")
+        if name.casefold() in names:
+            raise ValueError(tr("压缩包中有同名文件，请使用文件名不重复的 Mod 压缩包：{name}", name=name))
+        names.add(name.casefold())
+    prefix = _detect_single_top({name for name, _, _ in entries if not _is_under_meta(name)})
+    return tuple(
+        name[len(prefix) + 1 :] if prefix else name
+        for raw, _, _ in entries
+        if (name := raw.replace("\\", "/")).casefold().endswith(".ini") and not _is_under_meta(name)
+    )
+
+
+def _read_complete_archive_inis(path, *, service=None):
     """校验压缩包成员路径、重复项及 INI 大小和校验码，完整读取后返回相对路径与文本。"""
     from src.services.archive import ArchiveService
 
-    service = ArchiveService()
+    service = service or ArchiveService()
     entries = service.list_entries(path)
     if entries is None:
         raise OSError(tr("无法确认归档 INI 成员完整性，请检查归档或重试：{path}", path=path))
+    from src.core.nested_mod_archive import archive_has_containers, read_nested_archive_inis
+
+    if archive_has_containers(entries):
+        return read_nested_archive_inis(path, _ini_stat_token(os.stat(fs.native_path(path))))
     expected = {}
     names = set()
     for name, size, crc in entries:

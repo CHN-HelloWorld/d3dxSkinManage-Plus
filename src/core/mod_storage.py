@@ -13,6 +13,7 @@ import shutil
 import stat
 import threading
 import time
+import uuid
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path, PureWindowsPath
@@ -331,6 +332,53 @@ class ModStorage:
         """生成部署路径的绝对且按平台规范大小写的比较键。"""
         return os.path.normcase(os.path.abspath(str(path)))
 
+    @library_mutation
+    def prepare_nested_deployment(self, deploy_path: str | Path, mod_id: str) -> None:
+        """在独立副本中修复旧版未展开的部署，原子替换成功前保留原目录和本地配置。"""
+        from src.core.nested_mod_archive import expand_container_tree, tree_has_containers
+
+        source = Path(fs.normal_path(deploy_path))
+        self._check_deployment_identity(source, mod_id)
+        if not tree_has_containers(source):
+            return
+        root = self.get_deploy_dir().resolve()
+
+        def checked(path):
+            """确认升级目录及备份仍位于当前加载器部署根目录内。"""
+            if not path.resolve().is_relative_to(root):
+                raise OSError(tr("部署目录不在当前加载器目录内，已停止操作，请检查游戏设置。"))
+            return path
+
+        checked(source)
+        token = uuid.uuid4().hex
+        prepared = checked(source.with_name(f"{MIGOTO_DISABLED_PREFIX}_{token}.nested"))
+        backup = checked(source.with_name(f"{MIGOTO_DISABLED_PREFIX}_{token}.backup"))
+        if fs.lexists(prepared) or fs.lexists(backup):
+            raise FileExistsError(tr("临时部署目录已存在，请稍后重试。"))
+        try:
+            fs.copy_path(source, prepared)
+            expand_container_tree(prepared)
+            from src.core.mod_package import _strict_ini_tree
+
+            for relative, _token in _strict_ini_tree(prepared, exclude_meta=True):
+                os.utime(fs.native_path(checked(prepared / relative)), None)
+            self._check_deployment_identity(prepared, mod_id)
+            with _DEPLOYMENT_PUBLISH_LOCK:
+                self._check_deployment_identity(source, mod_id)
+                self._rename_staged_deployment(checked(source), checked(backup))
+                try:
+                    self._rename_staged_deployment(checked(prepared), checked(source))
+                except Exception:
+                    if not fs.lexists(source):
+                        self._rename_staged_deployment(checked(backup), checked(source))
+                    raise
+            self._check_deployment_identity(backup, mod_id)
+            fs.rmtree(checked(backup))
+            logger.info("旧部署中的嵌套 Mod 已完整展开: %s", source)
+        finally:
+            if fs.exists(prepared):
+                fs.rmtree(checked(prepared))
+
     @staticmethod
     def _rename_staged_deployment(source: Path, target: Path, should_cancel=None) -> None:
         """等待 Windows 的短暂目录占用解除后再判定失败。"""
@@ -422,9 +470,13 @@ class ModStorage:
                 raise ValueError(f"unsupported deployment source: {source}")
             if cancelled():
                 raise InterruptedError("deployment materialization cancelled")
-            from src.core.mod_package import list_overrides
+            from src.core.mod_package import list_overrides, overrides_seeded, seed_ini_overrides
+            from src.core.nested_mod_archive import expand_container_tree
 
+            expand_container_tree(partial_path, should_cancel=should_cancel)
             self._strip_deployed_meta(partial_path)
+            if not overrides_seeded(source) and not seed_ini_overrides(source):
+                raise OSError(tr("无法读取完整的 Mod 配置，请检查压缩包和文件访问权限后重试。"))
             self._apply_overrides_to_deploy(source, partial_path, list_overrides(str(source)))
             from src.models.mod import Mod
 
