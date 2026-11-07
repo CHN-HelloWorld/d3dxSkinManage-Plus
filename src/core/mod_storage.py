@@ -290,7 +290,7 @@ class ModStorage:
                 return None
             if not self._deploy_path_exists(source):
                 return None
-            os.replace(fs.native_path(source), fs.native_path(parked))
+            self._rename_staged_deployment(source, parked)
             if self._deploy_path_exists(source) or not self._deploy_path_exists(parked):
                 raise OSError("park invariant verification failed")
             logger.info("部署已停放: %s -> %s", source, parked)
@@ -317,7 +317,7 @@ class ModStorage:
                 return None
             if not self._deploy_path_exists(parked):
                 return None
-            os.replace(fs.native_path(parked), fs.native_path(target))
+            self._rename_staged_deployment(parked, target)
             if self._deploy_path_exists(parked) or not self._deploy_path_exists(target):
                 raise OSError("restore invariant verification failed")
             logger.info("部署已恢复: %s -> %s", parked, target)
@@ -334,7 +334,7 @@ class ModStorage:
     @staticmethod
     def _rename_staged_deployment(source: Path, target: Path, should_cancel=None) -> None:
         """等待 Windows 的短暂目录占用解除后再判定失败。"""
-        deadline = time.monotonic() + 1.0
+        deadline = time.monotonic() + 3.0
         while True:
             if should_cancel is not None and should_cancel():
                 raise InterruptedError("deployment materialization cancelled")

@@ -6,10 +6,48 @@ from pathlib import Path
 
 import pytest
 
+from src.core.mod_identity import write_deployment_identity
 from src.core.mod_package import write_container_marker
 from src.core.mod_storage import ModStorage
 from src.models.mod import Mod
 from src.utils import fs
+
+
+@pytest.mark.parametrize("action", ["park", "restore"])
+def test_park_and_restore_retry_transient_windows_directory_lock(tmp_path, monkeypatch, action):
+    identity = "abcdefabcdef4def8defabcdefabcdef"
+    storage = ModStorage()
+    root = tmp_path / "deploy"
+    root.mkdir()
+    storage.set_migoto_mods_dir(root)
+    name = "Skin" if action == "park" else storage._parked_deploy_name(identity, "Skin")
+    source = root / name
+    source.mkdir()
+    write_deployment_identity(source, identity, "0" * 40)
+    (source / "mod.ini").write_bytes(b"[Constants]\nx=1\n")
+    rename, replace = os.rename, os.replace
+    calls = []
+
+    def blocked(operation, old, new):
+        """模拟目录暂时被 Windows 占用，两次失败后允许原子改名。"""
+        if len(calls) < 2:
+            calls.append(str(old))
+            error = PermissionError("directory temporarily in use")
+            error.winerror = 5
+            raise error
+        return operation(old, new)
+
+    monkeypatch.setattr(os, "rename", lambda old, new: blocked(rename, old, new))
+    monkeypatch.setattr(os, "replace", lambda old, new: blocked(replace, old, new))
+    target = (
+        storage.park_deployment(source, identity)
+        if action == "park"
+        else storage.restore_parked_deployment(source, "Skin")
+    )
+    assert target is not None
+    assert not source.exists()
+    assert fs.read_bytes(target / "mod.ini") == b"[Constants]\nx=1\n"
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize("nested_name", ["skin", "skin/skin", "SKIN"])
