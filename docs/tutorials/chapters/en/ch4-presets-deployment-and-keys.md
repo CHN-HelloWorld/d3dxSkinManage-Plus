@@ -60,6 +60,10 @@ Support for reading ZIP, 7z, and RAR is included with the application. **Creatin
 
 Deployment always uses extracted copies. Progress that does not change continuously does not necessarily mean a task has stalled; archive format, file count, and disk performance all affect the processing stages.
 
+After a large Mod is extracted, file scanning may briefly lock its folder. The manager waits and retries automatically. If a file-access warning remains, close the game and tools viewing the Mod files, then try again and check deployment folder permissions.
+
+For Mods imported by older versions, deployment fills in missing original configuration files while keeping your customized keys. You do not need to delete or reimport the Mod. If another program is editing the configuration, the operation stops to avoid overwriting changes. Wait for editing to finish, then try again; do not manually delete management files.
+
 ### 4.4 Enabling, parking, and disabling
 
 Enabling first checks the source container, metadata, deployment location, and operations in progress. It then prepares resources, applies the effective INI content and configuration, and publishes the finished copy to the deployment folder.
@@ -191,3 +195,9 @@ Named configurations are stored in the Mod container's `.d3dxmeta/variants/`. Fo
 Import checks the variant format and whether its variables can be matched to the Mod. Mismatched content, duplicate identities, damaged files, and similar issues may be rejected. You cannot apply an arbitrary variant JSON from another Mod directly.
 
 A game's private working state records serve a different purpose from named variants. For a full backup on your machine, retain `config/`, `data/`, and external resources. An export package is sufficient for sharing a single Mod.
+
+### 4.12 Archives containing multiple manager containers
+
+If an archive contains several complete manager Mod containers, deployment expands each body and keeps its configuration. Manual unpacking is not required. Previously prepared deployments are upgraded automatically when enabled; the original folder is retained if upgrading fails. Ordinary archive attachments are not unpacked recursively.
+
+A configuration inventory mismatch does not imply that another program has locked the files. The manager distinguishes configuration mismatches, write-permission failures, and file-use errors explicitly reported by Windows, and records the actual inventory mismatch in the logs.
