@@ -49,6 +49,61 @@ void AddSyncTests(TestList& tests) {
                          CHECK(plan.sourceDirs ==
                                std::vector<std::wstring>({L"Core", L"config", L"empty", L"empty/nested"}));
                      }});
+    tests.push_back({"sync.manifest_updates_official_plugins_and_preserves_unregistered_files", [] {
+                         TempDir temp;
+                         const auto source = temp.path() / L"new";
+                         const auto target = temp.path() / L"installed";
+                         Write(source / L"files.manifest",
+                               "[managed]\nplugins/official.added/entry.py\nplugins/official.test/entry.py\n"
+                               "[preserve]\nplugins/\n");
+                         Write(target / L"files.manifest",
+                               "[managed]\nplugins/official.test/entry.py\nplugins/official.test/old/nested.py\n"
+                               "plugins/official.removed/entry.py\n[preserve]\nplugins/\n");
+                         Write(source / L"plugins/official.added/entry.py", "added");
+                         Write(source / L"plugins/official.test/entry.py", "new");
+                         Write(source / L"plugins/official.test/private.json", "package private");
+                         Write(source / L"plugins/third.party/entry.py", "package third party");
+                         Write(target / L"plugins/official.test/entry.py", "old");
+                         Write(target / L"plugins/official.test/old/nested.py", "obsolete");
+                         Write(target / L"plugins/official.removed/entry.py", "removed plugin");
+                         Write(target / L"plugins/official.test/private.json", "user private");
+                         Write(target / L"plugins/official.test/local/entry.py", "local file");
+                         Write(target / L"plugins/third.party/entry.py", "user third party");
+                         const auto manifests = LoadManifests(source, target, {L"plugins/"});
+                         const auto plan = CollectSyncPlan(manifests, source, target);
+                         CHECK(plan.toCopy == std::vector<std::wstring>({L"plugins/official.added/entry.py",
+                                                                         L"plugins/official.test/entry.py"}));
+                         CHECK(plan.toRemove == std::vector<std::wstring>({L"plugins/official.removed/entry.py",
+                                                                           L"plugins/official.test/old/nested.py"}));
+                         CHECK(SyncFiles(manifests, source, target, plan));
+                         CHECK(Read(target / L"plugins/official.added/entry.py") == "added");
+                         CHECK(Read(target / L"plugins/official.test/entry.py") == "new");
+                         CHECK(!fs::exists(target / L"plugins/official.test/old"));
+                         CHECK(!fs::exists(target / L"plugins/official.removed"));
+                         CHECK(Read(target / L"plugins/official.test/private.json") == "user private");
+                         CHECK(Read(target / L"plugins/official.test/local/entry.py") == "local file");
+                         CHECK(Read(target / L"plugins/third.party/entry.py") == "user third party");
+                     }});
+    tests.push_back({"sync.plugin_preserve_exception_requires_explicit_file_entries", [] {
+                         ManifestSet manifests;
+                         manifests.managed = {L"plugins/official.test/entry.py", L"data/private.json"};
+                         manifests.installed = {L"plugins/official.old/entry.py"};
+                         manifests.preserve = {L"plugins/"};
+                         CHECK(!IsPreserved(manifests, L"plugins"));
+                         CHECK(!IsPreserved(manifests, L"plugins/official.test"));
+                         CHECK(!IsPreserved(manifests, L"PLUGINS\\OFFICIAL.TEST\\ENTRY.PY"));
+                         CHECK(!IsPreserved(manifests, L"plugins/official.old/entry.py"));
+                         CHECK(IsPreserved(manifests, L"plugins/official.test/private.json"));
+                         CHECK(IsPreserved(manifests, L"plugins/official.test/local/entry.py"));
+                         CHECK(IsPreserved(manifests, L"plugins/official.test-extra/entry.py"));
+                         CHECK(IsPreserved(manifests, L"plugins/third.party/entry.py"));
+                         CHECK(IsPreserved(manifests, L"data/private.json"));
+                         manifests.managed = {L"plugins/", L"plugins/official.test/",
+                                              L"plugins/official.test/../third.party/entry.py"};
+                         manifests.installed.clear();
+                         CHECK(IsPreserved(manifests, L"plugins/official.test/private.json"));
+                         CHECK(IsPreserved(manifests, L"plugins/third.party/entry.py"));
+                     }});
     tests.push_back({"sync.no_baseline_never_deletes_existing_files", [] {
                          TempDir temp;
                          Write(temp.path() / L"new/d3dxSkinManage-Plus.exe", "new");

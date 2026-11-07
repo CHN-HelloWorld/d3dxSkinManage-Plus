@@ -136,6 +136,16 @@ bool IsLanguageConfig(const std::wstring& relativePath) {
 }
 
 bool IsPreserved(const ManifestSet& manifests, const std::wstring& relativePath) {
+    if (MatchesRule(relativePath, L"plugins/", false)) {
+        for (const auto* files : {&manifests.managed, &manifests.installed}) {
+            for (const auto& file : *files) {
+                if (IsSafeRelative(file) && MatchesRule(file, L"plugins/", false) && file.back() != L'/' &&
+                    file.back() != L'\\' && MatchesRule(relativePath, file, true)) {
+                    return false;
+                }
+            }
+        }
+    }
     for (const auto* rule : {L"data/", L"config/", L"cache/", L"logs/", L"plugins/", L"Updater/"}) {
         if (MatchesRule(relativePath, rule, false))
             return true;

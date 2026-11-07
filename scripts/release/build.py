@@ -48,33 +48,6 @@ LANGUAGES = ROOT / "config" / "languages"
 SHIPPED_LANGUAGE_FILES = ("schema.json", "zh-CN/strings.json", "en-US/strings.json")
 LANGUAGE_ARCHIVE_PATHS = frozenset(f"config/languages/{name}" for name in SHIPPED_LANGUAGE_FILES)
 PLUGINS = ROOT / "plugins"
-SHIPPED_PLUGIN_IDS = (
-    "example.mod-inventory",
-    "example.preset-audit",
-    "example.preset-cycle",
-    "official.legacy-migration",
-)
-_PLUGIN_COMMON_FILES = ("plugin.json", "entry.py", "languages/en-US/strings.json", "README.md")
-SHIPPED_PLUGIN_FILES = {
-    "example.mod-inventory": (*_PLUGIN_COMMON_FILES, "inventory.py"),
-    "example.preset-audit": _PLUGIN_COMMON_FILES,
-    "example.preset-cycle": _PLUGIN_COMMON_FILES,
-    "official.legacy-migration": (
-        *_PLUGIN_COMMON_FILES,
-        "legacy.py",
-        "controller.py",
-        "wizard.py",
-        "preview.py",
-        "sources.py",
-        "report.py",
-        "languages/zh-CN/strings.json",
-    ),
-}
-PLUGIN_ARCHIVE_PATHS = frozenset(
-    f"plugins/{plugin_id}/{relative}"
-    for plugin_id in SHIPPED_PLUGIN_IDS
-    for relative in SHIPPED_PLUGIN_FILES[plugin_id]
-)
 SHIPPED_DOCUMENT_FILES = (
     "d3dxSkinManage-Plus 使用教程.html",
     "d3dxSkinManage-Plus User Guide.html",
@@ -98,7 +71,7 @@ DIST_NAME = "d3dxSkinManage-Plus"  # standalone 成品文件夹名（项目 buil
 NATIVE_UPDATER_EXE = ROOT / "updater" / "bin" / "x64" / "Release" / UPDATER_EXE_NAME
 LEGAL_NOTICES = ("LICENSE", "THIRD_PARTY_NOTICES.md")
 ICON = RESOURCES / "app.ico"  # 存在则用作程序图标（可选）
-# 排除运行生成的用户数据，仅通过白名单加入默认配置和内置插件。
+# 排除运行生成的用户数据；默认语言包单独列出，官方插件从源码目录收集。
 RUNTIME_ARTIFACTS = ("data", "config", "cache", "logs", "plugins")
 DEFAULT_INDEX_URL = "https://pypi.org/simple"
 
@@ -355,16 +328,27 @@ def stage_project_story(product_dir: Path) -> Path:
     return directory
 
 
+def source_plugin_files() -> list[Path]:
+    """扫描源码目录中的官方插件文件，排除 Python 缓存、字节码、日志与崩溃转储。"""
+    return [
+        path
+        for path in sorted(PLUGINS.rglob("*"))
+        if path.is_file()
+        and "__pycache__" not in path.relative_to(PLUGINS).parts
+        and path.suffix.lower() not in (".pyc", ".pyo", ".log", ".stackdump")
+    ]
+
+
 def stage_plugins(product_dir: Path) -> Path:
-    """复制随包插件的清单、源码、语言包与说明，排除本地安装文件。"""
+    """复制源码扫描得到的官方插件文件，清理构建目录中残留的本地插件。"""
     directory = product_dir / "plugins"
     if directory.exists():
         shutil.rmtree(directory)
-    for plugin_id in SHIPPED_PLUGIN_IDS:
-        for relative in SHIPPED_PLUGIN_FILES[plugin_id]:
-            target = directory / plugin_id / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(PLUGINS / plugin_id / relative, target)
+    directory.mkdir(parents=True, exist_ok=True)
+    for source in source_plugin_files():
+        target = directory / source.relative_to(PLUGINS)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
     return directory
 
 
@@ -433,7 +417,7 @@ def stage_legal_notices(product_dir: Path) -> tuple[Path, ...]:
     return tuple(targets)
 
 
-def _is_release_file(relative: Path) -> bool:
+def _is_release_file(relative: Path, plugin_paths: set[str]) -> bool:
     """判断相对路径是否应进入发行包，过滤运行产物并限定更新器目录只包含目标可执行文件。"""
     if relative.parts[0].casefold() == "docs":
         return (Path("docs") / Path(*relative.parts[1:])).as_posix() in DOCUMENT_ARCHIVE_PATHS
@@ -442,26 +426,27 @@ def _is_release_file(relative: Path) -> bool:
     return relative.suffix.lower() not in (".log", ".stackdump") and (
         relative.parts[0] not in RUNTIME_ARTIFACTS
         or relative.as_posix() in LANGUAGE_ARCHIVE_PATHS
-        or relative.as_posix() in PLUGIN_ARCHIVE_PATHS
+        or relative.as_posix() in plugin_paths
     )
 
 
 def release_files(entries: list[tuple[Path, str]]):
     """枚举实际纳入发行包的文件。"""
+    plugin_paths = {(Path("plugins") / path.relative_to(PLUGINS)).as_posix() for path in source_plugin_files()}
     for source, prefix in entries:
         candidates = sorted(source.rglob("*")) if source.is_dir() else [source]
         for path in candidates:
             if not path.is_file():
                 continue
             relative = Path(prefix) / (path.relative_to(source) if source.is_dir() else path.name)
-            if _is_release_file(relative):
+            if _is_release_file(relative, plugin_paths):
                 yield path, relative
 
 
 def generate_release_manifest(entries: list[tuple[Path, str]], product_dir: Path) -> Path:
     """根据实际发行文件生成原生更新器使用的基线清单。"""
     preserve = [f"{name}/" for name in (*RUNTIME_ARTIFACTS, UPDATER_SUBDIR)]
-    protected = {name.casefold() for name in (*RUNTIME_ARTIFACTS, UPDATER_SUBDIR)}
+    protected = {name.casefold() for name in (*RUNTIME_ARTIFACTS, UPDATER_SUBDIR) if name != "plugins"}
     managed = sorted(
         {
             relative.as_posix()

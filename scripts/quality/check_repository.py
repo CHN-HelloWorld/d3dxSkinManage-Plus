@@ -23,11 +23,7 @@ PUBLIC_ROOTS = (
     "updater",
     ".github",
     "config/languages",
-    "plugins/example.mod-inventory",
-    "plugins/example.preset-cycle",
-    "plugins/example.preset-audit",
-    "plugins/official.legacy-migration",
-    "plugins/official.directory-permissions",
+    "plugins",
 )
 GENERATED_DIRS = {"__pycache__", ".pytest_cache", ".ruff_cache", ".vs", "bin", "obj", "build", "dist"}
 TEXT_SUFFIXES = SOURCE_SUFFIXES | {
