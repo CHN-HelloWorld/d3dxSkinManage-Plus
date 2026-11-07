@@ -22,7 +22,7 @@ Section 10 provides reading and practice steps for each example. Sections 2–9 
 
 ### 1.1 Prepare the environment
 
-Use Windows 10/11 x64 and Python 3.10–3.14. Developing from the source checkout is recommended. Run these commands at the repository root; skip the first two if your development environment is already set up:
+Use Windows 10/11 x64 and Python 3.11–3.14. Developing from the source checkout is recommended. Run these commands at the repository root; skip the first two if your development environment is already set up:
 
 ```powershell
 python -m venv .venv

@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="#quick-start"><img src="docs/readme/windows.svg" alt="Windows 10 / 11 x64" height="24"></a>
-  <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.10–3.14" height="24"></a>
+  <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.11–3.14" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="https://img.shields.io/github/v/release/CHN-HelloWorld/d3dxSkinManage-Plus?style=flat&amp;label=Release&amp;color=8b5637&amp;cacheSeconds=300" alt="Latest stable release: download the portable Windows ZIP" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases"><img src="https://img.shields.io/github/downloads/CHN-HelloWorld/d3dxSkinManage-Plus/total?style=flat&amp;label=Downloads&amp;color=3c8da8" alt="Total GitHub Releases asset downloads" height="24"></a>
   <a href="LICENSE"><img src="docs/readme/license.svg" alt="License: PolyForm Noncommercial 1.0.0 with the Attribution Integrity Addendum" height="24"></a>
@@ -137,7 +137,7 @@ See the [personalization and background guide](docs/tutorials/chapters/en/ch6-se
 | Windows 10 / 11 x64 | The supported desktop platform |
 | A working 3DMigoto setup | Use the loader and configuration appropriate for your target game |
 | A Mod archive or folder | ZIP, 7z, and RAR imports are supported |
-| Python 3.10–3.14 | Required only when running from source; the complete Windows release includes its runtime |
+| Python 3.11–3.14 | Required only when running from source; the complete Windows release includes its runtime |
 
 **Local import, categorization, deployment, and preset management work offline.** Browsing GameBanana, downloading files, and checking for updates require a network connection.
 The manager organizes and deploys resources; 3DMigoto handles loading them in the game.

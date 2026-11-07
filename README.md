@@ -17,7 +17,7 @@
 
 <p align="center">
   <a href="#quick-start"><img src="docs/readme/windows.svg" alt="Windows 10 / 11 x64" height="24"></a>
-  <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.10–3.14" height="24"></a>
+  <a href="#source"><img src="docs/readme/python.svg" alt="Python 3.11–3.14" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases/latest"><img src="https://img.shields.io/github/v/release/CHN-HelloWorld/d3dxSkinManage-Plus?style=flat&amp;label=Release&amp;color=8b5637&amp;cacheSeconds=300" alt="最新正式版本：下载 Windows 便携 ZIP" height="24"></a>
   <a href="https://github.com/CHN-HelloWorld/d3dxSkinManage-Plus/releases"><img src="https://img.shields.io/github/downloads/CHN-HelloWorld/d3dxSkinManage-Plus/total?style=flat&amp;label=Downloads&amp;color=3c8da8" alt="GitHub Releases 附件累计下载次数" height="24"></a>
   <a href="LICENSE"><img src="docs/readme/license.svg" alt="许可：PolyForm Noncommercial 1.0.0 与署名完整性附加条款" height="24"></a>
@@ -137,7 +137,7 @@
 | Windows 10 / 11 x64 | 当前支持的桌面平台 |
 | 可正常工作的 3DMigoto 环境 | 使用与你的目标游戏匹配的加载器与配置 |
 | 一个 Mod 压缩包或文件夹 | ZIP、7z、RAR 均可导入 |
-| Python 3.10–3.14 | 从源码运行时需要；完整 Windows 构建包无需另装 Python |
+| Python 3.11–3.14 | 从源码运行时需要；完整 Windows 构建包无需另装 Python |
 
 **本地导入、分类、部署和预设管理可以离线使用。** 浏览 GameBanana、下载与检查更新时需要网络。
 管理器负责整理和部署资源，游戏内的实际加载由 3DMigoto 完成。
