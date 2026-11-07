@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from src.models.mod import AgeRating, Mod
 from src.models.tag import TagCommitResult, TagDraft
 from src.ui import acrylic, icons, theme
+from src.ui.error_messages import user_error_message
 from src.ui.widgets.tag_editor import plain_label
 from src.ui.widgets.tag_picker import TagPicker
 from src.utils.i18n import t as tr
@@ -651,7 +652,7 @@ class ModEditDialog(QDialog):
                 fields["tag_commit_result"] = committed
         except Exception as exc:  # 数据库错误时保留完整用户草稿。
             logger.exception("保存 Mod 编辑失败 game=%s mod=%s", self._mod.game_id, self._mod.mod_id)
-            self._save_error.setText(tr("保存失败：{exc}", exc=exc))
+            self._save_error.setText(tr("保存失败：{exc}", exc=user_error_message(exc)))
             self._save_error.show()
             return
         finally:

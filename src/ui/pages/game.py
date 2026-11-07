@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 from src.core.config import Config
 from src.core.game_service import GameConfig, GameService
 from src.ui import anim, icons, theme
+from src.ui.error_messages import user_error_message
 from src.ui.smooth_scroll import SmoothScroller
 from src.ui.widgets.game_card import GAME_ID_MIME, GameCard
 from src.ui.widgets.game_detail_panel import GameDetailPanel
@@ -833,7 +834,9 @@ class GamePage(QWidget):
         ok, error = self._migrate_deploy_contents(old_dir, new_dir, moved_paths=moved_paths)
         if not ok:
             QMessageBox.critical(
-                self, tr("迁移部署失败"), tr("未能安全迁移部署数据，游戏配置尚未保存。\n\n{error}", error=error)
+                self,
+                tr("迁移部署失败"),
+                tr("未能安全迁移部署数据，游戏配置尚未保存。\n\n{error}", error=user_error_message(error)),
             )
             return False
         # 物理内容已经在新目录了，库里记的 deployed_path 还指着旧目录 —— 必须立刻改写，
@@ -891,7 +894,9 @@ class GamePage(QWidget):
         disabled, error = ModManager().clear_deploy_dir_contents(new_game.id, old_dir)
         if error:
             QMessageBox.critical(
-                self, tr("清空部署目录失败"), tr("未能清空原有部署目录，配置未保存：{error}", error=error)
+                self,
+                tr("清空部署目录失败"),
+                tr("未能清空原有部署目录，配置未保存：{error}", error=user_error_message(error)),
             )
             return False
         # 卡片/角色计数仍显示清空前的启用态，必须让主窗重建视图（games_changed 只下发
@@ -923,7 +928,7 @@ class GamePage(QWidget):
         try:
             entries = list(old_dir.iterdir())
         except OSError as exc:
-            return False, tr("无法读取旧部署目录：{exc}", exc=exc)
+            return False, tr("无法读取旧部署目录：{exc}", exc=user_error_message(exc))
         if not entries:
             return True, ""
         if new_dir.exists() and not new_dir.is_dir():
@@ -953,7 +958,7 @@ class GamePage(QWidget):
                         shutil.move(str(target), str(source))
                 except Exception as rollback_exc:
                     rollback_errors.append(str(rollback_exc))
-            detail = tr("移动过程中出错：{exc}", exc=exc)
+            detail = tr("移动过程中出错：{exc}", exc=user_error_message(exc))
             if rollback_errors:
                 detail += tr("；部分内容回滚失败：") + "；".join(rollback_errors)
             return False, detail

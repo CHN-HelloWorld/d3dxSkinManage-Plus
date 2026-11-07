@@ -5,6 +5,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
+from src.ui.error_messages import user_error_message
 from src.utils.i18n import t as tr
 
 
@@ -16,7 +17,7 @@ class OperationFailureDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle(tr("操作失败"))
         layout = QVBoxLayout(self)
-        label = QLabel(str(error), self)
+        label = QLabel(user_error_message(error), self)
         label.setTextFormat(Qt.TextFormat.PlainText)
         label.setWordWrap(True)
         layout.addWidget(label)

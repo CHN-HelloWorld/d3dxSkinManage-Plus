@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QProgressBar, QPushB
 
 from src.core.rebuild_session import RebuildSession
 from src.ui import acrylic, anim, theme
+from src.ui.error_messages import user_error_message
 from src.utils.i18n import N_
 from src.utils.i18n import t as tr
 from src.utils.qt_timers import call_later
@@ -56,7 +57,7 @@ class _PrepareWorker(QThread):
             else:
                 self.session.prepare(progress)
         except Exception as error:
-            self.error = str(error)
+            self.error = user_error_message(error)
 
 
 class _RestoreWorker(QThread):
@@ -155,7 +156,7 @@ class RebuildProgressDialog(QDialog):
             self._worker.finished.connect(self._prepared)
             self._worker.start()
         except Exception as error:
-            self._finish_error(str(error))
+            self._finish_error(user_error_message(error))
 
     def _phase_progress(self, phase, done, total):
         """展示阶段名称、完成数量和百分比，忽略完成或取消后的迟到进度。"""
@@ -199,7 +200,7 @@ class RebuildProgressDialog(QDialog):
             self._worker.finished.connect(self._prepared)
             self._worker.start()
         except Exception as error:
-            self._finish_error(str(error))
+            self._finish_error(user_error_message(error))
 
     def _commit(self):
         """在主线程发布校验后的索引并保存报告，成功后禁止取消并启动后台 INI 同步恢复。"""
@@ -208,7 +209,7 @@ class RebuildProgressDialog(QDialog):
         try:
             self.report = self._session.commit(defer_sync=True)
         except Exception as error:
-            self._finish_error(str(error))
+            self._finish_error(user_error_message(error))
             return
         self._cancel.setEnabled(False)
         self._phase_progress(N_("恢复 INI 同步"), 0, 0)

@@ -22,6 +22,7 @@ from src.core.library_snapshot import (
     scan_deployment_inventory,
 )
 from src.core.mod_identity import IdentityConflict, read_deployment_identity
+from src.ui.error_messages import user_error_message
 from src.ui.worker_lifecycle import manage_page_worker
 from src.utils import fs
 from src.utils.i18n import t as tr
@@ -241,7 +242,7 @@ class DeploymentActivationController(QObject):
             self.manager.set_deploy_dir(deploy_dir, defer_activation=True)
             request = capture_deployment_activation(self.manager)
         except Exception as error:
-            self.failed.emit(self.manager.current_game_id, str(error))
+            self.failed.emit(self.manager.current_game_id, user_error_message(error))
             return False
         self.metrics["capture_ms"].append((perf_counter() - start) * 1000)
         worker = DeploymentActivationWorker(request)
@@ -267,7 +268,7 @@ class DeploymentActivationController(QObject):
         except Exception as error:
             worker.stop()
             self.worker = None
-            self.failed.emit(worker.request.game_id, str(error))
+            self.failed.emit(worker.request.game_id, user_error_message(error))
             return
         self.metrics["publish_ms"].append((perf_counter() - start) * 1000)
         self.metrics["worker_ms"].append(worker.elapsed_ms)

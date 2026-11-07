@@ -46,6 +46,7 @@ from src.ui.dialogs.delete_progress import DeleteProgressDialog, delete_mod_with
 from src.ui.dialogs.export_progress import ExportProgressDialog
 from src.ui.dialogs.mod_edit import ModEditDialog
 from src.ui.dialogs.mod_import import ModImportDialog
+from src.ui.error_messages import user_error_message
 from src.ui.intake_worker import IntakeBatchResult, IntakeWorker
 from src.ui.library_reconcile_worker import LibraryReconcileController
 from src.ui.pages.about import AboutPage
@@ -2783,6 +2784,8 @@ class MainWindow(QMainWindow):
                 error = (
                     tr("已取消启用，Mod 保持禁用。")
                     if self._deploy_stopping
+                    else user_error_message(worker.error)
+                    if getattr(worker, "error", None) is not None
                     else tr("部署失败，Mod 保持禁用。请检查压缩包和部署目录后重试，详细原因见日志。")
                 )
                 self._overview_page.finish_deploy_overlay(mod_id, success=False, error=error)
@@ -2829,7 +2832,7 @@ class MainWindow(QMainWindow):
                 )
             except Exception as exc:
                 logger.exception("提交 Mod 启用状态失败 (%s)", mod_id)
-                error = tr("无法确认 Mod 启用状态：{exc}", exc=exc)
+                error = user_error_message(exc)
                 self._overview_page.finish_deploy_overlay(mod_id, success=False, error=error)
                 from src.core.operation_preflight import OperationPreflightError
 
@@ -3198,7 +3201,7 @@ class MainWindow(QMainWindow):
                 paths=tuple(p for mod in preparation.mods for p in (mod.path, mod.deployed_path)),
             )
         except Exception as error:
-            panel.finish(tr("禁用准备失败"), str(error), ok=False)
+            panel.finish(tr("禁用准备失败"), user_error_message(error), ok=False)
             self._disable_game_id = ""
             self._game_page.setEnabled(True)
             return
@@ -3223,7 +3226,7 @@ class MainWindow(QMainWindow):
                 raise worker.error
             entries = self._mod_manager.prepare_disable_batch(mod_ids, preparation=worker.result)
         except Exception as error:
-            panel.finish(tr("禁用准备失败"), str(error), ok=False)
+            panel.finish(tr("禁用准备失败"), user_error_message(error), ok=False)
             from src.core.operation_preflight import OperationPreflightError
 
             if isinstance(error, OperationPreflightError):
@@ -3300,7 +3303,7 @@ class MainWindow(QMainWindow):
             succeeded = self._publish_disable_results(results, cancelled)
         except Exception as error:
             logger.exception("禁用界面收尾失败")
-            self._intake_progress.finish(tr("禁用状态已提交，界面刷新失败"), str(error), ok=False)
+            self._intake_progress.finish(tr("禁用状态已提交，界面刷新失败"), user_error_message(error), ok=False)
         finally:
             self._clear_disable_ui(worker, succeeded=succeeded)
 
@@ -3313,7 +3316,7 @@ class MainWindow(QMainWindow):
             disabled = self._mod_manager.commit_disable_batch(results or [])
         except Exception as error:
             logger.exception("禁用状态提交失败")
-            panel.finish(tr("禁用状态提交失败"), str(error), ok=False)
+            panel.finish(tr("禁用状态提交失败"), user_error_message(error), ok=False)
             return False
         if worker is not None:
             worker.committed = True
@@ -3511,7 +3514,7 @@ class MainWindow(QMainWindow):
             # 模态循环等待任务收尾；后续报告弹窗可能投递删除事件，先复制结果。
             dlg.deleteLater()
         if error:
-            QMessageBox.warning(self, tr("重建索引"), tr("重建失败：{error}", error=error))
+            QMessageBox.warning(self, tr("重建索引"), user_error_message(error))
             return
         if report is not None:
             invalid_summary = self._invalid_metadata_summary(report.invalid_metadata)
@@ -3985,7 +3988,7 @@ class MainWindow(QMainWindow):
             if isinstance(exc, OperationPreflightError):
                 self._mod_manager.report_operation_failure(exc)
             else:
-                QMessageBox.warning(self, tr("无法编辑 Mod"), str(exc))
+                QMessageBox.warning(self, tr("无法编辑 Mod"), user_error_message(exc))
             return
         dialog.set_save_handler(lambda fields, draft: self._mod_manager.commit_tag_edit(draft, fields))
         if not dialog.exec():
@@ -4822,8 +4825,8 @@ class MainWindow(QMainWindow):
         """当前游戏根路径更新失败时取消激活、暂停部署并显示错误。"""
         if game_id == self._game_service.current_game_id:
             self._deployment_activation.cancel()
-            self._suspend_deployment_root(tr("更新部署目录失败：{error}", error=error))
-            self._ensure_toast().done(tr("更新部署目录失败：{error}", error=error), ok=False, hold_ms=8000)
+            self._suspend_deployment_root(user_error_message(error))
+            self._ensure_toast().done(user_error_message(error), ok=False, hold_ms=8000)
 
     def _on_deployment_activation_settled(self, game_id, result) -> None:
         """当前游戏激活成功后恢复部署监控、刷新变更条目，并继续库探测和延后任务。"""
@@ -4845,7 +4848,7 @@ class MainWindow(QMainWindow):
         if game_id == self._game_service.current_game_id:
             self._library_probe.pause(error)
             self._overview_page._refresh_deploy_summary()
-            self._ensure_toast().done(tr("游戏环境准备未完成：{error}", error=error), ok=False, hold_ms=6000)
+            self._ensure_toast().done(user_error_message(error), ok=False, hold_ms=6000)
 
     def _on_deployment_activation_discarded(self, game_id) -> None:
         """当前游戏激活结果过期时，在下一轮事件循环重新准备环境。"""
@@ -5022,7 +5025,7 @@ class MainWindow(QMainWindow):
             )
         except Exception as error:
             logger.exception("无法打开分类预设")
-            QMessageBox.warning(self, tr("无法打开分类预设"), str(error))
+            QMessageBox.warning(self, tr("无法打开分类预设"), user_error_message(error))
             return
         self._category_preset_dialog = dialog
         dialog.import_completed.connect(self._on_category_preset_imported)
@@ -5462,7 +5465,7 @@ class MainWindow(QMainWindow):
         if options.get("manual") or getattr(self, "_manual_refresh_active", False):
             self._manual_refresh_active = False
             if self._intake_worker is None and not self._intake_settling:
-                self._intake_progress.finish(tr("刷新未完成"), str(error), ok=False)
+                self._intake_progress.finish(tr("刷新未完成"), user_error_message(error), ok=False)
 
     def _consume_library_discovery(self, report, options) -> None:
         """接收当前游戏的发现结果，按需刷新概览、重试清理并启动新增内容纳管。"""
@@ -6812,7 +6815,7 @@ class MainWindow(QMainWindow):
     @_invalidates_library_probe
     def _finish_preset_apply_failure(self, plan, error) -> None:
         """记录切换失败与恢复状态，释放界面资源，并按取消和回滚结果决定是否提示。"""
-        details = str(error)
+        details = user_error_message(error)
         rollback_errors = getattr(error, "rollback_errors", ())
         try:
             if plan is not None:
@@ -6822,11 +6825,13 @@ class MainWindow(QMainWindow):
                     preparation.publish_ini_refs(self._mod_manager, plan, notify_variants=False)
         except Exception as failure:
             logger.exception("预设失败状态保存异常")
-            details += tr("\n\n保存恢复状态失败：{failure}", failure=failure)
+            details += "\n\n" + user_error_message(failure)
         finally:
             self._clear_preset_apply_ui()
         if rollback_errors:
-            details += tr("\n\n回滚未完成：\n") + "\n".join(rollback_errors)
+            details += tr(
+                "\n\n部分改动尚未恢复。请暂时不要移动或删除 Mod 文件，重启管理器后检查状态；若仍有提示，请提供日志。"
+            )
         if not getattr(self, "_preset_apply_cancelled", False) or rollback_errors:
             from src.core.operation_preflight import OperationPreflightError
 
@@ -6929,7 +6934,7 @@ class MainWindow(QMainWindow):
         try:
             new_p = pm.create_preset(gid, base_name)
         except ValueError as e:
-            QMessageBox.warning(self, tr("提示"), str(e))
+            QMessageBox.warning(self, tr("提示"), user_error_message(e))
             return
         # preset_list_changed 已经触发常规刷新；这里再调一次带 rename_id 的刷新让选择器进入编辑模式
         self._refresh_preset_combo(rename_id=new_p.id)

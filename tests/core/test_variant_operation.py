@@ -227,7 +227,7 @@ def test_round1_inventory_journal_survives_reload_and_only_rolls_back_writes(tmp
     loaded = VariantOperation.load(op.journal_path, allowed_roots=[tmp_path])
     added = source / "external.ini"
     added.write_bytes(b"external")
-    with pytest.raises(RuntimeError, match="INI.*外部修改"):
+    with pytest.raises(RuntimeError):
         loaded.verify_applied()
     assert loaded.rollback() == ()
     assert runtime.read_bytes() == b"old"

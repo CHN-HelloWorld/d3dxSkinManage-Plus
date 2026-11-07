@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from src.ui import theme
 from src.ui.dialog_chrome import decorate_dialog
+from src.ui.error_messages import user_error_message
 from src.ui.variant_worker import VariantWorker
 from src.ui.worker_lifecycle import manage_page_worker
 from src.utils.i18n import t as tr
@@ -287,7 +288,7 @@ class ModVariantController(QObject):
         try:
             task = self.manager.variants.prepare_task(mod_id)
         except (ValueError, OSError, RuntimeError) as error:
-            self._show_error(str(error), read_failure=True)
+            self._show_error(user_error_message(error), read_failure=True)
             return
         self._start_task(task)
 
@@ -403,7 +404,7 @@ class ModVariantController(QObject):
         try:
             task = self.manager.variants.prepare_task(mod_id, command=command, **options)
         except (ValueError, OSError, RuntimeError) as error:
-            (on_error or self._show_error)(str(error))
+            (on_error or self._show_error)(user_error_message(error))
             return
         self._start_task(task, on_success=on_success, on_error=on_error)
 
@@ -488,7 +489,7 @@ class ModVariantController(QObject):
                 else None
             )
         except (ValueError, OSError, RuntimeError) as error:
-            self._show_error(str(error))
+            self._show_error(user_error_message(error))
             return
         count = (
             self._state.get("variable_count", 0) if mode in ("save", "update") else len(saved.variables) if saved else 0
