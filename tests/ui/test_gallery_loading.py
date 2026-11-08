@@ -70,11 +70,11 @@ def test_hidden_gallery_can_refresh_before_its_parent_has_a_layout(qtbot, temp_d
         widget.close()
 
 
-def test_pending_gallery_shows_loading_through_probe_and_decode(qtbot, mm, page, tmp_path, monkeypatch):
+def test_pending_gallery_shows_loading_through_publication_and_decode(qtbot, mm, page, tmp_path, monkeypatch):
     category = mm.add_character(name="Character", node_type="character")
     mods = [_import_mod(mm, category.id, tmp_path, name) for name in ("one", "two")]
     busy = [True]
-    monkeypatch.setattr(mm, "library_probe_busy", lambda: busy[0])
+    monkeypatch.setattr(mm, "library_view_busy", lambda: busy[0])
     controller = _controller(mm, page, ["game_a"])
     try:
         controller.schedule()
@@ -122,7 +122,7 @@ def test_game_change_replaces_previous_gallery_before_new_result(
     second = _import_mod(mm, other.id, tmp_path, "second")
     current = ["game_a"]
     busy = [False]
-    monkeypatch.setattr(mm, "library_probe_busy", lambda: busy[0])
+    monkeypatch.setattr(mm, "library_view_busy", lambda: busy[0])
     controller = _controller(mm, page, current)
     try:
         controller.schedule()

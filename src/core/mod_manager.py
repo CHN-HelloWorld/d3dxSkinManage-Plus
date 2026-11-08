@@ -2185,6 +2185,15 @@ class ModManager:
         return True
 
     @property
+    def library_view_stamp(self):
+        """标识已提交的列表数据及路径投影，不因后台存储或预设文件作业作废视图。"""
+        return (self.current_game_id, self._index.change_stamp, self._library_epoch)
+
+    def library_view_busy(self) -> bool:
+        """列表读取只等待管理器发布和数据库事务，后台文件作业继续由探测保护隔离。"""
+        return bool(self._library_mutations or self._index.in_transaction)
+
+    @property
     def library_probe_stamp(self):
         """覆盖同一连接上的数据库操作、回滚、文件读写和独立预设修改。"""
         objects = (self, self._storage, self._preset_manager)

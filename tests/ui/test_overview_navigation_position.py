@@ -329,8 +329,8 @@ def controlled_refresh(page, request, *, cached=False):
     from src.ui.overview_refresh import OverviewRefreshController
 
     manager = SimpleNamespace(
-        library_probe_stamp=(1, 0),
-        library_probe_busy=lambda: False,
+        library_view_stamp=(1, 0),
+        library_view_busy=lambda: False,
         _index=SimpleNamespace(iter_mods=lambda game, ids: (mod for mod in mods(ids[0], 100))),
     )
     controller = OverviewRefreshController(

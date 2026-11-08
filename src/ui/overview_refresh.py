@@ -10,7 +10,7 @@ from src.utils.runtime_metrics import MetricSamples
 
 
 class OverviewRefreshController(QObject):
-    """按时间片读取分类 Mod 列表，以游戏和探测版本隔离过期结果，并支持有限目录预取。"""
+    """按时间片读取分类 Mod 列表，以游戏和视图版本隔离过期结果，并支持有限目录预取。"""
 
     BUDGET_MS = 3
     YIELD_MS = 4
@@ -68,9 +68,9 @@ class OverviewRefreshController(QObject):
             return
         recursive = True if self.recursive is None else bool(self.recursive())
         cache_key = (*key[:2], recursive)
-        stamp = self.manager.library_probe_stamp
+        stamp = self.manager.library_view_stamp
         cached = self._cache.get(cache_key)
-        cache_valid = cached is not None and cached[0] == stamp and not self.manager.library_probe_busy()
+        cache_valid = cached is not None and cached[0] == stamp and not self.manager.library_view_busy()
         prefetch = self._prefetch_controller
         prepared = None
         if (
@@ -145,7 +145,7 @@ class OverviewRefreshController(QObject):
                 self._prefetch_targets.clear()
                 return
             cached = self._cache.get((*key, False))
-            if cached is not None and cached[0] == self.manager.library_probe_stamp:
+            if cached is not None and cached[0] == self.manager.library_view_stamp:
                 continue
             self._prefetch_key = key
             self._prefetch_controller.schedule()
@@ -162,7 +162,7 @@ class OverviewRefreshController(QObject):
         self._start_prefetch()
 
     def _slice(self):
-        """在时间预算内读取并准备 Mod，阶段之间核验视图范围与库探测版本。
+        """在时间预算内读取并准备 Mod，阶段之间核验视图范围与列表数据版本。
 
         事务忙碌时延后读取，过期时重启刷新；完成后区分直接子项和子树列表，一次性交付结果并按需缓存。"""
         start = time.perf_counter()
@@ -175,11 +175,11 @@ class OverviewRefreshController(QObject):
                 self.metrics["discarded"] += 1
                 self.schedule()
                 return
-            if self.manager.library_probe_busy():
+            if self.manager.library_view_busy():
                 self._timer.start(50)
                 return
             if self._iterator is None:
-                self._stamp = self.manager.library_probe_stamp
+                self._stamp = self.manager.library_view_stamp
                 game_id, parent_id = self._key[:2]
                 self._ids = (
                     self.manager.get_subtree_ids(parent_id, game_id)
@@ -190,7 +190,7 @@ class OverviewRefreshController(QObject):
                 )
                 self._mods = []
                 self._iterator = self.manager._index.iter_mods(game_id, self._ids)
-            elif self._stamp != self.manager.library_probe_stamp:
+            elif self._stamp != self.manager.library_view_stamp:
                 self.metrics["discarded"] += 1
                 self.schedule()
                 return
@@ -208,8 +208,8 @@ class OverviewRefreshController(QObject):
         except StopIteration:
             if (
                 self._key != self.current()
-                or self._stamp != self.manager.library_probe_stamp
-                or self.manager.library_probe_busy()
+                or self._stamp != self.manager.library_view_stamp
+                or self.manager.library_view_busy()
             ):
                 self.metrics["discarded"] += 1
                 self.schedule()

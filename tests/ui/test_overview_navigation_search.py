@@ -52,8 +52,8 @@ def library(qtbot, temp_data_dir, request):
         return (mod for mod in all_mods if node_ids is None or mod.node_id in node_ids)
 
     manager = SimpleNamespace(
-        library_probe_stamp=(1, 0),
-        library_probe_busy=lambda: False,
+        library_view_stamp=(1, 0),
+        library_view_busy=lambda: False,
         get_subtree_ids=lambda parent, _game: subtrees[parent],
         _index=SimpleNamespace(iter_mods=iter_mods),
     )
