@@ -66,6 +66,8 @@ For Mods imported by older versions, deployment fills in missing original config
 
 ### 4.4 Enabling, parking, and disabling
 
+Deployment uses the currently configured **Mod folder**. If you change it without migrating files, active and parked copies at the previous location remain there. Enabling Mods and applying presets prepare the required copies in the current folder.
+
 Enabling first checks the source container, metadata, deployment location, and operations in progress. It then prepares resources, applies the effective INI content and configuration, and publishes the finished copy to the deployment folder.
 
 Temporary preparation folders may start with `DISABLED_` and include `.partial`. They are not exposed to the loader as normal enabled copies before completion. After a failure, cancellation, or unexpected application exit, recovery may still need to process these folders.
@@ -167,6 +169,12 @@ Names must be unique within the same Mod and contain no more than 40 characters.
 If the configuration is reported as incomplete, return to the game, save it, and read it again. Choose **Fill with defaults and save** only when you intend to do so. This fills any unread values with defaults, which may not exactly match the appearance currently shown in the game.
 
 **No variants can be saved** usually means that no appearance variables suitable for saving were found. The Mod can still be enabled and disabled normally.
+
+Drive letters or spaces in an author's namespace do not require manual editing. Legacy names beginning with DISABLED receive a usable deployment folder name, while their library names stay the same. Backup INIs excluded by the loader are kept but left out of appearance analysis; explicitly included files still follow the loader's rules.
+
+Appearance restoration, variant capture, and monitoring all use the current **Mod folder**. The app checks loader include configurations above the deployment folder and uses the corresponding user configuration file. An old saved loader launch path is not used for these operations, even if it still exists.
+
+If the current deployment folder has no identifiable runtime environment, or appearance settings cannot currently be identified, the Mod still enables using its existing files, with a notice that appearance preferences were not restored. Saved preferences and variant selections are kept and cannot be overwritten by data from the wrong location or an incomplete capture. Independent test folders can also deploy Mods. After confirming the loading configuration for the current deployment folder, enable the Mod again or apply a saved variant. An INI inventory change during enabling triggers at most one fresh read and retry; continuing changes or concurrent preset edits are not overwritten.
 
 ### 4.10 Switching, updating, copying, and deleting variants
 

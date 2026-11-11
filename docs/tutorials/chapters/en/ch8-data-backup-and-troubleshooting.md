@@ -58,7 +58,11 @@ To move the entire manager, first back up as described above and exit the app, t
 - Availability of fonts you installed, language packs, and plugins.
 - Whether the games' resource drives are connected.
 
-Some paths managed by the app can be stored relative to the data root. Paths to external games, loaders, and media may still need to be entered again.
+Games, loaders, deployment folders, and related records inside the application data directory move with the complete folder. Launch arguments are preserved. Recognizable internal absolute paths in older configurations are upgraded automatically. If an old loader location is unavailable, the app checks which loader includes the current deployment folder or whether a unique internal layout matches, then updates the related paths. It does not select another loader when the location is ambiguous.
+
+If the loader is not moved with the manager, first change **Mod folder** to the actual deployment location on the new device. Deployment, appearance restoration, and variant monitoring use the runtime configuration associated with that folder, regardless of whether the old loader launch path still exists. Update **3DMigoto** separately if you want the app to launch the loader.
+
+After relocation, INI links are rebound to the current library, so the old library is not modified even if the old copy still exists. Games, loaders, and media outside the application directory remain independent locations; select their new paths if those locations change on the new device.
 
 When changing the deployment location, prefer the migration confirmation provided on the **Games** page. Do not reimport an incomplete deployment folder as a new mod library, especially after discarding identity markers and while still using the old index.
 

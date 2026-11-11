@@ -13,7 +13,7 @@ Click **Games → Add game** to open a draft in the right panel. Fill it in and 
 | **Game name** | Required; a name you can recognize, such as `示例游戏` (Sample Game) |
 | **English name** | Used for GameBanana matching and to generate the game's resource folder name under `data/`; use the full English name used by the community |
 | **Executable** | The game's exe path, optionally followed by launch arguments. Leaving it blank does not affect management, but disables **Launch Game** |
-| **3DMigoto** | The loader's folder; used to launch the loader and locate `d3dx_user.ini` for capturing variants |
+| **3DMigoto** | The loader's folder; used to launch the loader |
 | **Mod folder** | The deployment folder for enabled Mods. It must match `d3dx.ini`; Mods cannot be deployed if it is blank |
 
 If **English name** is blank, the resource folder name falls back to **Game name**. A different folder name is generated if the name is already taken. The application generates the internal game ID; you do not need to enter it.
@@ -39,7 +39,7 @@ The preview area lets you click, drop, or replace a single game image. Preview c
 
 Importing adds a Mod to the library; enabling publishes its contents to the deployment folder. Do not use the library itself as the deployment folder, or treat the game's installation root as a dedicated Mod folder.
 
-The application does not automatically derive the deployment folder from the loader path. Check `d3dx.ini`, then enter **Mod folder** explicitly.
+The application does not automatically derive the deployment folder from the loader path. Check `d3dx.ini`, then enter **Mod folder** explicitly. Variant capture and appearance restoration locate `d3dx_user.ini` through the loader configuration associated with the current deployment folder, without using an old saved loader launch path.
 
 The data root is normally the application's folder. If the release folder is not writable, a Windows user data folder may be used instead. Confirm the actual location before backing up; see Chapter 8.
 
@@ -77,7 +77,7 @@ Before changing a path, make sure both the old and new disks are accessible and 
 
 Migration rejects unsafe situations such as nested source and destination folders or content with the same name already at the destination. To move to another disk, use the Games page and confirm afterward that the configuration was saved and enabled states are correct.
 
-Clearing **3DMigoto** also warns that variant state tracking will be affected. The deployment path and loader path are separate fields; clearing either is not a substitute for disabling Mods.
+Clearing **3DMigoto** disables the loader launch button; variant tracking remains available in the current deployment environment. The deployment path and loader launch path are separate fields; clearing either is not a substitute for disabling Mods.
 
 ### 2.6 Deleting a game deletes its data
 
