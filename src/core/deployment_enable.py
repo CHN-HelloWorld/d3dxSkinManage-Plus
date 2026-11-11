@@ -163,6 +163,8 @@ class EnablePreparation:
                 manager.variants._prepared_enable_context = old_context
             raise
         self.published = True
+        if self.outcome.skipped:
+            manager._emit("variant_restore_skipped", mod_id=self.mod_id, game_id=self.game_id)
         if self.outcome.needs_reload_hint:
             manager._emit(
                 "variant_restored",

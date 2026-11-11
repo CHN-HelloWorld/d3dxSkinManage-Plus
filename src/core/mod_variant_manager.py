@@ -16,6 +16,8 @@ from types import SimpleNamespace
 
 from src.core import migoto_user_ini as user_ini
 from src.core import mod_runtime_prefs as prefs
+from src.core.game_paths import resolve_deployment_migoto_root
+from src.core.ini_loading import mod_ini_rules
 from src.core.mod_package import (
     inspect_effective_inis,
     override_path_for,
@@ -26,6 +28,7 @@ from src.core.mod_variant_store import VARIANT_STORE_LOCK, ModVariantStore
 from src.core.persist_vars import (
     AttributionIndex,
     ModIniSource,
+    PersistNamespaceUnavailable,
     build_attribution_index,
     declaration_fingerprint,
     resolve_variant_values,
@@ -34,7 +37,14 @@ from src.core.persist_vars import (
 from src.core.variant_configuration import configuration_changes, default_values
 from src.core.variant_default_cache import DefaultIniCache
 from src.core.variant_journal import RuntimePatch
-from src.core.variant_operation import FileChange, IniInventoryGuard, VariantOperation, digest, read_bytes
+from src.core.variant_operation import (
+    FileChange,
+    IniInventoryChanged,
+    IniInventoryGuard,
+    VariantOperation,
+    digest,
+    read_bytes,
+)
 from src.models.mod_variant import ModVariant
 from src.utils import fs
 from src.utils.constants import MIGOTO_DISABLED_PREFIX
@@ -132,12 +142,17 @@ class ModVariantManager:
         """在数据库可访问的调用线程冻结部署身份，再为监控器设置运行时文件路径。"""
         gid = self._game_id(game_id)
         path = self.user_ini_path(gid)
+        prefix = self._deploy_root_prefix(gid) if path is not None else ""
         self._watch_context = (
             {
                 "game_id": gid,
                 "deployment_generation": self._epoch,
                 "mods": tuple(
-                    {"mod_id": mod.mod_id, "game_id": gid, "deployment_generation": self._deployment_generation(mod)}
+                    {
+                        "mod_id": mod.mod_id,
+                        "game_id": gid,
+                        "deployment_generation": self._deployment_generation(mod, prefix=prefix),
+                    }
                     for mod in self._capture_mods(gid)
                 ),
             }
@@ -198,15 +213,14 @@ class ModVariantManager:
         return game_id or self._manager.current_game_id
 
     def _migoto_root(self, game_id: str = "") -> Path | None:
-        """解析并校验游戏的加载器目录，未配置或目录不可访问时返回 None。"""
-        game = self._manager._game_service.get_game(self._game_id(game_id))
-        if game is None or not game.migoto_path:
+        """从已绑定的部署目录识别当前运行环境，后台任务沿用其部署存储。"""
+        gid = self._game_id(game_id)
+        if not gid or gid != self._manager.current_game_id:
             return None
-        root = Path(fs.normal_path(game.migoto_path))
-        return root if fs.is_dir(root) else None
+        return resolve_deployment_migoto_root(self._manager._storage.get_deploy_dir())
 
     def user_ini_path(self, game_id: str = "") -> Path | None:
-        """按加载器配置解析实际用户 INI 路径，无法定位时返回 None。"""
+        """按当前部署环境的配置解析用户 INI，无法确认环境时返回 None。"""
         return user_ini.resolve_user_config_path(self._migoto_root(game_id))
 
     def prefs_file(self, game_id: str = "") -> Path | None:
@@ -228,15 +242,21 @@ class ModVariantManager:
         return mod
 
     def _capture_mods(self, game_id):
-        """筛选指定游戏中启用且部署目录实际存在的 Mod，作为运行时采集范围。"""
+        """仅采集当前部署根内实际存在的启用成员，排除旧目录残留的部署记录。"""
+        deployment = self._manager._storage.get_deploy_dir()
+        if deployment is None:
+            return []
+        root = Path(fs.normal_path(deployment))
         return [
             mod
             for mod in self._manager._index.get_enabled_mods(game_id)
-            if mod.deployed_path and fs.is_dir(mod.deployed_path)
+            if mod.deployed_path
+            and Path(fs.normal_path(mod.deployed_path)).is_relative_to(root)
+            and fs.is_dir(mod.deployed_path)
         ]
 
     def _deploy_root_prefix(self, game_id: str) -> str:
-        """计算部署目录相对加载器根目录的规范化命名空间前缀，不在根目录内时返回空串。"""
+        """计算部署相对运行根的前缀；同一目录为点号，无法定位时为空串。"""
         root = self._migoto_root(game_id)
         deployment = self._manager._storage.get_deploy_dir()
         if root is None or deployment is None:
@@ -248,18 +268,16 @@ class ModVariantManager:
         return str(relative).replace("/", "\\").strip("\\").casefold()
 
     def _runtime_mapping_issue(self, game_id: str) -> str:
-        """检查加载器和部署目录的相对关系，返回无法映射偏好的原因，无问题时返回空串。"""
-        game = self._manager._game_service.get_game(game_id)
-        if game is None or not game.migoto_path:
-            return tr("未配置 3DMigoto 目录，无法定位外观偏好")
+        """说明当前部署环境无法定位偏好的原因，不引用无关的启动加载器配置。"""
+        deployment = self._manager._storage.get_deploy_dir()
+        if deployment is None:
+            return tr("未配置 Mod 部署目录，无法定位外观偏好")
+        if not fs.is_dir(deployment):
+            return tr("部署目录不存在或无法访问：{deployment}", deployment=deployment)
         if self._migoto_root(game_id) is None:
-            return tr("3DMigoto 目录不存在或无法访问：{migoto_path}", migoto_path=game.migoto_path)
-        if not self._deploy_root_prefix(game_id):
-            deployment = self._manager._storage.get_deploy_dir()
             return tr(
-                "部署目录 {deployment} 无法相对于 3DMigoto 目录 {migoto_path} 定位外观偏好",
+                "当前部署目录未关联可用的加载器环境，无法定位外观偏好：{deployment}",
                 deployment=deployment,
-                migoto_path=game.migoto_path,
             )
         return ""
 
@@ -268,25 +286,31 @@ class ModVariantManager:
         """根据实际活动目录名构造隐式变量命名空间，停放目录先还原名称，无有效名称时返回空串。"""
         if not deploy_root_prefix:
             return ""
+        from src.core.mod_storage import ModStorage
+
         raw = mod.folder_name or Path(fs.normal_path(mod.path)).stem
         if mod.deployed_path:
-            from src.core.mod_storage import ModStorage
-
             actual = Path(fs.normal_path(mod.deployed_path))
             raw = (
                 ModStorage.active_name_from_parked(actual, mod.mod_id)
                 if actual.name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper())
                 else actual.name
             )
+        if not mod.is_enabled:
+            raw = ModStorage.active_deploy_name(raw)
         name = str(raw).strip()
         if not name or name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper()):
             return ""
-        return f"{deploy_root_prefix}\\{name}".casefold()
+        return (name if deploy_root_prefix == "." else f"{deploy_root_prefix}\\{name}").casefold()
 
-    def _deployment_generation(self, mod) -> str:
-        """摘要会话、资源内容及部署位置，标识采集状态所对应的精确部署身份。"""
-        location = self._implicit_prefix(mod, self._deploy_root_prefix(mod.game_id))
-        return digest(f"{self._session}|{mod.game_id}|{mod.mod_id}|{mod.content_hash}|{location}".encode())
+    def _deployment_generation(self, mod, *, prefix: str | None = None) -> str:
+        """摘要精确部署身份，批量调用可共用本次已解析的命名空间前缀。"""
+        if prefix is None:
+            prefix = self._deploy_root_prefix(mod.game_id)
+        location = self._implicit_prefix(mod, prefix)
+        deployment = self._manager._storage.get_deploy_dir()
+        root = os.path.normcase(os.path.abspath(str(deployment))) if deployment is not None else ""
+        return digest(f"{self._session}|{mod.game_id}|{mod.mod_id}|{mod.content_hash}|{root}|{location}".encode())
 
     def _source_signature(self, mod):
         """组合资源哈希与有效 INI 清单版本，作为声明缓存复用的校验依据。"""
@@ -298,6 +322,13 @@ class ModVariantManager:
         mods = self._capture_mods(gid) if mods is None else list(mods)
         prefix = self._deploy_root_prefix(gid)
         sources, checks = [], []
+        root = self._migoto_root(gid)
+        config_text = ""
+        if root is not None:
+            config_path = root / "d3dx.ini"
+            config = read_bytes(config_path)
+            config_text = user_ini.decode_ini_bytes(config)[0] if config is not None else ""
+            checks.append(FileChange(config_path, config, config))
         for mod in mods:
             signature = self._source_signature(mod)
             cached = self._ini_cache.get(mod.mod_id)
@@ -334,13 +365,22 @@ class ModVariantManager:
             else:
                 inis = cached[1]
             checks.extend(self._ini_cache[mod.mod_id][2])
+            implicit_prefix = self._implicit_prefix(mod, prefix)
+            rules = mod_ini_rules(config_text, implicit_prefix, inis)
+            loaded = tuple((rel, text) for rel, text in inis if rules.accepts(rel))
             if mod.is_enabled and mod.deployed_path:
                 # 成员范围来自原始声明输入，避免后续扫描错误接纳部署侧新增内容。
-                checks.append(IniInventoryGuard.deployed(mod.deployed_path, (rel for rel, _ in inis)))
-                for rel, text in inis:
+                checks.append(
+                    IniInventoryGuard.deployed(
+                        mod.deployed_path, (rel for rel, _ in loaded), rules=rules if rules.excludes else None
+                    )
+                )
+                for rel, text in loaded:
                     raw = text.encode("utf-8", errors="surrogateescape")
                     checks.append(FileChange(Path(mod.deployed_path) / rel, raw, raw))
-            sources.append(ModIniSource(mod.mod_id, inis, self._implicit_prefix(mod, prefix)))
+            loaded_paths = {rel for rel, _ in loaded}
+            excluded = tuple(rel for rel, _ in inis if rel not in loaded_paths)
+            sources.append(ModIniSource(mod.mod_id, inis, implicit_prefix, excluded))
         index = build_attribution_index(sources)
         unique = {}
         for check in checks:
@@ -402,9 +442,13 @@ class ModVariantManager:
                 return None
             if self.recover_pending(gid):
                 return None
+            # 无法定位当前部署时，不从另一加载器或旧路径采集并覆盖已保存的偏好。
+            if self._runtime_mapping_issue(gid):
+                return None
             mods = self._capture_mods(gid)
             if event is not None:
-                expected = {m.mod_id: self._deployment_generation(m) for m in mods}
+                prefix = self._deploy_root_prefix(gid)
+                expected = {m.mod_id: self._deployment_generation(m, prefix=prefix) for m in mods}
                 contexts = event.get("mods", ())
                 observed = {
                     m.get("mod_id"): m.get("deployment_generation") for m in contexts if m.get("game_id") == gid
@@ -445,11 +489,12 @@ class ModVariantManager:
         """将稳定快照归属到启用成员并记录部署世代，变化持久化失败时抛出 OSError。"""
         sequence = max((s.capture_generation for s in store.mods.values()), default=0) + 1
         report = collect(snapshot, index, store, enabled_mod_ids=[m.mod_id for m in mods], capture_generation=sequence)
+        prefix = self._deploy_root_prefix(gid)
         for mod in mods:
             state = store.mods.get(mod.mod_id)
-            if state is None:
+            if state is None or mod.mod_id in index.unresolved_mods:
                 continue
-            generation = self._deployment_generation(mod)
+            generation = self._deployment_generation(mod, prefix=prefix)
             state.deployment_generation = generation
             for key in state.confirmed_keys:
                 state.sources[key]["deployment_generation"] = generation
@@ -515,6 +560,10 @@ class ModVariantManager:
             state = store.mods.get(mod_id, state)
             selected = self._selected(mod, store)
             result["selected_variant_id"] = selected
+            issue = self._runtime_mapping_issue(mod.game_id)
+            if issue:
+                result["reason"] = issue
+                return result
             index = self._index_for(mod)
             keys = set(index.keys_of(mod_id))
             fingerprint = declaration_fingerprint(index, mod_id)
@@ -617,8 +666,8 @@ class ModVariantManager:
         }
         return {current.id: updates} if updates else {}
 
-    def _reference_change(self, updates, add_members=None, *, require_unselected=False):
-        """基于组合文件原件构造引用变更，成员或预设已变动时拒绝提交；此处不写磁盘。"""
+    def _reference_change(self, updates, add_members=None, *, preserve_selection=False):
+        """基于组合文件原件构造引用变更，追加成员时可保留已有选择；此处不写磁盘。"""
         if not updates:
             return []
         pm = self._manager._preset_manager
@@ -633,8 +682,6 @@ class ModVariantManager:
             if change is None:
                 continue
             references = record.setdefault("mod_variants", {})
-            if require_unselected and any(references.get(mid) is not None for mid in change):
-                raise ValueError(tr("组合已有命名变体选择，无法跳过外观偏好；原组合已保留：{path}", path=path))
             for mid, node_id in (add_members or {}).get(record["id"], {}).items():
                 bucket = record["character_mods"].setdefault(node_id, [])
                 if mid not in bucket:
@@ -642,7 +689,11 @@ class ModVariantManager:
             members = {mid for mids in record["character_mods"].values() for mid in mids}
             if not set(change) <= members:
                 raise ValueError(tr("组合成员在变体操作期间发生变化"))
-            references.update(change)
+            if preserve_selection:
+                for mid, selected in change.items():
+                    references.setdefault(mid, selected)
+            else:
+                references.update(change)
             record["updated_at"] = datetime.now(timezone.utc).isoformat()
             seen.add(record["id"])
         if seen != set(updates):
@@ -669,12 +720,13 @@ class ModVariantManager:
     def _state_change(self, store, mods, targets, selections, index, *, source="applied", runtime=None):
         """更新内存工作状态的目标值及来源世代，并以保存前原件构造偏好文件变更。"""
         now = datetime.now(timezone.utc).isoformat()
+        prefix = self._deploy_root_prefix(self._game_id())
         for mid, values in targets.items():
             state = store.state_for(mid)
             state.values = dict(values)
             state.selected_variant_id = selections[mid]
             state.declaration_fingerprint = declaration_fingerprint(index, mid)
-            state.deployment_generation = self._deployment_generation(mods[mid])
+            state.deployment_generation = self._deployment_generation(mods[mid], prefix=prefix)
             state.capture_generation += 1
             state.confirmed_keys = tuple(sorted(values))
             state.captured_at = now
@@ -752,7 +804,7 @@ class ModVariantManager:
                 raise ValueError(tr("请先启用 Mod，再保存或更新变体"))
             path = self.user_ini_path()
             if path is None:
-                raise ValueError(tr("未配置 Mod 加载器的用户配置文件，请检查当前游戏的加载器设置"))
+                raise ValueError(tr("无法定位当前部署环境的用户配置文件，请检查 Mod 部署目录"))
             snapshot = user_ini.read_stable(path)
             if snapshot is None:
                 raise ValueError(tr("尚未读取到游戏内配置，请先在游戏中保存配置后重试"))
@@ -924,19 +976,47 @@ class ModVariantManager:
             needs_reload_hint=bool(active and (any(targets.values()) or removed)),
         )
 
-    def _apply_targets(self, mods, selections, *, preset_id="", extra_changes=(), references=None, add_members=None):
+    def _apply_targets(
+        self,
+        mods,
+        selections,
+        *,
+        preset_id="",
+        extra_changes=(),
+        references=None,
+        add_members=None,
+        retry_inventory=False,
+    ):
         """执行目标配置计划并清空声明缓存，返回触及成员、移除键和刷新提示。"""
-        changes, outcome = self._plan_targets(
-            mods,
-            selections,
-            preset_id=preset_id,
-            extra_changes=extra_changes,
-            references=references,
-            add_members=add_members,
-        )
-        self._execute(mods, changes)
-        self._ini_cache.clear()
-        return outcome
+        for attempt in range(2 if retry_inventory else 1):
+            changes, outcome = self._plan_targets(
+                mods,
+                selections,
+                preset_id=preset_id,
+                extra_changes=extra_changes,
+                references=references,
+                add_members=add_members,
+            )
+            try:
+                self._execute(mods, changes)
+            except IniInventoryChanged:
+                # 重试不得接纳并覆盖同期产生的新偏好、预设选择或加载器写入。
+                if (
+                    attempt
+                    or not retry_inventory
+                    or any(
+                        isinstance(change, FileChange)
+                        and change.before != change.after
+                        and read_bytes(change.path) != change.before
+                        for change in changes
+                    )
+                ):
+                    raise
+                self._ini_cache.clear()
+                logger.info("启用期间 INI 清单变化，重新读取后重试 (%s)", ", ".join(mods))
+                continue
+            self._ini_cache.clear()
+            return outcome
 
     def apply_variant(self, mod_id, variant_id):
         """在命令保护内同步并采集启用条目的现状，再事务化应用选定变体或默认配置。"""
@@ -996,7 +1076,7 @@ class ModVariantManager:
         owner_token="",
         include_members=False,
     ):
-        """按组合或私有选择恢复目标配置，可同时加入组合成员；映射不可用且已有偏好时拒绝覆盖。"""
+        """按组合或私有选择恢复目标配置；基础启用遇到映射不可用时保留偏好并追加成员。"""
         wanted = tuple(dict.fromkeys(mod_ids))
         if not wanted or self.prefs_file(game_id) is None:
             return RestoreOutcome()
@@ -1014,26 +1094,25 @@ class ModVariantManager:
                 gid = self._game_id(game_id)
                 current_id = self._current_preset_id(gid)
                 issue = self._runtime_mapping_issue(gid)
-                if issue:
-                    current = self._manager._preset_manager.get_preset(current_id)
-                    if any(
-                        selections[mid] is not None
-                        or store.state_for(mid).values
-                        or store.state_for(mid).confirmed_keys
-                        or store.state_for(mid).sources
-                        or (current is not None and current.mod_variants.get(mid) is not None)
-                        for mid in mods
-                    ):
-                        raise ValueError(
-                            tr("{issue}；此 Mod 已有外观偏好，请修正加载器路径后再启用；原偏好已保留", issue=issue)
+                if not issue:
+                    try:
+                        return self._apply_targets(
+                            mods,
+                            selections,
+                            references={current_id: selections},
+                            add_members={current_id: {mid: mod.node_id for mid, mod in mods.items()}},
+                            retry_inventory=True,
                         )
-                    # 首次部署可不使用运行时偏好，但仍保留资源校验与私有状态原件，防止并发采集被静默重置。
+                    except PersistNamespaceUnavailable as error:
+                        issue = str(error)
+                if issue:
+                    # 外观恢复不阻断基础启用；仅追加成员，保留已有选择、配置文件和私有偏好。
                     references = self._reference_change(
                         {current_id: selections},
                         {current_id: {mid: mod.node_id for mid, mod in mods.items()}},
-                        require_unselected=True,
+                        preserve_selection=True,
                     )
-                    # 读取 INI 前核对磁盘选择并保留原始内容，避免使用过期的预设快照。
+                    # 读取 INI 前固定磁盘预设原件，保留最新选择并检测后续并发修改。
                     index = self.build_index(gid, mods=mods.values(), force=True)
                     path = self.prefs_file(gid)
                     before = store.before_image(path)
@@ -1041,13 +1120,8 @@ class ModVariantManager:
                     changes.extend(references)
                     self._execute(mods, changes)
                     self._ini_cache.clear()
+                    logger.warning("本次启用暂不恢复外观偏好 (%s)：%s", ", ".join(mods), issue)
                     return RestoreOutcome(skipped=tuple(mods))
-                return self._apply_targets(
-                    mods,
-                    selections,
-                    references={current_id: selections},
-                    add_members={current_id: {mid: mod.node_id for mid, mod in mods.items()}},
-                )
             return self._apply_targets(mods, selections, preset_id=preset_id)
 
     def _plan_mods(self, plan):
@@ -1245,6 +1319,9 @@ class ModVariantManager:
         path = self.user_ini_path(gid)
         if path is not None:
             roots.append(path)
+        loader = self._migoto_root(gid)
+        if loader is not None:
+            roots.append(loader / "d3dx.ini")
         deployment = self._manager._storage.get_deploy_dir()
         if deployment is not None:
             roots.append(deployment)

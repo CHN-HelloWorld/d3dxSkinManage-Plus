@@ -40,9 +40,9 @@ def test_implicit_prefix_empty_without_deploy_root_prefix():
     assert ModVariantManager._implicit_prefix(_mod(), "") == ""
 
 
-def test_implicit_prefix_skips_parked_name():
-    parked = _mod(folder_name="DISABLED_abc123def456_AlphaSkin")
-    assert ModVariantManager._implicit_prefix(parked, "mods") == ""
+def test_implicit_prefix_uses_active_name_for_legacy_disabled_source():
+    legacy = _mod(folder_name="DISABLED_abc123def456_AlphaSkin")
+    assert ModVariantManager._implicit_prefix(legacy, "mods") == "mods\\mod_disabled_abc123def456_alphaskin"
 
 
 def test_implicit_prefix_supports_nested_deploy_root():

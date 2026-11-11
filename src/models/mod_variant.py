@@ -105,7 +105,8 @@ class VariantVariable:
         if self.namespace_mode == "implicit":
             if self.namespace:
                 raise ValueError(tr("隐式命名空间不得保存部署路径"))
-        elif not namespace or any(char in namespace for char in ":;$="):
+        # namespace 是加载器的作用域标识；盘符和内部空格不代表实际文件访问。
+        elif not namespace or any(char in namespace for char in ";$="):
             raise ValueError(tr("显式命名空间必须有效且非空"))
         object.__setattr__(self, "namespace", namespace)
         object.__setattr__(self, "value", validate_numeric_value(self.value))

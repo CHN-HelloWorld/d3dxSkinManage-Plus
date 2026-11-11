@@ -1351,6 +1351,8 @@ class ModManager:
                 OperationPreflightError(mod.mod_id, mod.path, tr("启用时配置未完成：") + str(error))
             )
             return False
+        if outcome.skipped:
+            self._emit("variant_restore_skipped", mod_id=mod.mod_id, game_id=self.current_game_id)
         if outcome.needs_reload_hint:
             self._emit(
                 "variant_restored",

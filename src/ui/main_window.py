@@ -2124,7 +2124,6 @@ class MainWindow(QMainWindow):
         if old_game is None or (
             (GameService._sanitize_id(new_game.name_en, new_game.name) or new_game.id) == old_game.resource_dir
             and new_game.mods_path == old_game.mods_path
-            and new_game.migoto_path == old_game.migoto_path
         ):
             yield
             return
@@ -4737,8 +4736,7 @@ class MainWindow(QMainWindow):
             self._overview_page._deploy_status_label.setText(tr("正在准备游戏环境…"))
             self._overview_page._deploy_status_label.show()
             self._deployment_activation.start(deploy_dir)
-        # d3dx_user.ini 的位置跟着 migoto_path 走（还含 d3dx.ini 的 [Include]
-        # user_config）→ 切游戏 / 改 3DMigoto 路径都必须在这个咽喉点重新指向监视目标。
+        # 用户配置由当前部署目录关联的 d3dx.ini 决定；切游戏或改部署目录后重新绑定监控。
         try:
             self._mod_manager.variants.refresh_watch()
         except Exception as e:
@@ -5512,6 +5510,7 @@ class MainWindow(QMainWindow):
             "variant_state_changed",
             "variant_references_missing",
             "variant_restored",
+            "variant_restore_skipped",
             "mod_enabled",
             "mod_disabled",
             "game_changed",
@@ -5544,6 +5543,10 @@ class MainWindow(QMainWindow):
                 tr("{value}缺失的变体引用已改用 Mod 默认。", value=label + "：" if label else ""),
                 ok=False,
                 hold_ms=6000,
+            )
+        elif event == "variant_restore_skipped":
+            self._ensure_toast().done(
+                tr("Mod 已启用。外观偏好暂未恢复，原有设置已保留。详情见外观配置。"), ok=True, hold_ms=6000
             )
         elif event == "variant_restored":
             applied = int(payload.get("applied") or 0)

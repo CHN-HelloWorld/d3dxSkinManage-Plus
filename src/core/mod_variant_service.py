@@ -59,6 +59,8 @@ def collect(
         return CollectReport()
     sequence = capture_generation or latest + 1
     enabled = set(index.keys_by_deployment if enabled_mod_ids is None else enabled_mod_ids)
+    # 暂不支持外观记忆的 Mod 不采集局部值，避免下次启用误认为已有完整偏好。
+    enabled.difference_update(index.unresolved_mods)
     attributed: dict[str, dict[str, str]] = {}
     unattributed, conflicted, invalid = set(), set(), set()
     duplicates = {index.canonical_key(k) for k in duplicate_persisted_keys(snapshot.text)}

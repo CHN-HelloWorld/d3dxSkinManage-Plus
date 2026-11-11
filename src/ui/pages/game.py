@@ -744,46 +744,6 @@ class GamePage(QWidget):
         """按绝对路径与平台大小写规则生成比较键，不解析符号链接。"""
         return os.path.normcase(os.path.abspath(os.fspath(path)))
 
-    def _confirm_migoto_path_cleared(
-        self,
-        old_game: GameConfig | None,
-        new_game: GameConfig,
-    ) -> bool:
-        """清空加载器路径前说明对变体记录的影响。
-
-        该路径用于定位用户 INI 和隐式命名空间。确认后停用相关记录，
-        取消时仅恢复此项配置，保留其他字段的编辑结果。
-        """
-        old_path = (old_game.migoto_path or "").strip() if old_game else ""
-        if not old_path or (new_game.migoto_path or "").strip():
-            return True
-        if not self._deploy_dir_has_data(new_game.id):
-            return True
-
-        answer = QMessageBox.question(
-            self,
-            tr("清空 3DMigoto 路径"),
-            tr(
-                "当前部署目录内还存在需要记录变体的Mod，您确定要删除此项配置吗？\n\n"
-                "选择“是”后，程序将不再记录这些 Mod 在游戏内切换的变体状态。\n"
-                "选择“否”将取消对 3DMigoto 路径的本次更改，其余修改照常保存。"
-            ),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if answer != QMessageBox.StandardButton.Yes:
-            new_game.migoto_path = old_path
-        return True
-
-    def _deploy_dir_has_data(self, game_id: str) -> bool:
-        """该游戏是否还有已启用（已部署）的 Mod。"""
-        try:
-            from src.core.mod_manager import ModManager
-
-            return ModManager().variants.has_deployed_mods(game_id)
-        except Exception:
-            return True
-
     def _confirm_deploy_dir_migration(
         self,
         old_game: GameConfig | None,
@@ -836,7 +796,7 @@ class GamePage(QWidget):
             QMessageBox.critical(
                 self,
                 tr("迁移部署失败"),
-                tr("未能安全迁移部署数据，游戏配置尚未保存。\n\n{error}", error=user_error_message(error)),
+                tr("未能安全迁移部署数据，游戏配置尚未保存。\n\n{error}", error=error),
             )
             return False
         # 物理内容已经在新目录了，库里记的 deployed_path 还指着旧目录 —— 必须立刻改写，
@@ -1018,8 +978,6 @@ class GamePage(QWidget):
             with self._save_context(old_game, cfg) if self._save_context is not None else nullcontext():
                 moved_paths: list[tuple[Path, Path]] = []
                 try:
-                    if not self._confirm_migoto_path_cleared(old_game, cfg):
-                        return False
                     if not self._confirm_deploy_dir_migration(old_game, cfg, moved_paths=moved_paths):
                         return False
                     gid = self._svc.save_game(cfg, on_migration_error=migration_errors.append)

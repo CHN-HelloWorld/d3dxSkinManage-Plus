@@ -37,6 +37,10 @@ _GLOBAL_DECL_WRITE_RE = re.compile(
 )
 
 
+class PersistNamespaceUnavailable(ValueError):
+    """持久变量作用域无法定位，但不代表 Mod 文件损坏或变量归属冲突。"""
+
+
 @dataclass(frozen=True)
 class ModIniSource:
     """提供单个 Mod 的变量归属输入。
@@ -48,6 +52,7 @@ class ModIniSource:
     mod_id: str
     inis: tuple[tuple[str, str], ...]
     implicit_prefix: str = ""
+    excluded_inis: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -75,6 +80,7 @@ class AttributionIndex:
     diagnostics: tuple[str, ...] = ()
     # 不完整索引不能作为完整快照保存。
     unresolved_mods: tuple[str, ...] = ()
+    excluded_inis: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def resolve(self, key: str) -> str | None:
         """返回键唯一归属的 Mod 编号，无声明或存在冲突时返回 None。
@@ -167,13 +173,19 @@ def build_attribution_index(sources: Iterable[ModIniSource]) -> AttributionIndex
     diagnostics: list[str] = []
     claims: dict[str, list[str]] = {}
     unresolved: set[str] = set()
+    excluded_inis: dict[str, tuple[str, ...]] = {}
 
     for source in sources:
         dep_id = (source.mod_id or "").strip()
         if not dep_id:
             diagnostics.append(tr("跳过：mod_id 为空（不得并入同一个空 id 桶）"))
             continue
+        excluded = {rel.replace("\\", "/").casefold() for rel in source.excluded_inis}
+        if excluded:
+            excluded_inis[dep_id] = tuple(sorted(excluded))
         for rel, text in source.inis:
+            if rel.replace("\\", "/").casefold() in excluded:
+                continue
             if not rel.lower().endswith(".ini"):
                 continue
             text = decode_passthrough_text(text)
@@ -196,8 +208,7 @@ def build_attribution_index(sources: Iterable[ModIniSource]) -> AttributionIndex
                     tr(
                         (
                             "跳过 {dep_id}/{rel}：ini 未声明 namespace "
-                            "且隐式前缀不可推导（部署目录不在 3DMigoto 目录之下 / 未配置 "
-                            "3DMigoto 路径 / 非激活部署）"
+                            "且隐式前缀不可推导（当前部署环境无法定位 / 非激活部署）"
                         ),
                         dep_id=dep_id,
                         rel=rel,
@@ -258,6 +269,7 @@ def build_attribution_index(sources: Iterable[ModIniSource]) -> AttributionIndex
         declarations=tuple(declarations),
         diagnostics=tuple(diagnostics),
         unresolved_mods=tuple(sorted(unresolved)),
+        excluded_inis=excluded_inis,
     )
 
 
@@ -281,8 +293,6 @@ def _validated_declarations(index: AttributionIndex, mod_id: str) -> tuple[Persi
     """核对 Mod 声明唯一性、命名空间和归属索引一致性，拒绝无法确定归属的变量。"""
     if not isinstance(mod_id, str) or not mod_id.strip():
         raise ValueError(tr("mod_id 不能为空"))
-    if mod_id in index.unresolved_mods:
-        raise ValueError(tr("Mod 包含无法确定命名空间的持久变量"))
     declarations = tuple(decl for decl in index.declarations if decl.mod_id == mod_id)
     locations: set[tuple[str, str]] = set()
     keys: set[str] = set()
@@ -303,6 +313,8 @@ def _validated_declarations(index: AttributionIndex, mod_id: str) -> tuple[Persi
         keys.add(decl.full_key)
     if keys != set(index.keys_of(mod_id)):
         raise ValueError(tr("持久变量归属索引与声明不一致"))
+    if mod_id in index.unresolved_mods:
+        raise PersistNamespaceUnavailable(tr("Mod 包含无法确定命名空间的持久变量"))
     return declarations
 
 
@@ -361,7 +373,10 @@ def read_default_values(index: AttributionIndex, mod_id: str, body_inis: Iterabl
     expected = {_variable_identity(_portable_variable(decl, "0")): decl.full_key for decl in declarations}
     found: dict[tuple[str, str, str, str], str] = {}
     seen_paths: set[str] = set()
+    excluded = set(index.excluded_inis.get(mod_id, ()))
     for rel, text in body_inis:
+        if rel.replace("\\", "/").casefold() in excluded:
+            continue
         text = decode_passthrough_text(text)
         namespace = parse_namespace(text)
         variables = tuple(_persist_declarations(text))
