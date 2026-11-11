@@ -217,16 +217,16 @@ def test_background_path_survives_move_and_atomic_settings_save(temp_data_dir, m
     assert path == str(background if external else moved / "data/appearance/wallpaper.png")
 
 
-def test_game_preview_moves_but_explicit_external_locations_stay_absolute(temp_data_dir, monkeypatch):
+def test_game_preview_and_internal_runtime_locations_follow_application(temp_data_dir, monkeypatch):
     from src.core.game_config_store import GameConfigStore
 
     preview = temp_data_dir / "data/Game/preview.png"
     preview.parent.mkdir(parents=True)
     preview.write_bytes(b"game image")
-    external = {key: str(temp_data_dir / "user-selected" / key) for key in ("mods_path", "migoto_path", "exe_path")}
+    internal = {key: str(temp_data_dir / "user-selected" / key) for key in ("mods_path", "migoto_path", "exe_path")}
     store = GameConfigStore()
     assert store.set_games(
-        [{"id": "Game", "name": "Game", "name_en": "Game", "resource_dir": "Game", "preview": str(preview), **external}]
+        [{"id": "Game", "name": "Game", "name_en": "Game", "resource_dir": "Game", "preview": str(preview), **internal}]
     )
     stored = json.loads((temp_data_dir / "config/games.json").read_text(encoding="utf-8"))["games"][0]
     assert stored["preview"] == "data/Game/preview.png"
@@ -235,7 +235,7 @@ def test_game_preview_moves_but_explicit_external_locations_stay_absolute(temp_d
     restored = GameConfigStore().get_games()[0]
     assert restored["preview"] == str(moved / "data/Game/preview.png")
     assert Path(restored["preview"]).read_bytes() == b"game image"
-    assert {key: restored[key] for key in external} == external
+    assert {key: restored[key] for key in internal} == {key: str(moved / "user-selected" / key) for key in internal}
 
 
 def test_download_history_opens_existing_archive_after_move(temp_data_dir, monkeypatch):

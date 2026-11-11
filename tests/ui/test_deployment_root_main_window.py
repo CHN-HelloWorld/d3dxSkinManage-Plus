@@ -90,9 +90,13 @@ def real_window(temp_data_dir, qtbot, monkeypatch, native_qt_teardown, qapp):
 
 
 def _assert_active_root(window, manager, service, mods, root):
+    """核对便携配置的真实目标、活动部署及监听均绑定到指定根目录。"""
     assert service.get_current_game().mods_path == str(root)
     saved = json.loads(window._game_store._path.read_text(encoding="utf-8"))
-    assert next(game["mods_path"] for game in saved["games"] if game["id"] == manager.current_game_id) == str(root)
+    stored_root = Path(next(game["mods_path"] for game in saved["games"] if game["id"] == manager.current_game_id))
+    assert not stored_root.is_absolute() and not stored_root.drive
+    app_root = window._game_store.path.parent.parent
+    assert (app_root / stored_root).resolve(strict=True) == root.resolve(strict=True)
     assert manager._storage.get_deploy_dir() == root
     assert window._deploy_watcher.is_running()
     assert window._deploy_watcher._watch_path == root

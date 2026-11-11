@@ -63,3 +63,24 @@ def test_preview_only_save_does_not_retry_failed_resource_move(resource_service,
     assert service.get_game(game_id).preview == str(preview)
     assert preview.read_bytes() == b"preview data"
     assert not new_root.exists()
+
+
+def test_resource_move_preserves_game_command_arguments(resource_service, temp_data_dir):
+    service = resource_service
+    game_id = service.save_game(GameConfig(name="示例游戏", name_en="Original Resource"))
+    executable = temp_data_dir / "data" / "Original Resource" / "Game files" / "Example.exe"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"executable")
+    arguments = '--profile "Profile A" --empty ""'
+
+    service.save_game(
+        replace(
+            service.get_game(game_id),
+            name_en="Renamed Resource",
+            exe_path=f'"{executable}" ' + arguments,
+        )
+    )
+
+    moved = temp_data_dir / "data" / "Renamed Resource" / "Game files" / "Example.exe"
+    assert moved.read_bytes() == b"executable"
+    assert service.get_game(game_id).exe_path == f'"{moved}" ' + arguments

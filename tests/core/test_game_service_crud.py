@@ -110,10 +110,10 @@ def test_rebase_deploy_dir_persists_only_target_path(svc, temp_data_dir):
     svc.rebase_deploy_dir("one", "old root", "new root")
 
     assert json.loads(svc._store.path.read_text(encoding="utf-8")) == expected
-    assert svc._store.get_games()[0]["mods_path"] == "new root"
-    assert svc.get_game("one").mods_path == "new root"
+    assert svc._store.get_games()[0]["mods_path"] == str(temp_data_dir / "new root")
+    assert svc.get_game("one").mods_path == str(temp_data_dir / "new root")
     assert svc.get_game("one").resource_dir == "custom resource"
-    assert svc.get_game("two").mods_path == "other root"
+    assert svc.get_game("two").mods_path == str(temp_data_dir / "other root")
     assert svc.current_game_id == "one"
     assert sentinel.read_text() == "unchanged"
 

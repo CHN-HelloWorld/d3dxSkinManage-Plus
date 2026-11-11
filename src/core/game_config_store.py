@@ -13,9 +13,10 @@ import json
 from typing import Any
 
 from src.core.config_file_io import backup_invalid_file, read_json, write_json_atomic
+from src.core.game_paths import rebase_game_paths, recover_game_paths, resolve_game_paths, store_game_paths
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
-from src.utils.paths import get_config_dir, resolve_stored_path, to_stored_path
+from src.utils.paths import get_config_dir, resolve_stored_path
 
 # 游戏配置的版本标记仅用于诊断，不作为拒绝读取配置的条件。
 GAMES_SCHEMA_VERSION = 1
@@ -89,7 +90,27 @@ class GameConfigStore:
                 GAMES_SCHEMA_VERSION,
             )
         self._data = raw
+        self._migrate_paths()
         logger.info("游戏配置已加载: %s", self._path)
+
+    def _migrate_paths(self) -> None:
+        """升级可确认的旧运行路径；写入成功后发布，失败时保留原配置以供重试。"""
+        if not isinstance(self._data.get("games"), list):
+            return
+        candidate = json.loads(json.dumps(self._data))
+        candidate["games"] = [
+            store_game_paths(recover_game_paths(resolve_game_paths(game))) if self._game_entry_ok(game) else game
+            for game in candidate["games"]
+        ]
+        if candidate == self._data:
+            return
+        try:
+            write_json_atomic(self._path, candidate)
+        except OSError as error:
+            logger.warning("游戏路径迁移未能保存，原配置已保留：%s", error)
+            return
+        self._data = candidate
+        logger.info("游戏路径已迁移为当前便携位置")
 
     def _rebuild_from_defaults(self, reason: str) -> None:
         """备份无法解析的游戏配置后恢复默认结构。
@@ -158,17 +179,12 @@ class GameConfigStore:
         if not isinstance(raw, list):
             return []
         games = json.loads(json.dumps(self._filter_game_entries(raw)))
-        for game in games:
-            if "preview" in game:
-                game["preview"] = resolve_stored_path(game["preview"])
-        return games
+        return [resolve_game_paths(game) for game in games]
 
     def set_games(self, games: list[dict]) -> bool:
-        """复制并持久化游戏列表，保持预览图存储规则，写入失败时恢复原始内存状态。"""
+        """复制并持久化游戏列表，应用内运行路径相对化，写入失败时恢复原始内存状态。"""
         stored = json.loads(json.dumps(games))
-        for game in stored:
-            if isinstance(game, dict) and isinstance(game.get("preview"), str):
-                game["preview"] = to_stored_path(game["preview"])
+        stored = [store_game_paths(game) if isinstance(game, dict) else game for game in stored]
         previous = self._data
         self._data = {**previous, "games": stored}
         if self._write():
@@ -186,9 +202,12 @@ class GameConfigStore:
         games = candidate.get("games")
         entries = games if isinstance(games, list) else []
         matches = [game for game in entries if isinstance(game, dict) and game.get("id") == game_id]
-        if len(matches) != 1 or matches[0].get("mods_path") != old_path:
+        if len(matches) != 1 or resolve_stored_path(matches[0].get("mods_path", "")) != resolve_stored_path(old_path):
             raise ValueError(tr("游戏部署目录配置已变化，无法自动更新"))
-        matches[0]["mods_path"] = new_path
+        resolved = resolve_game_paths(matches[0])
+        matches[0].update(
+            store_game_paths(rebase_game_paths(resolved, resolve_stored_path(old_path), resolve_stored_path(new_path)))
+        )
         write_json_atomic(self._path, candidate)
         self._data = candidate
 

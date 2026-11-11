@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import os
 from collections.abc import Callable
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from pathlib import Path
 
 from src.core.game_config_store import GameConfigStore
+from src.core.game_paths import relocate_game_paths, resolve_game_paths
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
-from src.utils.paths import get_data_dir
+from src.utils.paths import get_data_dir, resolve_stored_path
 
 
 @dataclass
@@ -147,11 +147,10 @@ class GameService:
         写入失败时保持服务和存储的内存状态不变，并抛出 OSError 供调用方回滚部署记录。
         """
         game = self.get_game(game_id)
-        if game is None or game.mods_path != old_path:
+        if game is None or resolve_stored_path(game.mods_path) != resolve_stored_path(old_path):
             raise ValueError(tr("游戏部署目录配置已变化，无法自动更新"))
-        updated = [replace(item, mods_path=new_path) if item.id == game_id else item for item in self._games]
         self._store.rebase_deploy_dir(game_id, old_path, new_path)
-        self._games = updated
+        self.reload_games()
 
     def save_game(
         self,
@@ -227,7 +226,7 @@ class GameService:
             old_root = get_data_dir() / old_rd
             new_root = get_data_dir() / new_rd
             for field in ("exe_path", "migoto_path", "mods_path", "preview"):
-                entry[field] = self._relocate_resource_path(entry[field], old_root, new_root)
+                entry[field] = self._relocate_resource_path(entry[field], old_root, new_root, field=field)
         if existing:
             games_list[games_list.index(existing)] = entry
         else:
@@ -254,7 +253,10 @@ class GameService:
                             game,
                             field,
                             self._relocate_resource_path(
-                                getattr(game, field), get_data_dir() / old_rd, Path(recovery_error.actual_path)
+                                getattr(game, field),
+                                get_data_dir() / old_rd,
+                                Path(recovery_error.actual_path),
+                                field=field,
                             ),
                         )
                 raise ResourceDirectoryMigrationError(
@@ -271,15 +273,11 @@ class GameService:
         return gid
 
     @staticmethod
-    def _relocate_resource_path(value: str, old_root: Path, new_root: Path) -> str:
-        """重定位资源目录内的配置路径，保留外部路径且不解析符号链接。"""
+    def _relocate_resource_path(value: str, old_root: Path, new_root: Path, *, field="preview") -> str:
+        """重定位资源目录内的配置路径，保留外部位置、引号和游戏启动参数。"""
         if not value:
             return value
-        try:
-            relative = Path(os.path.abspath(value)).relative_to(os.path.abspath(old_root))
-        except ValueError:
-            return value
-        return str(new_root / relative)
+        return relocate_game_paths(resolve_game_paths({field: value}), old_root, new_root)[field]
 
     def delete_game(self, game_id: str) -> None:
         """从持久配置中删除游戏条目，清除失效的当前选择后重新加载游戏列表。"""

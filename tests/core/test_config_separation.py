@@ -288,7 +288,7 @@ class TestGameEntryContract:
 
         games = _store().get_games()
         assert len(games) == 1
-        assert games[0]["mods_path"] == "first"
+        assert games[0]["mods_path"] == str(fresh / "first")
 
     def test_empty_resource_dir_rejected(self, fresh):
         _write_games(fresh, games=[_entry("A", resource_dir="")])
