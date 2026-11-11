@@ -16,6 +16,7 @@ from src.utils.constants import MIGOTO_DISABLED_PREFIX
 from src.utils.paths import resolve_stored_path, to_stored_path
 
 ActionKind = Literal["park", "restore", "materialize_active", "noop"]
+_ACTION_PATHS = ("source_path", "active_path", "disabled_path", "partial_path")
 
 
 @dataclass(frozen=True)
@@ -46,20 +47,21 @@ class PresetDeploymentPlan:
         return any(a.action == "materialize_active" for a in self.actions)
 
     def to_json(self) -> str:
-        """将计划序列化为紧凑 JSON，并把源路径转换为可迁移存储形式。"""
+        """将计划序列化为紧凑 JSON，应用内的源、部署和临时路径随应用迁移。"""
         data = asdict(self)
         for action in data["actions"]:
-            action["source_path"] = to_stored_path(action["source_path"])
+            for key in _ACTION_PATHS:
+                action[key] = to_stored_path(action[key])
         return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
 
     @classmethod
     def from_json(cls, raw: str) -> PresetDeploymentPlan:
-        """解析持久计划并恢复源路径和不可变动作对象。"""
+        """解析持久计划，将各路径恢复为绝对路径并构造不可变动作对象。"""
         data = json.loads(raw)
-        data["actions"] = tuple(
-            DeploymentAction(**{**item, "source_path": resolve_stored_path(item["source_path"])})
-            for item in data["actions"]
-        )
+        for item in data["actions"]:
+            for key in _ACTION_PATHS:
+                item[key] = resolve_stored_path(item[key])
+        data["actions"] = tuple(DeploymentAction(**item) for item in data["actions"])
         return cls(**data)
 
 
@@ -89,6 +91,8 @@ def build_preset_deployment_plan(
     deploy_root: str | Path,
 ) -> PresetDeploymentPlan:
     """按独立身份规划，保留部署被外部改名后的实际路径。"""
+    from src.core.mod_storage import ModStorage
+
     root = Path(deploy_root)
     if not str(deploy_root).strip():
         raise ValueError("deployment root is not configured")
@@ -109,13 +113,13 @@ def build_preset_deployment_plan(
     for identity, mod in identities.items():
         record = records.get(identity)
         state = record.state if record else DeploymentState.ABSENT
-        name = _safe_name(mod.folder_name or Path(mod.path).stem)
+        name = ModStorage.active_deploy_name(_safe_name(mod.folder_name or Path(mod.path).stem))
         actual = Path(record.actual_path) if record is not None and record.actual_path else None
+        if actual is not None and not ModStorage.is_deployment_in_root(actual, root):
+            actual, state = None, DeploymentState.ABSENT
         parked_name = None
         if actual is not None and state == DeploymentState.DISABLED:
-            from src.core.mod_storage import ModStorage
-
-            parked_name = _safe_name(ModStorage.active_name_from_parked(actual, identity))
+            parked_name = ModStorage.active_deploy_name(ModStorage.active_name_from_parked(actual, identity))
         if mod.mod_id not in target_mod_ids and state != DeploymentState.ACTIVE:
             continue
         relevant[identity] = mod

@@ -39,6 +39,7 @@ from src.utils import fs
 from src.utils.i18n import N_
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
+from src.utils.paths import resolve_stored_path
 from src.utils.temp_dirs import temporary_directory
 
 
@@ -198,7 +199,6 @@ class RebuildSession:
             "WHERE m.game_id=? AND d.actual_path<>?",
             (game_id, ""),
         ).fetchall()
-        self.roots = [Path(r[0]).parent for r in deployed]
         game = manager._game_service.get_game(game_id)
         root = (
             manager._storage.get_deploy_dir()
@@ -207,6 +207,10 @@ class RebuildSession:
             if game and game.mods_path
             else None
         )
+        remembered = (Path(resolve_stored_path(row[0])) for row in deployed)
+        self.roots = [
+            path.parent for path in remembered if root is None or ModStorage.is_deployment_in_root(path, root)
+        ]
         if root is not None:
             self.roots.append(root)
         self.deploy_root = root

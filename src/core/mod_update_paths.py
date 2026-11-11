@@ -1,6 +1,6 @@
 """更新工作进程请求与结果协议中的可移植路径。
 
-请求位于源容器下，受管路径相对于请求目录；部署路径保留绝对路径。
+请求位于源容器下，应用内路径相对于请求目录；应用外路径保留绝对位置。
 """
 
 from __future__ import annotations
@@ -10,11 +10,12 @@ from pathlib import Path
 
 from src.utils.paths import to_stored_path
 
-_PLAN_PATHS = ("old_path", "archive", "work_root")
+_PLAN_PATHS = ("old_path", "archive", "work_root", "container", "deploy_target", "deploy_work", "old_deployed_path")
+_RESULT_PATHS = ("body", "deployment")
 
 
 def store_update_plan(plan: dict) -> dict:
-    """复制更新计划，将可随应用迁移的任务路径转换为相对工作目录的存储路径。"""
+    """复制更新计划，将应用内源、容器和部署路径转换为相对请求目录的存储路径。"""
     result = dict(plan)
     root = Path(plan["work_root"])
     for key in _PLAN_PATHS:
@@ -35,16 +36,21 @@ def load_update_plan(data: dict, directory: Path) -> dict:
 
 
 def store_update_result(prepared: dict, directory: Path) -> dict:
-    """复制准备结果并将正文路径转换为任务目录内的相对路径。"""
+    """正文始终属于任务目录；应用内的暂存部署同样按任务目录保存。"""
     result = dict(prepared)
     if result.get("body"):
         result["body"] = Path(os.path.relpath(result["body"], directory)).as_posix()
+    deployment = result.get("deployment")
+    if isinstance(deployment, str) and deployment and not Path(to_stored_path(deployment)).is_absolute():
+        result["deployment"] = Path(os.path.relpath(deployment, directory)).as_posix()
     return result
 
 
 def load_update_result(data: dict, directory: Path) -> dict:
-    """复制已存结果，并将正文相对路径还原为任务目录下的实际路径。"""
+    """复制已存结果，以任务目录为基准还原正文与暂存部署的实际路径。"""
     result = dict(data)
-    if result.get("body"):
-        result["body"] = os.path.normpath(directory / result["body"])
+    for key in _RESULT_PATHS:
+        value = result.get(key)
+        if isinstance(value, str) and value:
+            result[key] = os.path.normpath(directory / value)
     return result

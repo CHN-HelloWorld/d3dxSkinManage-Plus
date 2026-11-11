@@ -126,6 +126,15 @@ class ModStorage:
         return self._migoto_mods_dir
 
     @staticmethod
+    def is_deployment_in_root(path: str | Path, root: str | Path | None) -> bool:
+        """仅比较规范路径，判断部署记录是否位于当前根内，不查询旧目录是否存在。"""
+        if not path or not root:
+            return False
+        target = Path(os.path.abspath(fs.normal_path(path)))
+        base = Path(os.path.abspath(fs.normal_path(root)))
+        return target != base and target.is_relative_to(base)
+
+    @staticmethod
     def _resolve_deploy_name(
         source_path: str | Path,
         deploy_name: str = "",
@@ -191,6 +200,14 @@ class ModStorage:
             raise ValueError(f"invalid deploy name: {deploy_name!r}")
         return raw
 
+    @staticmethod
+    def active_deploy_name(deploy_name: str) -> str:
+        """保留可读名称，同时避免旧库名称被加载器误判为禁用目录。"""
+        name = ModStorage.safe_deploy_name(deploy_name)
+        if name.casefold().startswith(MIGOTO_DISABLED_PREFIX.casefold()):
+            return "Mod_" + name[:180]
+        return name
+
     def deployment_paths(self, mod_id: str, deploy_name: str) -> tuple[Path, Path, Path]:
         """生成同一 Mod 的活动、停放及未完成部署路径，要求已配置部署根且身份有效。"""
         root = self._migoto_mods_dir
@@ -208,7 +225,7 @@ class ModStorage:
         root = self._migoto_mods_dir
         if root is None:
             raise RuntimeError("3DMigoto Mods directory is not configured")
-        name = self.safe_deploy_name(deploy_name)
+        name = self.active_deploy_name(deploy_name)
         for candidate in (name, f"{name[:180]}_{mod_id[:12]}", f"{name[:180]}_{mod_id}"):
             target = root / candidate
             if not fs.lexists(target):
@@ -226,7 +243,11 @@ class ModStorage:
         roots = []
         if self._migoto_mods_dir is not None:
             roots.append(self._migoto_mods_dir)
-        roots.extend(Path(path).parent for path in remembered_paths if path)
+        roots.extend(
+            Path(path).parent
+            for path in remembered_paths
+            if path and (self._migoto_mods_dir is None or self.is_deployment_in_root(path, self._migoto_mods_dir))
+        )
         roots = list({self._path_key(root): Path(root) for root in roots}.values())
         state = scan_deployment_inventory(roots, self.deployment_inventory_snapshot(), force=force)
         self.adopt_deployment_inventory(state)
@@ -309,9 +330,9 @@ class ModStorage:
         """把预设缓存目录恢复成启用名；目标被占用时拒绝覆盖。"""
         parked = Path(parked_path)
         root = self._migoto_mods_dir
-        if root is None or not self._path_root_available(parked):
+        if not self.is_deployment_in_root(parked, root) or not self._path_root_available(parked):
             return None
-        target = parked.parent / self.safe_deploy_name(deploy_name)
+        target = parked.parent / self.active_deploy_name(deploy_name)
         try:
             if self._deploy_path_exists(target):
                 logger.warning("恢复停放部署时目标已存在，拒绝覆盖: %s", target)
@@ -681,7 +702,15 @@ class ModStorage:
                 pass
         # ① symlink 优先
         try:
-            os.symlink(fs.native_path(override_path), fs.native_path(deploy_path))
+            from src.utils.paths import to_stored_path
+
+            target = fs.native_path(override_path)
+            if (
+                not Path(to_stored_path(override_path)).is_absolute()
+                and not Path(to_stored_path(deploy_path)).is_absolute()
+            ):
+                target = os.path.relpath(fs.normal_path(override_path), fs.normal_path(deploy_path.parent))
+            os.symlink(target, fs.native_path(deploy_path))
             logger.debug("ini 已软链接: %s -> %s", deploy_path, override_path)
             return "symlink"
         except (OSError, NotImplementedError, AttributeError):

@@ -21,7 +21,7 @@ from src.models.deployment import DeploymentRecord, DeploymentState, PresetApply
 from src.models.mod import Mod
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
-from src.utils.paths import get_app_dir, get_data_dir
+from src.utils.paths import get_app_dir, get_data_dir, resolve_stored_path, to_stored_path
 
 DB_SCHEMA_VERSION = SCHEMA_VERSION
 CURRENT_TABLES = set(TABLES)
@@ -252,7 +252,7 @@ class ModIndex:
                 "preview_images": images,
                 "imported_at": row["imported_at"],
                 "status": "enabled" if row["deployment_state"] == "active" else "disabled",
-                "deployed_path": row["actual_path"] or "",
+                "deployed_path": resolve_stored_path(row["actual_path"] or ""),
             }
         )
 
@@ -409,7 +409,7 @@ class ModIndex:
         try:
             for number, raw in enumerate(cursor, 1):
                 container = self._container(raw, parents)
-                fingerprint = (*tuple(raw), str(container))
+                fingerprint = (*tuple(raw), str(container), stamp[0][-1])
                 old = old_rows.get(raw["mod_id"])
                 if old and old[0] == fingerprint:
                     row = old[1]
@@ -427,7 +427,7 @@ class ModIndex:
                     row = LibraryRow(
                         mod_id=raw["mod_id"],
                         path=str(container / raw["path"]),
-                        deployed_path=raw["actual_path"] or "",
+                        deployed_path=resolve_stored_path(raw["actual_path"] or ""),
                         enabled=raw["state"] == "active",
                         preview_images=tuple(images),
                     )
@@ -455,7 +455,7 @@ class ModIndex:
             LibraryRow(
                 mod_id=r["mod_id"],
                 path=str(self._container(r, cache) / r["path"]),
-                deployed_path=r["actual_path"] or "",
+                deployed_path=resolve_stored_path(r["actual_path"] or ""),
                 enabled=r["deployment_state"] == "active",
                 preview_images=(),
             )
@@ -487,11 +487,11 @@ class ModIndex:
             return False
 
     def upsert_deployment(self, record, *, commit=True):
-        """新增或覆盖 Mod 部署状态与实际路径，按参数决定是否立即提交。"""
+        """保存部署状态及可移植路径，按参数决定是否立即提交。"""
         self._db().execute(
             """INSERT INTO deployment_records(mod_id,state,actual_path) VALUES(?,?,?)
             ON CONFLICT(mod_id) DO UPDATE SET state=excluded.state,actual_path=excluded.actual_path""",
-            (record.mod_id, record.state.value, record.actual_path),
+            (record.mod_id, record.state.value, to_stored_path(record.actual_path)),
         )
         if commit:
             self._db().commit()
@@ -510,9 +510,11 @@ class ModIndex:
 
     @staticmethod
     def _row_to_deployment(row):
-        """将部署数据库行转换为含状态枚举的部署记录对象。"""
+        """将部署数据库行转换为含状态枚举和运行时绝对路径的记录对象。"""
         return DeploymentRecord(
-            mod_id=row["mod_id"], state=DeploymentState(row["state"]), actual_path=row["actual_path"]
+            mod_id=row["mod_id"],
+            state=DeploymentState(row["state"]),
+            actual_path=resolve_stored_path(row["actual_path"]),
         )
 
     def get_mod_count(self, character_id=None):

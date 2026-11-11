@@ -9,6 +9,7 @@ from src.core import migoto_user_ini
 from src.core.mod_package import build_local_manifest, read_override, write_sidecar
 from src.core.mod_variant_store import ModVariantStore
 from src.core.user_ini_watcher import UserIniWatcher
+from src.core.variant_operation import IniInventoryChanged
 from src.models.mod import Mod
 from tests.core.test_named_variant_manager import enable, save
 from tests.core.test_variant_preset_switch import _KEY, _override_value, _user_keys, _write_user_ini
@@ -406,7 +407,7 @@ def test_round1_handshake_addition_rejects_apply_without_pending_recovery(env, s
 
     preparation.patch_sink = add_before_acknowledgement
     try:
-        with pytest.raises(RuntimeError, match="INI.*外部修改"):
+        with pytest.raises(IniInventoryChanged):
             preparation.before_commit(plan)
         assert env["user_ini"].read_bytes() == before
         assert added.is_file()

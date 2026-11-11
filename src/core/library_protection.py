@@ -13,6 +13,7 @@ from threading import RLock
 
 from src.core.library_schema import directory_key
 from src.utils.i18n import t as tr
+from src.utils.paths import resolve_stored_path
 
 
 class LibraryOperationBusy(RuntimeError):
@@ -178,7 +179,7 @@ def protection_snapshot(manager):
         for action in data.get("actions", ()):
             ids.add(action["mod_id"])
             paths.update(
-                directory_key(action[key])
+                directory_key(resolve_stored_path(action[key]))
                 for key in ("source_path", "active_path", "disabled_path", "partial_path")
                 if action.get(key)
             )

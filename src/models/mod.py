@@ -464,14 +464,14 @@ class Mod:
             temp_dir.cleanup()
 
     def to_dict(self) -> dict:
-        """序列化为字典"""
+        """序列化为可持久字典，应用内的源、部署和图片引用使用相对路径。"""
         return {
             "game_id": self.game_id,
             "name": self.name,
             "folder_name": self.folder_name,
             "path": to_stored_path(self.path),
             "mod_id": self.mod_id,
-            "deployed_path": self.deployed_path,
+            "deployed_path": to_stored_path(self.deployed_path),
             "content_hash": self.content_hash,
             "status": self.status.value,
             "node_id": self.node_id,
@@ -507,7 +507,7 @@ class Mod:
             folder_name=data.get("folder_name", ""),
             path=resolve_stored_path(data.get("path", "")),
             mod_id=data.get("mod_id", ""),
-            deployed_path=data.get("deployed_path", ""),
+            deployed_path=resolve_stored_path(data.get("deployed_path", "")),
             content_hash=data.get("content_hash", ""),
             status=ModStatus(data.get("status", "disabled")),
             node_id=data.get("node_id", ""),

@@ -18,6 +18,7 @@ from src.models.deployment import DeploymentRecord, DeploymentState
 from src.utils import fs
 from src.utils.constants import MIGOTO_DISABLED_PREFIX, MOD_CONTAINER_MARKER
 from src.utils.logger import logger
+from src.utils.paths import resolve_stored_path, to_stored_path
 
 
 @dataclass
@@ -33,6 +34,11 @@ class LocalPublication:
     external_copy_paths: set[str] = field(default_factory=set)
     refresh_mod_ids: set[str] = field(default_factory=set)
     retry_after_ms: int | None = None
+
+
+def _deployment_path_keys(path: str | Path) -> tuple[str, str]:
+    """同时查询应用内相对记录和旧绝对记录，沿用部署路径的表达式索引。"""
+    return directory_key(to_stored_path(path)), directory_key(resolve_stored_path(path))
 
 
 def _service(manager, generation):
@@ -86,15 +92,15 @@ def _ready_events(manager, events, channel):
                 except (OSError, ValueError):
                     pass
                 if channel == "deployment":
-                    row = (
+                    rows = (
                         manager._index._db()
                         .execute(
-                            "SELECT mod_id FROM deployment_records WHERE directory_key(actual_path)=?",
-                            (directory_key(str(candidate)),),
+                            "SELECT mod_id FROM deployment_records WHERE directory_key(actual_path) IN (?,?)",
+                            _deployment_path_keys(candidate),
                         )
-                        .fetchone()
+                        .fetchall()
                     )
-                    if row is not None and row[0] in snapshot[1]:
+                    if any(row[0] in snapshot[1] for row in rows):
                         protected = True
                         break
         if protected or len(ready) >= 32:
@@ -306,8 +312,9 @@ def deployment_events(manager, events):
                     occupant = (
                         index._db()
                         .execute(
-                            "SELECT mod_id FROM deployment_records WHERE directory_key(actual_path)=? AND mod_id<>?",
-                            (directory_key(str(path)), mid),
+                            "SELECT mod_id FROM deployment_records "
+                            "WHERE directory_key(actual_path) IN (?,?) AND mod_id<>?",
+                            (*_deployment_path_keys(path), mid),
                         )
                         .fetchone()
                     )
@@ -338,9 +345,10 @@ def deployment_events(manager, events):
                 row = (
                     index._db()
                     .execute(
-                        "SELECT d.mod_id FROM deployment_records d JOIN mods m ON m.mod_id=d.mod_id "
-                        "WHERE directory_key(d.actual_path)=? AND m.game_id=?",
-                        (directory_key(str(path)), manager.current_game_id),
+                        "SELECT d.mod_id FROM deployment_records d "
+                        "WHERE directory_key(d.actual_path) IN (?,?) "
+                        "AND EXISTS (SELECT 1 FROM mods m WHERE m.mod_id=d.mod_id AND m.game_id=?)",
+                        (*_deployment_path_keys(path), manager.current_game_id),
                     )
                     .fetchone()
                 )

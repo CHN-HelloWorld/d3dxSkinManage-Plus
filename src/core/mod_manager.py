@@ -96,7 +96,7 @@ from src.utils.constants import (
 )
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
-from src.utils.paths import get_data_dir
+from src.utils.paths import get_data_dir, resolve_stored_path, to_stored_path
 
 if TYPE_CHECKING:
     from src.core.ini_keys import KeyBinding
@@ -1373,7 +1373,7 @@ class ModManager:
 
     def _is_parked_deployment_available(self, mod: Mod) -> bool:
         """确认记录路径是可访问的停放目录，且部署标记仍属于该 Mod。"""
-        if not mod.deployed_path:
+        if not self._storage.is_deployment_in_root(mod.deployed_path, self._storage.get_deploy_dir()):
             return False
         parked = Path(mod.deployed_path)
         if not parked.name.upper().startswith(MIGOTO_DISABLED_PREFIX.upper()):
@@ -1385,9 +1385,9 @@ class ModManager:
 
     def _restore_parked_deployment(self, mod: Mod) -> Path | None:
         """恢复预设停放缓存；非缓存路径和离线/缺失缓存均返回 None。"""
-        self.require_mod_operation(mod.mod_id, deployment=True)
         if not self._is_parked_deployment_available(mod):
             return None
+        self.require_mod_operation(mod.mod_id, deployment=True)
         name = self._storage.active_name_from_parked(mod.deployed_path, mod.mod_id)
         target = self._storage.active_deployment_path(mod.mod_id, name)
         return self._storage.restore_parked_deployment(mod.deployed_path, target.name)
@@ -2248,7 +2248,7 @@ class ModManager:
         if deploy is not None:
             roots[path_key(str(deploy))] = str(deploy)
         for number, row in enumerate(rows, 1):
-            if row.deployed_path:
+            if row.deployed_path and (deploy is None or self._storage.is_deployment_in_root(row.deployed_path, deploy)):
                 parent = str(Path(row.deployed_path).parent)
                 roots[path_key(parent)] = parent
             if number % batch_size == 0:
@@ -2262,7 +2262,7 @@ class ModManager:
         )
         try:
             for number, row in enumerate(cursor, 1):
-                records.append(tuple(row))
+                records.append((row[0], resolve_stored_path(row[1]), row[2], row[3]))
                 if number % batch_size == 0:
                     yield None
                     check()
@@ -4659,7 +4659,7 @@ class ModManager:
             ):
                 continue
             target = str(Path(new_root) / rel) if rel != "." else new_root
-            updates.append((target, record.mod_id))
+            updates.append((to_stored_path(target), record.mod_id))
         # 部署投影管理这些路径；根目录移动不修改资源元数据、预览、预设身份或部署状态。
         if updates:
             with self._index.transaction() as conn:
@@ -4685,6 +4685,8 @@ class ModManager:
         if (changed or defer_activation) and self._ini_sync is not None:
             self.stop_ini_sync()
         self._storage.set_migoto_mods_dir(deploy_dir or "")
+        if changed and self._variants is not None:
+            self._variants.invalidate()
         if deploy_dir:
             recovery_errors = self._preset_manager.recover_incomplete_applies(self.current_game_id)
             for error in recovery_errors:
@@ -4697,7 +4699,16 @@ class ModManager:
 
         if changed and deploy_dir and not defer_activation:
             try:
-                self.reconcile_deployment_locations(self.current_game_id, force=True)
+                try:
+                    self.reconcile_deployment_locations(self.current_game_id, force=True)
+                except OSError:
+                    # 旧设备的提示根离线不能阻断当前根中已验证的身份。
+                    # 只恢复匹配条目，未发现的旧部署仍保留，不能据此判定删除。
+                    locations = self._storage.scan_deployments(force=True)
+                    rows = tuple(
+                        row for row in self._index.get_deployment_rows(self.current_game_id) if row.mod_id in locations
+                    )
+                    self.reconcile_deployment_locations(self.current_game_id, locations=locations, rows=rows)
                 self._register_existing_deployments()
             except (OSError, IdentityConflict) as error:
                 logger.warning("部署目录身份尚不可确认，保留原记录：%s", error)
@@ -4898,7 +4909,7 @@ class ModManager:
         ).fetchall()
         success = True
         for row in rows:
-            identity, target = row["mod_id"], Path(row["actual_path"])
+            identity, target = row["mod_id"], Path(resolve_stored_path(row["actual_path"]))
             try:
                 self._storage._check_deployment_identity(target, identity)
                 body = self._index.paths.body_path(identity)
@@ -4979,7 +4990,7 @@ class ModManager:
                 self._storage._check_deployment_identity(target, record.mod_id)
                 rebound = relocated(target)
                 if rebound != target:
-                    updates.append((str(rebound), record.mod_id))
+                    updates.append((to_stored_path(rebound), record.mod_id))
                 overrides = resolve_ini_overrides_dir(body)
                 if overrides is None:
                     continue

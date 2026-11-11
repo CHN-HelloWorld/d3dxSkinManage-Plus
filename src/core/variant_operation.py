@@ -13,7 +13,7 @@ import os
 import stat
 import tempfile
 import uuid
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -21,6 +21,7 @@ from src.core.mod_runtime_prefs import PREFS_LOCK
 from src.utils import fs
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
+from src.utils.paths import resolve_stored_path, to_stored_path
 
 
 def read_bytes(path: Path) -> bytes | None:
@@ -63,9 +64,9 @@ class FileChange:
     after: bytes | None
 
     def to_dict(self) -> dict:
-        """将绝对路径、前后内容编码及摘要转换为恢复日志结构。"""
+        """将可移植路径、前后内容编码及摘要转换为恢复日志结构。"""
         return {
-            "path": str(self.path.absolute()),
+            "path": to_stored_path(self.path.absolute()),
             "before": _encode(self.before),
             "after": _encode(self.after),
             "before_hash": digest(self.before),
@@ -77,6 +78,10 @@ class VariantRecoveryError(RuntimeError):
     """表示变体事务前提、应用结果或恢复过程无法安全完成。"""
 
     pass
+
+
+class IniInventoryChanged(VariantRecoveryError):
+    """INI 成员发生变化，调用方只能在确认原状态完整保留后重建计划。"""
 
 
 def _source_inventory_image(inventory) -> str:
@@ -96,6 +101,20 @@ def _source_inventory_image(inventory) -> str:
     )
 
 
+def _convert_source_inventory_paths(expected: str, convert: Callable[[str], str]) -> str:
+    """转换源清单镜像中的路径，保留原有成员与文件版本供严格比较。"""
+    image = json.loads(expected)
+    if not isinstance(image, dict):
+        raise ValueError(tr("无效的 INI 清单前提"))
+    for key in ("body", "override_root"):
+        value = image.get(key)
+        if value is not None:
+            if not isinstance(value, str) or not value:
+                raise ValueError(tr("无效的 INI 清单前提"))
+            image[key] = convert(value)
+    return json.dumps(image, sort_keys=True)
+
+
 @dataclass(frozen=True)
 class IniInventoryGuard:
     """只读的 INI 成员前提，保留到所有者提交完成。"""
@@ -110,9 +129,11 @@ class IniInventoryGuard:
         return cls(inventory.path, "source", _source_inventory_image(inventory))
 
     @classmethod
-    def deployed(cls, path, relative_paths):
-        """将部署 INI 相对路径排序并保存为文件集合前提。"""
-        return cls(Path(path), "deployed", json.dumps(sorted(relative_paths)))
+    def deployed(cls, path, relative_paths, *, rules=None):
+        """保存部署成员及可选加载规则，使变量分析与提交前的集合比较一致。"""
+        paths = sorted(relative_paths)
+        expected = {"paths": paths, "rules": rules.to_dict()} if rules is not None else paths
+        return cls(Path(path), "deployed", json.dumps(expected))
 
     def verify(self) -> None:
         """重新枚举源或部署 INI 并比较预期清单，外部变化时拒绝陈旧声明。"""
@@ -121,7 +142,17 @@ class IniInventoryGuard:
         if self.scope == "source":
             current = _source_inventory_image(inspect_effective_inis(self.path))
         elif self.scope == "deployed":
-            current = json.dumps(sorted(rel for rel, _token in _strict_ini_tree(self.path, exclude_meta=True)))
+            from src.core.ini_loading import IniLoadRules
+
+            expected = json.loads(self.expected)
+            paths = [rel for rel, _token in _strict_ini_tree(self.path, exclude_meta=True)]
+            if isinstance(expected, dict):
+                rules = IniLoadRules.from_dict(expected["rules"])
+                current = json.dumps(
+                    {"paths": sorted(rel for rel in paths if rules.accepts(rel)), "rules": rules.to_dict()}
+                )
+            else:
+                current = json.dumps(sorted(paths))
         else:
             raise ValueError(tr("无效的 INI 清单前提类型"))
         if current != self.expected:
@@ -132,11 +163,14 @@ class IniInventoryGuard:
                 self.expected,
                 current,
             )
-            raise VariantRecoveryError(tr("INI 清单已被外部修改，无法应用陈旧声明：{path}", path=self.path))
+            raise IniInventoryChanged(tr("INI 清单已被外部修改，无法应用陈旧声明：{path}", path=self.path))
 
     def to_dict(self) -> dict:
-        """将清单前提的绝对路径、范围和预期镜像序列化为恢复字段。"""
-        return {"path": str(self.path.absolute()), "scope": self.scope, "expected": self.expected}
+        """持久化可移植路径及清单镜像，不改写归档身份或版本前提。"""
+        expected = self.expected
+        if self.scope == "source":
+            expected = _convert_source_inventory_paths(expected, to_stored_path)
+        return {"path": to_stored_path(self.path.absolute()), "scope": self.scope, "expected": expected}
 
 
 class VariantOperation:
@@ -299,25 +333,30 @@ class VariantOperation:
         if not isinstance(data, dict) or data.get("kind") != "d3dx-variant-operation":
             raise ValueError(tr("变体恢复记录类型无效"))
         roots = [Path(root).resolve() for root in allowed_roots]
-        changes = []
-        for raw in data.get("changes", []):
-            target = Path(raw["path"])
+
+        def restore_path(value: str) -> Path:
+            """以当前应用目录解析新相对路径，兼容旧绝对路径并保持授权边界。"""
+            target = Path(resolve_stored_path(value))
             resolved = target.resolve()
             if not target.is_absolute() or not any(resolved == r or r in resolved.parents for r in roots):
                 raise ValueError(tr("恢复路径越界：{target}", target=target))
+            return target
+
+        changes = []
+        for raw in data.get("changes", []):
+            target = restore_path(raw["path"])
             before, after = _decode(raw.get("before")), _decode(raw.get("after"))
             if digest(before) != raw.get("before_hash") or digest(after) != raw.get("after_hash"):
                 raise ValueError(tr("恢复文件哈希不一致：{target}", target=target))
             changes.append(FileChange(target, before, after))
         for raw in data.get("prerequisites", []):
-            target = Path(raw["path"])
-            resolved = target.resolve()
-            if not target.is_absolute() or not any(resolved == r or r in resolved.parents for r in roots):
-                raise ValueError(tr("恢复路径越界：{target}", target=target))
+            target = restore_path(raw["path"])
             scope, expected = raw["scope"], raw["expected"]
             if scope not in {"source", "deployed"} or not isinstance(expected, str):
                 raise ValueError(tr("无效的 INI 清单前提"))
             json.loads(expected)
+            if scope == "source":
+                expected = _convert_source_inventory_paths(expected, resolve_stored_path)
             changes.append(IniInventoryGuard(target, scope, expected))
         op = cls(
             Path(path).parent,

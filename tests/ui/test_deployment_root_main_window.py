@@ -142,6 +142,7 @@ def test_open_window_tracks_root_move_before_immediate_f5(real_window, qtbot, mo
 
 
 def test_offline_missing_root_remains_invalid_until_saved_selection(real_window, qtbot):
+    """缺失部署根阻止启动及手动刷新，显式重选后按原身份恢复完整环境。"""
     from PySide6.QtWidgets import QMessageBox
 
     window, manager, service, mods, old, new = real_window(offline=True)
@@ -163,7 +164,15 @@ def test_offline_missing_root_remains_invalid_until_saved_selection(real_window,
         assert current.is_enabled and current.deployed_path == original.deployed_path
     window._refresh_current(manual=True)
     assert not window._manual_refresh_active
-    assert window._intake_progress._detail.text() == "部署目录无效，请重新选择"
+    assert window._intake_progress._detail.text().strip()
+    assert window._intake_progress._stop_btn.isHidden()
+    assert service.get_current_game().id == manager.current_game_id
+    assert service.get_current_game().mods_path == str(old)
+    assert manager._storage.get_deploy_dir() is None
+    assert window._library_probe.paused
+    for original in mods:
+        current = manager.get_mod(original.mod_id)
+        assert current.is_enabled and current.deployed_path == original.deployed_path
     assert not old.exists()
     service.save_game(replace(service.get_current_game(), mods_path=str(new)))
     window._on_games_changed()

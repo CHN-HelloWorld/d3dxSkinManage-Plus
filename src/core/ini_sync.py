@@ -267,11 +267,23 @@ class IniSyncManager:
             op = override_path_for(body_path, rel)
             if op is None:
                 continue  # 非容器本体 → 无 override 能力，跳过
-            if not ini.is_file():
+            relink = not ini.is_file()
+            if not relink and ini.is_symlink() and op.is_file():
+                try:
+                    relink = not ini.samefile(op)
+                except OSError as error:
+                    logger.warning("无法核对部署 ini 链接，暂不登记以免写入旧副本 (%s)：%s", rel, error)
+                    continue
+            if relink:
                 if not ini.is_symlink() or not op.is_file():
                     continue
-                # 程序目录被剪切后，外部部署中的软链接仍指向旧位置。按当前容器内
-                # 同一相对 INI 重新绑定；无链接权限时复用既有的硬链接/复制回退。
+                # 复制后旧目标仍可读，也必须绑定当前容器。先确认旧链接已移除，
+                # 防止链接创建失败后的复制回退沿旧链接写入另一份程序的数据。
+                try:
+                    ini.unlink()
+                except OSError as error:
+                    logger.warning("无法移除旧部署 ini 链接，暂不登记 (%s)：%s", rel, error)
+                    continue
                 from src.core.mod_storage import ModStorage
 
                 ModStorage().link_ini(op, ini)

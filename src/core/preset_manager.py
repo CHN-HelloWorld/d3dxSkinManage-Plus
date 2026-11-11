@@ -35,7 +35,7 @@ from src.models.mod import ModStatus
 from src.models.preset import Preset
 from src.utils.i18n import t as tr
 from src.utils.logger import logger
-from src.utils.paths import get_data_dir
+from src.utils.paths import get_data_dir, resolve_stored_path, to_stored_path
 
 if TYPE_CHECKING:
     from src.models.mod import Mod
@@ -65,6 +65,15 @@ class _PresetMod:
 DEFAULT_PRESET_NAME = "默认"
 # 预设版本标记用于诊断；读取时按字段校验，缺失字段使用默认值。
 SCHEMA_VERSION = 2
+
+
+def _completed_steps_json(completed) -> str:
+    """保存已完成步骤的身份与可移植路径，供中断后的反向恢复使用。"""
+    steps = [asdict(step) for step in completed]
+    for step in steps:
+        for key in ("source_path", "target_path"):
+            step[key] = to_stored_path(step[key])
+    return json.dumps(steps, ensure_ascii=False)
 
 
 class PresetManager(QObject):
@@ -1235,7 +1244,7 @@ class PresetManager(QObject):
         idx.update_journal(
             operation_id,
             phase="executing",
-            completed_steps_json=json.dumps([asdict(step) for step in completed], ensure_ascii=False),
+            completed_steps_json=_completed_steps_json(completed),
         )
 
     @library_mutation
@@ -1304,7 +1313,7 @@ class PresetManager(QObject):
                        (mod_id,state,actual_path) VALUES (?,?,?)
                        ON CONFLICT(mod_id) DO UPDATE SET state=excluded.state,
                          actual_path=excluded.actual_path""",
-                    (action.mod_id, state, actual),
+                    (action.mod_id, state, to_stored_path(actual)),
                 )
             conn.execute(
                 """INSERT INTO game_deployment_state(game_id,current_preset_id,updated_at)
@@ -1358,9 +1367,7 @@ class PresetManager(QObject):
             self._get_index().update_journal(
                 plan.operation_id,
                 phase="recovery_required",
-                completed_steps_json=json.dumps(
-                    [asdict(step) for step in getattr(error, "completed", ())], ensure_ascii=False
-                ),
+                completed_steps_json=_completed_steps_json(getattr(error, "completed", ())),
             )
         else:
             self._get_index().delete_journal(plan.operation_id)
@@ -1391,7 +1398,16 @@ class PresetManager(QObject):
             try:
                 plan = PresetDeploymentPlan.from_json(journal.plan_json)
                 raw_steps = json.loads(journal.completed_steps_json or "[]")
-                completed = tuple(CompletedStep(**item) for item in raw_steps)
+                completed = tuple(
+                    CompletedStep(
+                        **{
+                            **item,
+                            "source_path": resolve_stored_path(item["source_path"]),
+                            "target_path": resolve_stored_path(item["target_path"]),
+                        }
+                    )
+                    for item in raw_steps
+                )
                 if journal.phase == "planned" and not completed and not journal.runtime_patch_json:
                     idx.delete_journal(journal.operation_id)
                     continue

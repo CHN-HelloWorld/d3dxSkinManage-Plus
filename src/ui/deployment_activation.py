@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -22,6 +21,7 @@ from src.core.library_snapshot import (
     scan_deployment_inventory,
 )
 from src.core.mod_identity import IdentityConflict, read_deployment_identity
+from src.core.mod_storage import ModStorage
 from src.ui.error_messages import user_error_message
 from src.ui.worker_lifecycle import manage_page_worker
 from src.utils import fs
@@ -82,21 +82,11 @@ def prepare_deployment_activation(request, cancelled) -> ActivationResult:
             raise InterruptedError("Deployment activation cancelled")
 
     roots = {path_key(request.root): Path(request.root)}
-    checked_roots = set(roots)
     for row in request.rows:
         check()
-        if row.deployed_path:
+        if ModStorage.is_deployment_in_root(row.deployed_path, request.root):
             root = Path(row.deployed_path).parent
-            key = path_key(str(root))
-            if key in checked_roots:
-                continue
-            checked_roots.add(key)
-            try:
-                os.stat(fs.native_path(root))
-            except (FileNotFoundError, NotADirectoryError):
-                # 应用关闭期间根目录可能移动，旧位置仅作提示，不要求它们继续存在。
-                continue
-            roots[key] = root
+            roots[path_key(str(root))] = root
     check()
     result.inventory = scan_deployment_inventory(tuple(roots.values()), force=True, should_cancel=cancelled)
     result.locations = {loc.mod_id: loc for loc in result.inventory.locations}

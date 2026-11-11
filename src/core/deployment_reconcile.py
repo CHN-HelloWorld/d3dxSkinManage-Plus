@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from src.core.mod_identity import validate_mod_id
+from src.core.mod_storage import ModStorage
 from src.models.deployment import DeploymentRecord, DeploymentState
 from src.models.mod import Mod
 from src.utils.logger import logger
@@ -24,7 +25,8 @@ def reconcile_deployment_records(
     """按磁盘部署身份核对索引，事务写入状态变化并返回受影响的 Mod。
 
     可复用调用方采集的行、位置和部署记录；无部署根时直接返回，提交失败时保留异常并恢复索引游戏上下文。"""
-    if storage.get_deploy_dir() is None:
+    root = storage.get_deploy_dir()
+    if root is None:
         return DeploymentChanges()
     rows = index.get_library_rows(game_id) if rows is None else rows
     if locations is None:
@@ -34,6 +36,8 @@ def reconcile_deployment_records(
     changed, disabled_ids, updates = [], [], []
     for row in rows:
         location = locations.get(validate_mod_id(row.mod_id))
+        if location is not None and not ModStorage.is_deployment_in_root(location.path, root):
+            location = None
         new_path = str(location.path) if location else ""
         enabled = bool(location and location.active)
         record = records.get(row.mod_id)

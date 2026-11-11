@@ -318,7 +318,7 @@ def test_round1_unreadable_final_inventory_rejects_without_empty_fallback(env, m
 
 
 def test_round1_folder_source_inventory_addition_invalidates_frozen_index(env, tmp_path):
-    from src.core.variant_operation import VariantOperation
+    from src.core.variant_operation import IniInventoryChanged, VariantOperation
 
     folder = tmp_path / "folder-source"
     folder.mkdir()
@@ -329,7 +329,7 @@ def test_round1_folder_source_inventory_addition_invalidates_frozen_index(env, t
     op.prepare()
     added = folder / "extra.ini"
     added.write_text(EXTRA, encoding="utf-8")
-    with pytest.raises(RuntimeError, match="INI.*外部修改"):
+    with pytest.raises(IniInventoryChanged):
         op.apply()
     assert added.read_text(encoding="utf-8") == EXTRA
     assert not op.journal_path.exists()

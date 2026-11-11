@@ -107,6 +107,7 @@ def test_rebase_does_not_load_full_mod_metadata_or_commit_each_row(qtbot, temp_d
 
 
 def test_activation_rejects_missing_root_without_recreating_it(qtbot, temp_data_dir):
+    """失效根产生当前游戏的错误反馈，不启动激活或清除原有部署记录。"""
     from src.ui.deployment_activation import DeploymentActivationController
 
     manager, service, mods, old = _environment(temp_data_dir)
@@ -116,9 +117,16 @@ def test_activation_rejects_missing_root_without_recreating_it(qtbot, temp_data_
     controller.failed.connect(lambda *args: errors.append(args))
     try:
         assert not controller.start(str(old))
-        assert errors and "部署目录无效，请重新选择" in errors[0][1]
+        assert len(errors) == 1
+        assert errors[0][0] == manager.current_game_id
+        assert errors[0][1].strip()
+        assert not controller.running
+        assert not controller.is_current(str(old))
+        assert service.get_current_game().mods_path == str(old)
         assert not old.exists()
-        assert manager.get_mod(mods[0].mod_id).is_enabled
+        for original in mods:
+            current = manager.get_mod(original.mod_id)
+            assert current.is_enabled and current.deployed_path == original.deployed_path
     finally:
         controller.close()
         qtbot.waitUntil(lambda: not controller.running)

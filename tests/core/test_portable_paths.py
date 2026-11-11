@@ -24,6 +24,8 @@ def relocate_app(root: Path, monkeypatch) -> Path:
     unrelated = root.with_name("launch-cwd-" + token)
     unrelated.mkdir()
     monkeypatch.chdir(unrelated)
+    assert root.resolve().parent == moved.resolve().parent
+    assert not moved.resolve().is_relative_to(root.resolve())
     shutil.move(str(root), str(moved))
     for name, module in list(sys.modules.items()):
         if module is None or not name.startswith("src."):
@@ -44,7 +46,7 @@ def make_indexed_mod(root: Path):
     mod = make_mod(
         index, "Skin", mod_id="11111111111141118111111111111111", body_name="Skin.zip", preview_images=[str(preview)]
     )
-    # 部署引用始终表示外部路径，即使用户选择了应用的子目录。
+    # 此部署目录位于应用内，应与资源库一起移动。
     mod.deployed_path = str(root / "external/Mods/Skin")
     mod.info.custom_data = {"gamebanana": {"mod_id": 123}, "notes": "https://example.com/image.png"}
     assert index.add_mod(mod)
@@ -97,7 +99,7 @@ def test_index_loads_after_application_moves_from_unrelated_cwd(temp_data_dir, m
         assert Path(mod.primary_preview).read_bytes() == b"image"
         assert mod.info.custom_data["gamebanana"]["mod_id"] == 123
         assert Path(mod.path).is_relative_to(moved)
-        assert mod.deployed_path == original.deployed_path
+        assert mod.deployed_path == str(moved / "external/Mods/Skin")
         assert mod.mod_id == original.mod_id
         assert mod.info.custom_data["notes"] == "https://example.com/image.png"
         assert reopened.find_mod_id_by_path(mod.path, "Game") == mod.mod_id
@@ -115,10 +117,10 @@ def test_mod_dictionary_roundtrip_uses_new_application_location(temp_data_dir, m
     restored = Mod.from_dict(serialized)
     assert restored.path == str(moved / "data/Game/mods/Skin/Skin.zip")
     assert Path(restored.primary_preview).read_bytes() == b"image"
-    assert restored.deployed_path == mod.deployed_path
+    assert restored.deployed_path == str(moved / "external/Mods/Skin")
 
 
-def test_preset_journal_keeps_source_portable_and_deployment_absolute(temp_data_dir, monkeypatch):
+def test_preset_journal_keeps_internal_source_and_deployment_portable(temp_data_dir, monkeypatch):
     from src.core.preset_deployment_plan import DeploymentAction, PresetDeploymentPlan
 
     source = temp_data_dir / "data/Game/mods/Skin/Skin.zip"
@@ -143,7 +145,7 @@ def test_preset_journal_keeps_source_portable_and_deployment_absolute(temp_data_
     moved = relocate_app(temp_data_dir, monkeypatch)
     restored = PresetDeploymentPlan.from_json(serialized)
     assert restored.actions[0].source_path == str(moved / "data/Game/mods/Skin/Skin.zip")
-    assert restored.actions[0].active_path == deploy
+    assert restored.actions[0].active_path == str(moved / "chosen-external/Mods/Skin")
     assert json.loads(serialized)["actions"][0]["source_path"] == "data/Game/mods/Skin/Skin.zip"
 
 
@@ -169,10 +171,10 @@ def test_worker_protocol_uses_its_file_location_after_move(temp_data_dir, monkey
     assert data["work_root"] == "."
     assert restored["old_path"] == str(moved / "data/Game/mods/Skin/Skin.zip")
     assert restored["archive"] == str(moved / "data/downloads/new.zip")
-    assert restored["deploy_target"] == deploy
-    assert restored["old_deployed_path"] == deploy
+    assert restored["deploy_target"] == str(moved / "user-selected/Mods/Skin")
+    assert restored["old_deployed_path"] == str(moved / "user-selected/Mods/Skin")
     assert prepared["body"] == str(moved / relative_work / "container/Skin.zip")
-    assert prepared["deployment"] == deploy
+    assert prepared["deployment"] == str(moved / "user-selected/Mods/Skin")
 
 
 def test_character_thumbnail_reference_survives_move(temp_data_dir, monkeypatch):

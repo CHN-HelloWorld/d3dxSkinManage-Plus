@@ -119,7 +119,7 @@ def expand_container_tree(directory: Path, *, should_cancel=None) -> None:
 @lru_cache(maxsize=32)
 def read_nested_archive_inis(path: Path, version: tuple) -> tuple[tuple[str, str], ...]:
     """按原包版本缓存完整展开后的 INI，原包和其中的用户覆盖配置始终保持只读。"""
-    temporary = Path(tempfile.mkdtemp(prefix="mod-nested-archive-"))
+    temporary = Path(tempfile.mkdtemp(prefix="mod-nested-archive-")).resolve()
     temporary_root = Path(tempfile.gettempdir()).resolve()
     _checked_path(temporary, temporary_root)
     try:

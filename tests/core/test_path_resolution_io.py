@@ -69,7 +69,7 @@ def test_index_path_roundtrip_does_not_repeat_filesystem_probes(application_root
                 serialized = restored.to_dict()
                 assert serialized["path"] == source
                 assert serialized["preview_images"] == [preview]
-                assert serialized["deployed_path"] == deployment
+                assert serialized["deployed_path"] == "external/Mods/Skin"
                 assert serialized["info"]["custom_data"]["gamebanana"]["mod_id"] == 123
     finally:
         index.close()
