@@ -6,6 +6,7 @@ import io
 import os
 import stat
 import zipfile
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -287,9 +288,33 @@ def test_safe_same_archive_rar_file_references_still_extract(tmp_path, monkeypat
     assert selected[0].read_bytes() == _PAYLOAD
 
 
+def _short_directory(path):
+    """取得真实 Windows 短名称别名，系统未提供别名时明确跳过相关验证。"""
+    if os.name != "nt":
+        pytest.skip("Windows 短名称仅适用于 Windows")
+    import ctypes
+    from ctypes import wintypes
+
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    short_path = kernel.GetShortPathNameW
+    short_path.argtypes = [wintypes.LPCWSTR, wintypes.LPWSTR, wintypes.DWORD]
+    short_path.restype = wintypes.DWORD
+    required = short_path(str(path), None, 0)
+    if not required:
+        raise ctypes.WinError(ctypes.get_last_error())
+    buffer = ctypes.create_unicode_buffer(required)
+    if not short_path(str(path), buffer, required):
+        raise ctypes.WinError(ctypes.get_last_error())
+    alias = Path(buffer.value)
+    if alias == path:
+        pytest.skip("测试目录所在文件系统未提供短名称别名")
+    return alias
+
+
 @pytest.mark.parametrize("fmt", ["zip", "7z"])
 @pytest.mark.parametrize("operation", ["extract", "extract_files", "read_file", "read_all_inis"])
-def test_safe_nested_archives_keep_existing_behavior(tmp_path, monkeypatch, fmt, operation):
+@pytest.mark.parametrize("short_path", [False, True])
+def test_safe_nested_archives_keep_existing_behavior(tmp_path, monkeypatch, fmt, operation, short_path):
     source = tmp_path / f"safe.{fmt}"
     if fmt == "zip":
         with zipfile.ZipFile(source, "w") as writer:
@@ -299,26 +324,49 @@ def test_safe_nested_archives_keep_existing_behavior(tmp_path, monkeypatch, fmt,
         with py7zr.SevenZipFile(source, "w") as writer:
             writer.writestr(_PAYLOAD, "M/sub/safe.ini")
 
+    destination_root = tmp_path / "Long directory for extraction"
+    destination_root.mkdir()
+    if short_path:
+        destination_root = _short_directory(destination_root)
+
     def make_temp(**kwargs):
         """让真实 7z 后端的临时提取保持在测试目录内。"""
-        directory = tmp_path / kwargs["prefix"]
+        directory = destination_root / kwargs["prefix"]
         directory.mkdir()
         return str(directory)
 
     monkeypatch.setattr("src.utils.temp_dirs.mkdtemp", make_temp)
     service = ArchiveService()
     if operation == "extract":
-        root = service.extract(source, tmp_path / "destination")
-        assert root == tmp_path / "destination/M"
+        root = service.extract(source, destination_root / "destination")
+        assert root == destination_root / "destination/M"
         assert (root / "sub/safe.ini").read_bytes() == _PAYLOAD
     elif operation == "extract_files":
-        selected = service.extract_files(source, ["M/sub/safe.ini"], tmp_path / "selected")
+        selected = service.extract_files(source, ["M/sub/safe.ini"], destination_root / "selected")
         assert len(selected) == 1
         assert selected[0].read_bytes() == _PAYLOAD
     elif operation == "read_file":
         assert service.read_file(source, "M/sub/safe.ini") == _PAYLOAD
     else:
         assert service.read_all_inis(source) == {"M/sub/safe.ini": _PAYLOAD}
+
+
+@pytest.mark.parametrize("kind", ["symlink", "junction"])
+@pytest.mark.parametrize("short_path", [False, True])
+def test_destination_ancestor_link_rejects_before_writes(tmp_path, monkeypatch, kind, short_path):
+    """短名称归一不能掩盖尚未创建的目标目录上层存在链接。"""
+    source, _reader = _archive(tmp_path, monkeypatch, "zip", ["M/safe.ini"])
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    destination_root = tmp_path / "Long parent directory"
+    destination_root.mkdir()
+    _directory_link(destination_root / "linked", outside, kind)
+    if short_path:
+        destination_root = _short_directory(destination_root)
+    destination = destination_root / "linked/missing/destination"
+
+    assert ArchiveService().extract_files(source, ["M/safe.ini"], destination) == []
+    assert list(outside.iterdir()) == []
 
 
 @pytest.mark.parametrize("name", ["..", "C:", "\\\\server\\share", *_UNSAFE_NAMES])

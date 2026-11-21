@@ -37,6 +37,7 @@ from src.ui.widgets.image_utils import load_scaled_qimage_file
 from src.ui.widgets.preview import ImageViewerDialog
 from src.ui.widgets.tag_chip import TagFlowLayout
 from src.ui.worker_lifecycle import manage_page_worker
+from src.utils import fs
 from src.utils.constants import ARCHIVE_EXTENSIONS, IMAGE_EXTENSIONS
 from src.utils.i18n import N_, t
 from src.utils.i18n import t as tr
@@ -163,13 +164,15 @@ class _ImportEntry:
     """保存单个输入来源的扫描缓存、年龄分级及预览选择，编辑选择不修改源文件。"""
 
     def __init__(self, path: str):
-        """从路径派生初始名称及归档类型，初始化尚未扫描且默认全年龄的导入项。"""
+        """按实际来源类型派生名称及归档标记，初始化尚未扫描且默认全年龄的导入项。"""
+        source = Path(path)
+        is_directory = fs.is_dir(source)
         self.source_path = path
-        self.name = Path(path).stem
+        self.name = source.name if is_directory else source.stem
         self.keys: list[str] = []
         self.previews: list[str] = []
         self.excluded_previews: list[str] = []
-        self.is_archive = Path(path).suffix.lower() in ARCHIVE_EXTENSIONS
+        self.is_archive = not is_directory and source.suffix.lower() in ARCHIVE_EXTENSIONS
         self.selected_preview_index: int = 0
         self.selected_preview_path: str = ""
         self.age_rating: str = "G"  # 默认全年龄

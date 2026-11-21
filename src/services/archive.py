@@ -184,13 +184,22 @@ class ArchiveService:
 
     @staticmethod
     def _safe_output_path(target: Path, name: str) -> Path:
-        """写盘前解析已有符号链接及连接点，确保目标根与成员路径均未越界。"""
+        """写盘前规范路径别名，拒绝根目录重解析及成员路径越界。"""
         output = target / ArchiveService._safe_member_name(name)
         root = target.absolute()
         try:
-            if root.resolve() != root:
-                raise ValueError
-            output.resolve().relative_to(root)
+            resolved_root = root.resolve()
+            if resolved_root != root:
+                # Windows 短名称会展开为长名称，路径文本变化不能证明经过了链接。
+                # 目标目录可能尚未创建，仍须检查全部祖先以拒绝符号链接及连接点。
+                for directory in (root, *root.parents):
+                    try:
+                        info = os.lstat(fs.native_path(directory))
+                    except FileNotFoundError:
+                        continue
+                    if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                        raise ValueError
+            output.resolve().relative_to(resolved_root)
         except (OSError, RuntimeError, ValueError) as error:
             raise ValueError(tr("不安全的归档路径：{path}", path=name)) from error
         return output
@@ -1111,14 +1120,17 @@ class ArchiveService:
         """只读归档成员表，返回路径、解压后大小及 CRC-32，不解压文件。
 
         目录成员被排除，路径统一为正斜杠并保留归档顶层。空归档返回空列表；
-        无法读取或任一有效成员缺少可用 CRC 时返回 None。
+        空文件未记录 CRC 时使用空字节的固定校验值 0；其他成员缺少可用 CRC 时返回 None。
+        无法读取成员表时同样返回 None。
         调用方须通过实际内容计算相同字段，保持内容指纹公式一致。
         """
         archive = Path(archive_path)
         suffix = archive.suffix.lower()
 
         def _accept(rel: str, size, crc) -> tuple[str, int, int] | None:
-            """统一归一 + CRC 可用性判定。返回 None 代表该成员的 CRC 不可用。"""
+            """归一成员大小和 CRC；零字节成员无需数据流也能确定校验值。"""
+            if crc is None and size == 0:
+                crc = 0
             if crc is None:
                 return None
             size = int(size or 0)
